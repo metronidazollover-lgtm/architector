@@ -11,6 +11,24 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
     // v10: position относительна родителю, на экран идут мировые координаты
     const absPos = window.HierarchyUtils.getAbsolutePosition(data.id, state.nodes, state.layers);
 
+    // Alt+hover peek: начинка этого узла показывается в полный размер (Canvas)
+    const isPeeked = state.ui.peekNodeId === data.id;
+
+    // Semantic zoom: на близком зуме контейнер показывает миниатюру начинки вместо текста
+    const showPreview = data.type !== 'ai-agent' && childrenStats.total > 0 && zoom >= 0.6 && !isContextNode && !isPeeked;
+
+    const handlePeekMove = (e) => {
+        if (e.altKey && childrenStats.total > 0 && state.ui.peekNodeId !== data.id) {
+            dispatch({ type: 'SET_UI', payload: { peekNodeId: data.id } });
+        } else if (!e.altKey && isPeeked) {
+            dispatch({ type: 'SET_UI', payload: { peekNodeId: null } });
+        }
+    };
+
+    const handlePeekLeave = () => {
+        if (isPeeked) dispatch({ type: 'SET_UI', payload: { peekNodeId: null } });
+    };
+
     const handleMouseDown = (e) => {
         if (isContextNode) {
             // Разрешаем панорамирование (колесико или shift+ЛКМ)
@@ -154,6 +172,8 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
             }}
             onMouseDown={handleMouseDown}
             onDoubleClick={handleDoubleClick}
+            onMouseMove={handlePeekMove}
+            onMouseLeave={handlePeekLeave}
             data-file="components/Node.js"
         >
             <div className="px-3 py-2 border-b border-[#333] bg-black/20 rounded-t-lg flex items-center justify-between text-sm font-medium z-10 shrink-0">
@@ -180,6 +200,8 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
             <div className={`flex-1 flex flex-col overflow-hidden transition-opacity duration-300 ${zoom < 0.4 ? 'opacity-0 hidden' : 'opacity-100'}`}>
                 {data.type === 'ai-agent' ? (
                     <AIAgentNodeContent nodeId={data.id} />
+                ) : showPreview ? (
+                    <NodePreview nodeId={data.id} />
                 ) : (
                     <div className="flex-1 overflow-y-auto no-scrollbar p-3 flex flex-col gap-3 pointer-events-none z-10">
                         {data.mediaUrl && (

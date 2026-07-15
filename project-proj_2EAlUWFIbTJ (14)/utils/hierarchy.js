@@ -57,6 +57,32 @@ const HierarchyUtils = {
     },
 
     /**
+     * Ограничивающий прямоугольник прямых детей узла (узлы и слои)
+     * в системе координат родителя. null, если детей нет.
+     * @returns {?{minX:number,minY:number,maxX:number,maxY:number}}
+     */
+    getChildrenBBox: (parentId, nodes, layers) => {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let found = false;
+
+        const extend = (entity, defW, defH) => {
+            if (!entity || entity.parentId !== parentId) return;
+            found = true;
+            const x = entity.position?.x || 0;
+            const y = entity.position?.y || 0;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x + (entity.size?.w || defW));
+            maxY = Math.max(maxY, y + (entity.size?.h || defH));
+        };
+
+        Object.values(nodes || {}).forEach(n => extend(n, 200, 100));
+        Object.values(layers || {}).forEach(l => extend(l, 600, 400));
+
+        return found ? { minX, minY, maxX, maxY } : null;
+    },
+
+    /**
      * Является ли candidateId потомком (или самим) ancestorId по цепочке parentId.
      * Защита от циклов при перевложении.
      */
