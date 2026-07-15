@@ -14,6 +14,9 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
     // Alt+hover peek: начинка этого узла показывается в полный размер (Canvas)
     const isPeeked = state.ui.peekNodeId === data.id;
 
+    // Drag-to-nest: этот узел — цель вложения перетаскиваемого элемента
+    const isNestTarget = state.ui.nestTargetId === data.id;
+
     // Semantic zoom: на близком зуме контейнер показывает миниатюру начинки вместо текста
     const showPreview = data.type !== 'ai-agent' && childrenStats.total > 0 && zoom >= 0.6 && !isContextNode && !isPeeked;
 
@@ -51,12 +54,48 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
 
         const startX = e.clientX;
         const startY = e.clientY;
-        
+
         let hasMoved = false;
         const initialSnapshot = { layers: state.layers, nodes: state.nodes, ports: state.ports, links: state.links };
 
         let cumulativeDx = 0;
         let cumulativeDy = 0;
+
+        // Drag-to-nest (этап 5.2): зависание над другим узлом/слоем 400мс — цель вложения
+        const { offset } = state.canvas;
+        const singleDrag = state.selectedIds.length <= 1;
+        let nestCandidateId = null;
+        let nestLatchedId = null;
+        let nestTimer = null;
+
+        const findNestTarget = (clientX, clientY) => {
+            const wx = (clientX - offset.x) / zoom;
+            const wy = (clientY - offset.y) / zoom;
+            const H = window.HierarchyUtils;
+            const hitTest = (entity, defW, defH) => {
+                const abs = H.getAbsolutePosition(entity.id, state.nodes, state.layers);
+                return wx >= abs.x && wx <= abs.x + (entity.size?.w || defW) &&
+                       wy >= abs.y && wy <= abs.y + (entity.size?.h || defH);
+            };
+            const isValidTarget = (id) =>
+                id !== data.id && id !== data.parentId &&
+                !H.isDescendantOf(id, data.id, state.nodes, state.layers);
+            // Узел «на уровне» и когда лежит в слое этого уровня (слой — визуальный фрейм)
+            const inContext = (entity) => {
+                const pid = entity.parentId || 'root';
+                if (pid === state.currentContext) return true;
+                const parentLayer = state.layers && state.layers[pid];
+                return !!parentLayer && (parentLayer.parentId || 'root') === state.currentContext;
+            };
+            const nodeHit = Object.values(state.nodes).find(n =>
+                n && inContext(n) && !n.hidden &&
+                isValidTarget(n.id) && hitTest(n, 200, 100));
+            if (nodeHit) return nodeHit.id;
+            const layerHit = Object.values(state.layers || {}).find(l =>
+                l && (l.parentId || 'root') === state.currentContext &&
+                isValidTarget(l.id) && hitTest(l, 600, 400));
+            return layerHit ? layerHit.id : null;
+        };
 
         const handleMouseMove = (moveEvent) => {
             hasMoved = true;
@@ -85,16 +124,39 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
                     payload: { dx: stepDx, dy: stepDy, skipHistory: true }
                 });
             }
+
+            if (singleDrag) {
+                const candidate = findNestTarget(moveEvent.clientX, moveEvent.clientY);
+                if (candidate !== nestCandidateId) {
+                    nestCandidateId = candidate;
+                    if (nestTimer) clearTimeout(nestTimer);
+                    if (nestLatchedId) {
+                        nestLatchedId = null;
+                        dispatch({ type: 'SET_UI', payload: { nestTargetId: null } });
+                    }
+                    if (candidate) {
+                        nestTimer = setTimeout(() => {
+                            nestLatchedId = candidate;
+                            dispatch({ type: 'SET_UI', payload: { nestTargetId: candidate } });
+                        }, 400);
+                    }
+                }
+            }
         };
 
         const handleMouseUp = () => {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
+            if (nestTimer) clearTimeout(nestTimer);
             if (hasMoved) {
                 dispatch({
                     type: 'COMMIT_HISTORY',
                     payload: { snapshot: initialSnapshot, logMessage: `Перемещен узел: ${data.name}` }
                 });
+            }
+            if (nestLatchedId) {
+                dispatch({ type: 'REPARENT_ENTITY', payload: { id: data.id, newParentId: nestLatchedId } });
+                dispatch({ type: 'SET_UI', payload: { nestTargetId: null } });
             }
         };
 
@@ -156,7 +218,8 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
     return (
         <div
             className={`absolute flex flex-col cursor-move transition-all duration-200 glass-panel rounded-lg border
-                ${isSelected || isSiblingOfSelected ? 'outline outline-[2px] outline-offset-[4px] z-30 shadow-lg' : 'border-[#333] shadow-lg'} 
+                ${isSelected || isSiblingOfSelected ? 'outline outline-[2px] outline-offset-[4px] z-30 shadow-lg' : 'border-[#333] shadow-lg'}
+                ${isNestTarget ? 'ring-4 ring-green-500/80 shadow-[0_0_60px_rgba(34,197,94,0.3)]' : ''}
             `}
             style={{
                 left: absPos.x,

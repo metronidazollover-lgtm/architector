@@ -55,3 +55,29 @@ test('getChildrenBBox: охватывает узлы и слои, null без д
     assert.deepEqual(bb, { minX: -40, minY: 20, maxX: 250, maxY: 150 });
     assert.equal(HierarchyUtils.getChildrenBBox('a', bboxNodes, bboxLayers), null);
 });
+
+test('getBoundaryLinks: связи через границу контекста, сам контекст-узел не внутри', () => {
+    const bNodes = {
+        box: { id: 'box', parentId: 'root', position: { x: 0, y: 0 } },
+        inner: { id: 'inner', parentId: 'box', position: { x: 10, y: 10 } },
+        deep: { id: 'deep', parentId: 'inner', position: { x: 5, y: 5 } },
+        outer: { id: 'outer', parentId: 'root', position: { x: 500, y: 0 } }
+    };
+    const bPorts = {
+        pInner: { id: 'pInner', nodeId: 'inner' },
+        pDeep: { id: 'pDeep', nodeId: 'deep' },
+        pOuter: { id: 'pOuter', nodeId: 'outer' },
+        pBox: { id: 'pBox', nodeId: 'box' }
+    };
+    const bLinks = [
+        { id: 'l1', sourcePortId: 'pInner', targetPortId: 'pOuter' },   // изнутри наружу
+        { id: 'l2', sourcePortId: 'pOuter', targetPortId: 'pDeep' },    // снаружи вглубь (через уровень)
+        { id: 'l3', sourcePortId: 'pInner', targetPortId: 'pDeep' },    // целиком внутри
+        { id: 'l4', sourcePortId: 'pBox', targetPortId: 'pOuter' }      // порт самого контекста: граница, не внутренность
+    ];
+    const b = HierarchyUtils.getBoundaryLinks('box', bNodes, {}, bPorts, bLinks);
+    assert.deepEqual(b.outgoing.map(i => i.link.id), ['l1']);
+    assert.deepEqual(b.incoming.map(i => i.link.id), ['l2']);
+    assert.equal(b.incoming[0].outerNodeId, 'outer');
+    assert.equal(b.incoming[0].innerNodeId, 'deep');
+});

@@ -128,5 +128,33 @@ const HierarchyUtils = {
     }
 };
 
+/**
+ * Связи, пересекающие границу контекста (этап 5.3a): один конец у строгого
+ * потомка contextId, другой — снаружи. Сам контекст-узел «внутренним» не считается:
+ * его порты лежат на границе и принадлежат родительскому уровню.
+ * @returns {{incoming: Array<{link:any, outerNodeId:string, innerNodeId:string}>, outgoing: Array<{link:any, outerNodeId:string, innerNodeId:string}>}}
+ */
+HierarchyUtils.getBoundaryLinks = (contextId, nodes, layers, ports, links) => {
+    const inside = (nodeId) =>
+        nodeId !== contextId && HierarchyUtils.isDescendantOf(nodeId, contextId, nodes, layers);
+
+    const result = { incoming: [], outgoing: [] };
+    (links || []).forEach(link => {
+        if (!link) return;
+        const sourcePort = ports[link.sourcePortId];
+        const targetPort = ports[link.targetPortId];
+        if (!sourcePort || !targetPort) return;
+        const sIn = inside(sourcePort.nodeId);
+        const tIn = inside(targetPort.nodeId);
+        if (sIn === tIn) return;
+        if (sIn) {
+            result.outgoing.push({ link, outerNodeId: targetPort.nodeId, innerNodeId: sourcePort.nodeId });
+        } else {
+            result.incoming.push({ link, outerNodeId: sourcePort.nodeId, innerNodeId: targetPort.nodeId });
+        }
+    });
+    return result;
+};
+
 if (typeof window !== 'undefined') window.HierarchyUtils = HierarchyUtils;
 if (typeof module !== 'undefined') module.exports = HierarchyUtils;
