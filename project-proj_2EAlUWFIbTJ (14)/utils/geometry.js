@@ -42,14 +42,19 @@ const GeometryUtils = {
         if (edge === 'right') return { x: w, y: pos * h };
         return { x: 0, y: 0 };
     },
-    getPortAbsolutePosition: (port, node) => {
+    /**
+     * Мировая позиция порта. С формата v10 позиция узла может быть относительной,
+     * поэтому вызывающий передаёт absNodePos (HierarchyUtils.getAbsolutePosition).
+     * Без absNodePos используется node.position как есть (узлы корня).
+     */
+    getPortAbsolutePosition: (port, node, absNodePos) => {
         if (!node) return { x: 0, y: 0, edge: port?.edge || 'top' };
         const shape = node.shape || 'rectangle';
         const { w, h } = node.size || { w: 200, h: 100 };
         const target = GeometryUtils.getEdgePos(port.edge, port.position, w, h);
         const cp = GeometryUtils.getClosestPointOnPolygon(shape, w, h, target.x, target.y);
-        const nx = node.position?.x || 0;
-        const ny = node.position?.y || 0;
+        const nx = absNodePos ? absNodePos.x : (node.position?.x || 0);
+        const ny = absNodePos ? absNodePos.y : (node.position?.y || 0);
         return { x: nx + cp.x, y: ny + cp.y, edge: port.edge };
     },
     getPortRelativePosition: (port, node) => {
@@ -58,13 +63,18 @@ const GeometryUtils = {
         const target = GeometryUtils.getEdgePos(port.edge, port.position, w, h);
         return GeometryUtils.getClosestPointOnPolygon(shape, w, h, target.x, target.y);
     },
+    /**
+     * Авторасстановка узлов внутри слоя без перекрытий.
+     * С формата v10 работает в координатах, относительных к слою:
+     * и existingNodes (дети слоя), и результат — относительные позиции.
+     */
     getSmartPlacement: (nodesToPlace, layer, allNodes) => {
         const existingNodes = Object.values(allNodes).filter(n => n.parentId === layer.id && !nodesToPlace.find(ntp => ntp.id === n.id));
-        
+
         const padding = 20;
-        const startX = layer.position.x + padding;
-        const startY = layer.position.y + 90; // Увеличенный отступ для шапки слоя
-        
+        const startX = padding;
+        const startY = 90; // Отступ под шапку слоя
+
         let layerW = layer.size?.w || 600;
         let layerH = layer.size?.h || 400;
 
@@ -84,24 +94,24 @@ const GeometryUtils = {
         nodesToPlace.forEach(node => {
             const nw = node.size?.w || 200;
             const nh = node.size?.h || 100;
-            
+
             let placed = false;
             let searchY = startY;
-            
+
             while (!placed) {
                 let searchX = startX;
-                while (searchX < layer.position.x + Math.max(layerW, 3000)) {
+                while (searchX < Math.max(layerW, 3000)) {
                     if (!checkOverlap(searchX, searchY, nw, nh)) {
                         updatesById[node.id] = { parentId: layer.id, position: { x: searchX, y: searchY } };
                         placedRects.push({ x: searchX, y: searchY, w: nw, h: nh });
-                        
-                        if (searchX - layer.position.x + nw + padding > layerW) {
-                            layerW = searchX - layer.position.x + nw + padding;
+
+                        if (searchX + nw + padding > layerW) {
+                            layerW = searchX + nw + padding;
                         }
-                        if (searchY - layer.position.y + nh + padding > layerH) {
-                            layerH = searchY - layer.position.y + nh + padding;
+                        if (searchY + nh + padding > layerH) {
+                            layerH = searchY + nh + padding;
                         }
-                        
+
                         placed = true;
                         break;
                     }

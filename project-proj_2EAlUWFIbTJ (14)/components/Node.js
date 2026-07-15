@@ -8,6 +8,9 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
         [state.nodes, state.layers, state.ports, state.links, data.id]
     );
 
+    // v10: position относительна родителю, на экран идут мировые координаты
+    const absPos = window.HierarchyUtils.getAbsolutePosition(data.id, state.nodes, state.layers);
+
     const handleMouseDown = (e) => {
         if (isContextNode) {
             // Разрешаем панорамирование (колесико или shift+ЛКМ)
@@ -138,8 +141,8 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
                 ${isSelected || isSiblingOfSelected ? 'outline outline-[2px] outline-offset-[4px] z-30 shadow-lg' : 'border-[#333] shadow-lg'} 
             `}
             style={{
-                left: data.position?.x || 0,
-                top: data.position?.y || 0,
+                left: absPos.x,
+                top: absPos.y,
                 width: data.size?.w || 200,
                 height: data.size?.h || 100,
                 backgroundColor: data.color || 'rgba(26,26,26,0.9)',

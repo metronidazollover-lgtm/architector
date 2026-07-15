@@ -33,3 +33,4 @@ declare const HierarchyUtils: any;
 
 declare var module: any;
 declare var global: any;
+declare var require: any;

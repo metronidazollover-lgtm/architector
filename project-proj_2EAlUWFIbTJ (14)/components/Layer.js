@@ -3,6 +3,9 @@ function Layer({ data }) {
     const isSelected = state.selectedIds.includes(data.id);
     const { zoom } = state.canvas;
 
+    // v10: position относительна родителю, на экран идут мировые координаты
+    const absPos = window.HierarchyUtils.getAbsolutePosition(data.id, state.nodes, state.layers);
+
     const handleMouseDown = (e) => {
         // Prevent map panning on header drag (Shift+LMB handles map panning in Canvas)
         if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
@@ -25,27 +28,26 @@ function Layer({ data }) {
         const startX = e.clientX;
         const startY = e.clientY;
 
-        // Поиск узлов внутри только для этого слоя, если включен замок
+        // Поиск узлов внутри только для этого слоя, если включен замок.
+        // v10: дети слоя (parentId === data.id) едут вместе со слоем автоматически,
+        // захватываем только соседей по контексту, геометрически лежащих в границах слоя.
         const lw = data.size?.w || 600;
         const lh = data.size?.h || 400;
-        const startPosX = data.position.x;
-        const startPosY = data.position.y;
-        
+        const startPosX = absPos.x;
+        const startPosY = absPos.y;
+
         const nodesInside = data.locked ? Object.values(state.nodes).filter(node => {
-            // Исключаем узлы с других уровней (например, родительский узел)
+            if (node.parentId === data.id) return false; // ребёнок, едет сам
             const nodeContext = node.parentId || 'root';
             const layerContext = data.parentId || 'root';
-            
-            // Захватываем узел только если он напрямую привязан к слою ИЛИ находится в том же контексте
-            if (node.parentId !== data.id && nodeContext !== layerContext) {
-                return false;
-            }
+            if (nodeContext !== layerContext) return false;
 
+            const nodeAbs = window.HierarchyUtils.getAbsolutePosition(node.id, state.nodes, state.layers);
             const nw = node.size?.w || 200;
             const nh = node.size?.h || 100;
-            const nodeCX = node.position.x + nw / 2;
-            const nodeCY = node.position.y + nh / 2;
-            return nodeCX >= startPosX && nodeCX <= startPosX + lw && 
+            const nodeCX = nodeAbs.x + nw / 2;
+            const nodeCY = nodeAbs.y + nh / 2;
+            return nodeCX >= startPosX && nodeCX <= startPosX + lw &&
                    nodeCY >= startPosY && nodeCY <= startPosY + lh;
         }).map(n => n.id) : [];
 
@@ -175,8 +177,8 @@ function Layer({ data }) {
                 ${isSelected ? 'z-0 shadow-lg' : '-z-10 shadow-sm'} 
             `}
             style={{
-                left: data.position?.x || 0,
-                top: data.position?.y || 0,
+                left: absPos.x,
+                top: absPos.y,
                 width: data.size?.w || 600,
                 height: data.size?.h || 400,
                 backgroundColor: data.color ? `${data.color}20` : 'rgba(255,255,255,0.02)', // 20 hex is ~12% opacity
