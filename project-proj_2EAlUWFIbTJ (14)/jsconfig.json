@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+        "checkJs": true,
+        "noEmit": true,
+        "strict": false,
+        "target": "es2020",
+        "lib": ["es2020", "dom"],
+        "jsx": "react",
+        "module": "es2020",
+        "moduleDetection": "legacy"
+    },
+    "include": ["types/**/*", "utils/**/*.js", "store/**/*.js"]
+}
