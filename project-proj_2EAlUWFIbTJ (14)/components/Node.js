@@ -3,6 +3,11 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
     const isSelected = state.selectedIds.includes(data.id);
     const { zoom } = state.canvas;
 
+    const childrenStats = React.useMemo(
+        () => window.HierarchyUtils.getChildrenStats(state.nodes, state.layers, state.ports, state.links, data.id),
+        [state.nodes, state.layers, state.ports, state.links, data.id]
+    );
+
     const handleMouseDown = (e) => {
         if (isContextNode) {
             // Разрешаем панорамирование (колесико или shift+ЛКМ)
@@ -149,10 +154,25 @@ function Node({ data, isContextNode, isSiblingOfSelected }) {
             data-file="components/Node.js"
         >
             <div className="px-3 py-2 border-b border-[#333] bg-black/20 rounded-t-lg flex items-center justify-between text-sm font-medium z-10 shrink-0">
-                <div className="flex items-center gap-2 text-[#eee]">
+                <div className="flex items-center gap-2 text-[#eee] overflow-hidden">
                     <div className="icon-box w-4 h-4 text-gray-400"></div>
                     <span className="truncate">{data.name}</span>
                 </div>
+                {childrenStats.total > 0 && (
+                    <button
+                        className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/10 text-[11px] text-gray-300 hover:bg-[var(--accent-blue)] hover:text-white transition-colors shrink-0 cursor-pointer"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            dispatch({ type: 'DIVE_INTO', payload: { id: data.id, name: data.name } });
+                        }}
+                        title={`Внутри: ${childrenStats.nodeCount} узл. ${childrenStats.layerCount} сл. ${childrenStats.linkCount} связ. Клик — войти внутрь`}
+                    >
+                        <div className="icon-layers text-xs"></div>
+                        <span>{childrenStats.total}</span>
+                    </button>
+                )}
             </div>
             <div className={`flex-1 flex flex-col overflow-hidden transition-opacity duration-300 ${zoom < 0.4 ? 'opacity-0 hidden' : 'opacity-100'}`}>
                 {data.type === 'ai-agent' ? (
