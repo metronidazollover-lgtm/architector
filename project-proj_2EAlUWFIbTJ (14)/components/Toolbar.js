@@ -146,12 +146,20 @@ function Toolbar() {
                 <div className="icon-scan text-xl"></div>
             </button>
 
-            <button 
+            <button
                 className="btn w-10 h-10 p-0 rounded-md text-gray-400 hover:text-white"
                 title="Сбросить вид"
                 onClick={() => dispatch({ type: 'SET_CANVAS', payload: { offset: {x:0, y:0}, zoom: 1 }})}
             >
                 <div className="icon-house text-xl"></div>
+            </button>
+
+            <button
+                className={`btn w-10 h-10 p-0 rounded-md transition-colors ${state.ui.autoDive !== false ? 'text-[var(--accent-blue)] bg-[var(--accent-blue)]/10' : 'text-gray-400 hover:text-white'}`}
+                title={state.ui.autoDive !== false ? 'Авто-погружение при зуме: включено (зум внутрь узла ныряет в него)' : 'Авто-погружение при зуме: выключено'}
+                onClick={() => dispatch({ type: 'SET_UI', payload: { autoDive: state.ui.autoDive === false } })}
+            >
+                <div className="icon-zoom-in text-xl"></div>
             </button>
 
             <div className="w-full h-px bg-[#333] my-1"></div>
