@@ -61,6 +61,27 @@ function Canvas() {
                 }
             }
 
+            // Esc: сначала выход из режима, потом сброс выделения, потом уровень вверх
+            if (e.code === 'Escape') {
+                if (state.interactionMode !== 'default') {
+                    dispatch({ type: 'SET_MODE', payload: 'default' });
+                } else if (selectedIds.length > 0) {
+                    dispatch({ type: 'SET_SELECTED', payload: null });
+                } else if (state.breadcrumbs.length > 1) {
+                    dispatch({ type: 'NAVIGATE_TO', payload: state.breadcrumbs.length - 2 });
+                }
+            }
+
+            // История посещений контекстов: Cmd/Ctrl+[ назад, Cmd/Ctrl+] вперед
+            if ((e.ctrlKey || e.metaKey) && e.code === 'BracketLeft') {
+                e.preventDefault();
+                dispatch({ type: 'NAV_BACK' });
+            }
+            if ((e.ctrlKey || e.metaKey) && e.code === 'BracketRight') {
+                e.preventDefault();
+                dispatch({ type: 'NAV_FORWARD' });
+            }
+
             // Копирование узла (Ctrl+C / Cmd+C) - пока копируем только первый узел (MVP)
             if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyC' || e.key.toLowerCase() === 'c' || e.key.toLowerCase() === 'с')) {
                 e.preventDefault();
@@ -349,6 +370,32 @@ function Canvas() {
                     );
                 })}
             </div>
+
+            {/* Empty state: мы внутри узла, а в нём пусто */}
+            {(() => {
+                const contextNode = state.nodes[state.currentContext];
+                if (!contextNode) return null;
+                const hasChildren =
+                    Object.values(state.nodes).some(n => n && n.parentId === state.currentContext) ||
+                    (state.layers && Object.values(state.layers).some(l => l && l.parentId === state.currentContext));
+                if (hasChildren) return null;
+                return (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
+                        <div className="glass-panel rounded-xl px-8 py-6 text-center pointer-events-auto max-w-md shadow-2xl">
+                            <div className="text-base text-white font-medium mb-2">Вы внутри узла «{contextNode.name}»</div>
+                            <div className="text-sm text-gray-400 mb-4">Здесь пока пусто. Добавьте элементы или вернитесь на уровень выше.</div>
+                            <div className="flex gap-2 justify-center">
+                                <button className="btn" onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'objects' })}>
+                                    Открыть библиотеку
+                                </button>
+                                <button className="btn" onClick={() => dispatch({ type: 'NAVIGATE_TO', payload: state.breadcrumbs.length - 2 })}>
+                                    Наверх (Esc)
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* Context specific backgrounds */}
             {state.links && state.links.find(l => l && l.id === state.currentContext) && (
