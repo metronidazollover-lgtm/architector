@@ -89,6 +89,8 @@ const defaultState = {
             peekNodeId: null,
             depthProfileOpen: true,
             nestTargetId: null,
+            autoDive: true,
+            transitionFromContext: null,
         aiAgentSettings: {
             apiKey: '',
             model: 'gpt-4o',
@@ -157,7 +159,8 @@ const getInitialState = () => {
 const MAX_HISTORY_STEPS = 20;
 
 const saveHistory = (state, logMessage) => {
-    const snapshot = { layers: state.layers, nodes: state.nodes, ports: state.ports, links: state.links };
+    // contextId/breadcrumbs — для undo с прыжком в контекст правки (этап 6.3)
+    const snapshot = { layers: state.layers, nodes: state.nodes, ports: state.ports, links: state.links, contextId: state.currentContext, breadcrumbs: state.breadcrumbs };
     const newPast = [...state.past, snapshot];
     const newLogs = [...state.historyLogs, logMessage];
     
@@ -314,9 +317,10 @@ const reducer = (state, action) => {
             };
         }
         case 'COMMIT_HISTORY': {
+            const snap = action.payload.snapshot;
             return {
                 ...state,
-                past: [...state.past, action.payload.snapshot],
+                past: [...state.past, { ...snap, contextId: snap.contextId || state.currentContext, breadcrumbs: snap.breadcrumbs || state.breadcrumbs }],
                 future: [],
                 historyLogs: [...state.historyLogs, action.payload.logMessage]
             };
@@ -416,22 +420,28 @@ const reducer = (state, action) => {
                 }
             }
 
-            // Если уровень уже посещали, возвращаем его сохранённую камеру вместо расчётной
+            // Если уровень уже посещали, возвращаем его сохранённую камеру вместо расчётной.
+            // keepCamera (zoom-to-dive, этап 6.2): камера не трогается — переход бесшовный.
             const savedCamera = (state.cameraByContext || {})[id];
+            const newCanvas = action.payload.keepCamera
+                ? state.canvas
+                : (savedCamera || { offset: { x: targetOffsetX, y: targetOffsetY }, zoom: targetZoom });
 
             return {
                 ...state,
                 currentContext: id,
                 breadcrumbs: [...state.breadcrumbs, { id, name }],
                 selectedIds: [],
-                canvas: savedCamera || { offset: { x: targetOffsetX, y: targetOffsetY }, zoom: targetZoom },
+                canvas: newCanvas,
                 cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
                 navHistory: pushNavEntry(state),
-                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [] }
+                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [], transitionFromContext: state.currentContext }
             };
         }
         case 'NAVIGATE_TO': {
-            const index = action.payload;
+            // payload: число (индекс крошки) или { index, keepCamera }
+            const index = typeof action.payload === 'object' ? action.payload.index : action.payload;
+            const keepCamera = typeof action.payload === 'object' && !!action.payload.keepCamera;
             if (index === state.breadcrumbs.length - 1) return state;
             const newBreadcrumbs = state.breadcrumbs.slice(0, index + 1);
             const newContext = newBreadcrumbs[newBreadcrumbs.length - 1].id;
@@ -441,10 +451,10 @@ const reducer = (state, action) => {
                 currentContext: newContext,
                 breadcrumbs: newBreadcrumbs,
                 selectedIds: [],
-                canvas: savedCamera || { offset: { x: 0, y: 0 }, zoom: 1 },
+                canvas: keepCamera ? state.canvas : (savedCamera || { offset: { x: 0, y: 0 }, zoom: 1 }),
                 cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
                 navHistory: pushNavEntry(state),
-                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [] }
+                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [], transitionFromContext: state.currentContext }
             };
         }
         case 'NAV_BACK': {
@@ -466,7 +476,7 @@ const reducer = (state, action) => {
                     past,
                     future: [{ id: state.currentContext, breadcrumbs: state.breadcrumbs }, ...((state.navHistory && state.navHistory.future) || [])]
                 },
-                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [] }
+                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [], transitionFromContext: state.currentContext }
             };
         }
         case 'NAV_FORWARD': {
@@ -488,7 +498,7 @@ const reducer = (state, action) => {
                     past: [...((state.navHistory && state.navHistory.past) || []), { id: state.currentContext, breadcrumbs: state.breadcrumbs }],
                     future
                 },
-                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [] }
+                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [], transitionFromContext: state.currentContext }
             };
         }
         case 'GO_TO_CONTEXT': {
@@ -515,7 +525,7 @@ const reducer = (state, action) => {
                 canvas: (state.cameraByContext || {})[targetId] || state.canvas,
                 cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
                 navHistory: pushNavEntry(state),
-                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [] }
+                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [], transitionFromContext: state.currentContext }
             };
         }
         case 'REMOVE_LINK': {
@@ -578,9 +588,23 @@ const reducer = (state, action) => {
             if (state.past.length === 0) return state;
             const previous = state.past[state.past.length - 1];
             const newPast = state.past.slice(0, state.past.length - 1);
-            const currentSnapshot = { layers: state.layers, nodes: state.nodes, ports: state.ports, links: state.links };
+            const currentSnapshot = { layers: state.layers, nodes: state.nodes, ports: state.ports, links: state.links, contextId: state.currentContext, breadcrumbs: state.breadcrumbs };
             const newLogs = state.historyLogs.slice(0, state.historyLogs.length - 1);
-            
+
+            // Прыжок в контекст правки (этап 6.3): иначе откат из другого уровня невидим
+            let navPatch = {};
+            if (previous.contextId && previous.contextId !== state.currentContext) {
+                const restoredState = { ...state, layers: previous.layers || {}, nodes: previous.nodes, ports: previous.ports, links: previous.links };
+                if (contextExists(restoredState, previous.contextId)) {
+                    navPatch = {
+                        currentContext: previous.contextId,
+                        breadcrumbs: previous.breadcrumbs || [{ id: 'root', name: 'Главный холст' }],
+                        canvas: (state.cameraByContext || {})[previous.contextId] || state.canvas,
+                        ui: { ...state.ui, transitionFromContext: state.currentContext }
+                    };
+                }
+            }
+
             return {
                 ...state,
                 layers: previous.layers || {},
@@ -590,15 +614,29 @@ const reducer = (state, action) => {
                 past: newPast,
                 future: [currentSnapshot, ...state.future],
                 historyLogs: newLogs,
-                selectedIds: []
+                selectedIds: [],
+                ...navPatch
             };
         }
         case 'REDO': {
             if (state.future.length === 0) return state;
             const next = state.future[0];
             const newFuture = state.future.slice(1);
-            const currentSnapshot = { layers: state.layers, nodes: state.nodes, ports: state.ports, links: state.links };
-            
+            const currentSnapshot = { layers: state.layers, nodes: state.nodes, ports: state.ports, links: state.links, contextId: state.currentContext, breadcrumbs: state.breadcrumbs };
+
+            let navPatch = {};
+            if (next.contextId && next.contextId !== state.currentContext) {
+                const restoredState = { ...state, layers: next.layers || {}, nodes: next.nodes, ports: next.ports, links: next.links };
+                if (contextExists(restoredState, next.contextId)) {
+                    navPatch = {
+                        currentContext: next.contextId,
+                        breadcrumbs: next.breadcrumbs || [{ id: 'root', name: 'Главный холст' }],
+                        canvas: (state.cameraByContext || {})[next.contextId] || state.canvas,
+                        ui: { ...state.ui, transitionFromContext: state.currentContext }
+                    };
+                }
+            }
+
             return {
                 ...state,
                 layers: next.layers || {},
@@ -608,7 +646,8 @@ const reducer = (state, action) => {
                 past: [...state.past, currentSnapshot],
                 future: newFuture,
                 historyLogs: [...state.historyLogs, 'Повтор действия'],
-                selectedIds: []
+                selectedIds: [],
+                ...navPatch
             };
         }
         case 'TOGGLE_CONTEXT_VISIBILITY': {

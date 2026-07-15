@@ -126,3 +126,38 @@ test('LOAD_STATE: сбрасывает историю навигации и пр
     assert.deepEqual(s1.navHistory, { past: [], future: [] });
     assert.deepEqual(s1.cameraByContext.root, { offset: { x: 1, y: 2 }, zoom: 3 });
 });
+
+test('UNDO прыгает в контекст правки; NAVIGATE_TO принимает объект с keepCamera', () => {
+    let s = makeState();
+    // узел A с ребёнком B; ныряем в A и правим B
+    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'a', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 } } });
+    s = reducer(s, { type: 'DIVE_INTO', payload: { id: 'a', name: 'A' } });
+    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'b', name: 'B', position: { x: 10, y: 10 } } });
+    // выходим на root, затем undo: добавление B было в контексте 'a' — должны прыгнуть туда
+    s = reducer(s, { type: 'NAVIGATE_TO', payload: 0 });
+    assert.equal(s.currentContext, 'root');
+    s = reducer(s, { type: 'UNDO' });
+    assert.equal(s.currentContext, 'a');
+    assert.equal(s.nodes.b, undefined);
+    assert.equal(s.breadcrumbs[s.breadcrumbs.length - 1].id, 'a');
+    // REDO возвращает B
+    s = reducer(s, { type: 'REDO' });
+    assert.ok(s.nodes.b);
+    // NAVIGATE_TO объектом с keepCamera: камера не меняется
+    const camBefore = s.canvas;
+    s = reducer(s, { type: 'NAVIGATE_TO', payload: { index: 0, keepCamera: true } });
+    assert.equal(s.currentContext, 'root');
+    assert.deepEqual(s.canvas, camBefore);
+    // transitionFromContext выставлен прошлым контекстом
+    assert.equal(s.ui.transitionFromContext, 'a');
+});
+
+test('DIVE_INTO с keepCamera не трогает камеру', () => {
+    let s = makeState();
+    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'x', name: 'X', position: { x: 5, y: 5 } } });
+    s = reducer(s, { type: 'SET_CANVAS', payload: { offset: { x: 123, y: 456 }, zoom: 1.5 } });
+    const cam = s.canvas;
+    s = reducer(s, { type: 'DIVE_INTO', payload: { id: 'x', name: 'X', keepCamera: true } });
+    assert.equal(s.currentContext, 'x');
+    assert.deepEqual(s.canvas, cam);
+});

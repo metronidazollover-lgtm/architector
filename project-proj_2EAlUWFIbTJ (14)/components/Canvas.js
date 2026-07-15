@@ -46,6 +46,20 @@ function Canvas() {
     const cameraRef = React.useRef({ zoom, offset });
     cameraRef.current = { zoom, offset };
 
+    // Свежий стейт для wheel-обработчика (zoom-to-dive, этап 6.2) без переподписки
+    const stateRef = React.useRef(state);
+    stateRef.current = state;
+    const lastAutoNavRef = React.useRef(0);
+
+    // «Хвост» перехода (этап 6.1): прошлый уровень остаётся смонтированным на время полёта камеры
+    React.useEffect(() => {
+        if (!state.ui.transitionFromContext) return;
+        const t = setTimeout(() => {
+            dispatch({ type: 'SET_UI', payload: { transitionFromContext: null } });
+        }, 550);
+        return () => clearTimeout(t);
+    }, [state.ui.transitionFromContext, dispatch]);
+
     React.useEffect(() => {
         const handleKeyDown = (e) => {
             // Игнорируем нажатия, если активен инпут или текстовое поле
@@ -178,8 +192,66 @@ function Canvas() {
                 
                 // Обновляем реф немедленно, чтобы следующие события wheel до рендера видели свежие значения
                 cameraRef.current = { zoom: newZoom, offset: { x: newOffsetX, y: newOffsetY } };
-                
+
                 dispatch({ type: 'SET_CANVAS', payload: { zoom: newZoom, offset: { x: newOffsetX, y: newOffsetY } } });
+
+                autoDiveCheck(newZoom, { x: newOffsetX, y: newOffsetY }, mouseX, mouseY, delta > 0);
+            }
+        };
+
+        // Zoom-to-dive (этап 6.2): зум внутрь узла с детьми, занявшего почти весь экран, — авто-вход;
+        // отдаление, когда узел-контекст сжался, — авто-выход. Камера не трогается (keepCamera),
+        // поэтому переход бесшовный. Гистерезис порогов: при живом жесте узел уплывает от точки
+        // зума, и покрытие выше ~0.8 почти недостижимо — вход при 72% экрана, выход при 55%.
+        const AUTO_DIVE_IN_COVERAGE = 0.72;
+        const AUTO_DIVE_OUT_COVERAGE = 0.55;
+        const AUTO_NAV_COOLDOWN_MS = 400;
+
+        const screenCoverage = (entity, cam) => {
+            const H = window.HierarchyUtils;
+            const st = stateRef.current;
+            const abs = H.getAbsolutePosition(entity.id, st.nodes, st.layers);
+            const sx = abs.x * cam.zoom + cam.offset.x;
+            const sy = abs.y * cam.zoom + cam.offset.y;
+            const sw = (entity.size?.w || 200) * cam.zoom;
+            const sh = (entity.size?.h || 100) * cam.zoom;
+            const ix = Math.max(0, Math.min(sx + sw, window.innerWidth) - Math.max(sx, 0));
+            const iy = Math.max(0, Math.min(sy + sh, window.innerHeight) - Math.max(sy, 0));
+            return (ix * iy) / (window.innerWidth * window.innerHeight);
+        };
+
+        const autoDiveCheck = (newZoom, newOffset, mouseX, mouseY, zoomingIn) => {
+            const st = stateRef.current;
+            if (st.ui.autoDive === false) return;
+            const now = Date.now();
+            if (now - lastAutoNavRef.current < AUTO_NAV_COOLDOWN_MS) return;
+            const H = window.HierarchyUtils;
+            const cam = { zoom: newZoom, offset: newOffset };
+
+            if (zoomingIn) {
+                const wx = (mouseX - newOffset.x) / newZoom;
+                const wy = (mouseY - newOffset.y) / newZoom;
+                const target = Object.values(st.nodes).find(n => {
+                    if (!n || n.hidden || n.id === st.currentContext) return false;
+                    const pid = n.parentId || 'root';
+                    const inCtx = pid === st.currentContext ||
+                        !!(st.layers && st.layers[pid] && (st.layers[pid].parentId || 'root') === st.currentContext);
+                    if (!inCtx) return false;
+                    const abs = H.getAbsolutePosition(n.id, st.nodes, st.layers);
+                    if (wx < abs.x || wx > abs.x + (n.size?.w || 200) || wy < abs.y || wy > abs.y + (n.size?.h || 100)) return false;
+                    return H.getChildrenStats(st.nodes, st.layers, st.ports, st.links, n.id).total > 0;
+                });
+                if (target && screenCoverage(target, cam) >= AUTO_DIVE_IN_COVERAGE) {
+                    lastAutoNavRef.current = now;
+                    dispatch({ type: 'DIVE_INTO', payload: { id: target.id, name: target.name, keepCamera: true } });
+                }
+            } else {
+                const ctxNode = st.nodes[st.currentContext];
+                if (!ctxNode || st.breadcrumbs.length < 2) return;
+                if (screenCoverage(ctxNode, cam) < AUTO_DIVE_OUT_COVERAGE) {
+                    lastAutoNavRef.current = now;
+                    dispatch({ type: 'NAVIGATE_TO', payload: { index: st.breadcrumbs.length - 2, keepCamera: true } });
+                }
             }
         };
 
@@ -448,8 +520,9 @@ function Canvas() {
                     const isExplicitlyVisible = (state.ui.xRayLevels || []).includes(contextDepth);
                     const isBreadcrumbAncestor = state.breadcrumbs.some(b => b.id === layer.id) && !isTheContextItself;
                     const isPeekChild = !!state.ui.peekNodeId && effectiveContextId === state.ui.peekNodeId;
+                    const isTransitionChild = !!state.ui.transitionFromContext && effectiveContextId === state.ui.transitionFromContext;
 
-                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild) return null;
+                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild && !isTransitionChild) return null;
 
                     const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isExplicitlyVisible && !isPeekChild;
 
@@ -461,6 +534,7 @@ function Canvas() {
                                 ${isExplicitlyVisible && !isCurrentChild ? 'pointer-events-auto' : ''}
                                 ${isBreadcrumbAncestor ? 'animate-pulse opacity-50 ring-2 ring-[var(--accent-blue)] rounded-xl' : ''}
                                 ${isPeekChild ? 'opacity-100 pointer-events-none' : ''}
+                                ${isTransitionChild && !isCurrentChild ? 'opacity-50 pointer-events-none' : ''}
                             `}
                             style={{ zIndex: isPeekChild ? 30 : (isCurrentChild ? 5 : (isExplicitlyVisible ? 2 : (isBreadcrumbAncestor ? 1 : 0))) }}
                         >
@@ -526,8 +600,9 @@ function Canvas() {
                     }
 
                     const isPeekChildLink = !!state.ui.peekNodeId && effectiveContextId === state.ui.peekNodeId;
+                    const isTransitionChildLink = !!state.ui.transitionFromContext && effectiveContextId === state.ui.transitionFromContext;
 
-                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChildLink) return null;
+                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChildLink && !isTransitionChildLink) return null;
 
                     const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isExplicitlyVisible && !isPeekChildLink;
 
@@ -581,8 +656,9 @@ function Canvas() {
                     const isPeekChild = !!peekId && effectiveContextId === peekId;
                     const isPeekSource = peekId === node.id;
                     const isPeekDimmed = !!peekId && !isPeekChild && !isPeekSource && isCurrentChild;
+                    const isTransitionChild = !!state.ui.transitionFromContext && effectiveContextId === state.ui.transitionFromContext;
 
-                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild) return null;
+                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild && !isTransitionChild) return null;
                     if (node.hidden) return null;
                     
                     // Проверяем, выделен ли хотя бы один из истинных детей этого узла
@@ -617,6 +693,7 @@ function Canvas() {
                                 ${isPeekChild ? 'opacity-100 pointer-events-none shadow-xl' : ''}
                                 ${isPeekDimmed ? 'opacity-25 grayscale' : ''}
                                 ${isPeekSource ? 'ring-4 ring-[var(--accent-blue)]/60 rounded-lg' : ''}
+                                ${isTransitionChild && !isCurrentChild ? 'opacity-50 pointer-events-none' : ''}
                             `}
                             style={{ zIndex: isPeekChild ? 30 : (isPulsing ? 20 : (isCurrentChild ? 10 : (hasSelectedChild ? 15 : (isExplicitlyVisible ? 5 : (isHighlightedContext ? 2 : (isBreadcrumbAncestor ? 1 : 1)))))) }}
                         >
