@@ -88,6 +88,7 @@ const defaultState = {
             hiddenContexts: [],
             peekNodeId: null,
             depthProfileOpen: true,
+            nestTargetId: null,
         aiAgentSettings: {
             apiKey: '',
             model: 'gpt-4o',

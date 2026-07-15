@@ -3,6 +3,9 @@ function Layer({ data }) {
     const isSelected = state.selectedIds.includes(data.id);
     const { zoom } = state.canvas;
 
+    // Drag-to-nest: этот слой — цель вложения перетаскиваемого элемента
+    const isNestTarget = state.ui.nestTargetId === data.id;
+
     // v10: position относительна родителю, на экран идут мировые координаты
     const absPos = window.HierarchyUtils.getAbsolutePosition(data.id, state.nodes, state.layers);
 
@@ -174,7 +177,8 @@ function Layer({ data }) {
     return (
         <div
             className={`absolute flex flex-col transition-all duration-200 border-2 rounded-xl pointer-events-auto
-                ${isSelected ? 'z-0 shadow-lg' : '-z-10 shadow-sm'} 
+                ${isSelected ? 'z-0 shadow-lg' : '-z-10 shadow-sm'}
+                ${isNestTarget ? 'ring-4 ring-green-500/80' : ''}
             `}
             style={{
                 left: absPos.x,

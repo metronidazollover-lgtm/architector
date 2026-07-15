@@ -178,7 +178,14 @@ function Library() {
             {activeTab === 'objects' ? (
                 <div className="flex flex-col flex-1 overflow-hidden">
                     <div className="flex px-3 py-2 gap-2 border-b border-[#333]/50 bg-[#1a1a1a]/50 shrink-0 overflow-x-auto no-scrollbar">
-                        <button 
+                        <button
+                            className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'tree' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
+                            onClick={() => setObjectTab('tree')}
+                            title="Иерархия всего проекта: клик — показать, двойной клик — войти, drag-and-drop — перевложить"
+                        >
+                            Дерево
+                        </button>
+                        <button
                             className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'layers' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
                             onClick={() => setObjectTab('layers')}
                         >
@@ -204,6 +211,8 @@ function Library() {
                         </button>
                     </div>
                     <div className="flex flex-col overflow-y-auto no-scrollbar pb-2 flex-1">
+                        {objectTab === 'tree' && <OutlinerTree onSelect={handleSelect} />}
+
                         {objectTab === 'layers' && (
                             <div className="flex flex-col">
                                 {(!layers || Object.keys(layers).length === 0) && <div className="text-gray-600 italic px-4 py-3 text-sm">Нет слоев</div>}
