@@ -125,5 +125,25 @@ const GeometryUtils = {
     }
 };
 
+/**
+ * Вписывание мирового bbox в холст миникарты (этап 4.2).
+ * Возвращает преобразование мир -> миникарта: mini = (world - center) * scale + canvasCenter.
+ * @param {{minX:number,minY:number,maxX:number,maxY:number}} bbox
+ * @param {number} canvasW @param {number} canvasH @param {number} pad
+ * @returns {{scale:number, toMini:(x:number,y:number)=>{x:number,y:number}, toWorld:(x:number,y:number)=>{x:number,y:number}}}
+ */
+GeometryUtils.fitBBoxToCanvas = (bbox, canvasW, canvasH, pad = 10) => {
+    const w = Math.max(1, bbox.maxX - bbox.minX);
+    const h = Math.max(1, bbox.maxY - bbox.minY);
+    const scale = Math.min((canvasW - pad * 2) / w, (canvasH - pad * 2) / h);
+    const cx = (bbox.minX + bbox.maxX) / 2;
+    const cy = (bbox.minY + bbox.maxY) / 2;
+    return {
+        scale,
+        toMini: (x, y) => ({ x: (x - cx) * scale + canvasW / 2, y: (y - cy) * scale + canvasH / 2 }),
+        toWorld: (x, y) => ({ x: (x - canvasW / 2) / scale + cx, y: (y - canvasH / 2) / scale + cy })
+    };
+};
+
 if (typeof window !== 'undefined') window.GeometryUtils = GeometryUtils;
 if (typeof module !== 'undefined') module.exports = GeometryUtils;

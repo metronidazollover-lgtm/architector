@@ -408,6 +408,12 @@ function Canvas() {
                 );
             })()}
 
+            {/* Профиль глубины + миникарта (этап 4): правый нижний угол, под PropertyPanel */}
+            <div className="absolute right-4 bottom-4 z-40 flex flex-col gap-2 items-end">
+                <DepthProfile />
+                <MiniMap />
+            </div>
+
             {/* Context specific backgrounds */}
             {state.links && state.links.find(l => l && l.id === state.currentContext) && (
                 <div className="absolute inset-0 pointer-events-none flex justify-between z-0 opacity-10">
