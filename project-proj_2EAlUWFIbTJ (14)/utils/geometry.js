@@ -1,4 +1,5 @@
-window.GeometryUtils = {
+// Геометрия портов, фигур и авторасстановки. Двойной экспорт: браузер + node:test.
+const GeometryUtils = {
     getPolygonPoints: (shape, w, h) => {
         switch(shape) {
             case 'triangle': return [[w/2,0], [0,h], [w,h]];
@@ -19,13 +20,13 @@ window.GeometryUtils = {
     },
     getClosestPointOnPolygon: (shape, w, h, targetX, targetY) => {
         if (shape === 'rectangle' || !shape) return { x: targetX, y: targetY };
-        const pts = window.GeometryUtils.getPolygonPoints(shape, w, h);
+        const pts = GeometryUtils.getPolygonPoints(shape, w, h);
         let minDist = Infinity;
         let closest = { x: targetX, y: targetY };
         for(let i=0; i<pts.length; i++) {
             const a = pts[i];
             const b = pts[(i+1)%pts.length];
-            const cp = window.GeometryUtils.getClosestPointOnSegment({x: targetX, y: targetY}, a, b);
+            const cp = GeometryUtils.getClosestPointOnSegment({x: targetX, y: targetY}, a, b);
             const dist = Math.hypot(cp.x - targetX, cp.y - targetY);
             if (dist < minDist) {
                 minDist = dist;
@@ -45,8 +46,8 @@ window.GeometryUtils = {
         if (!node) return { x: 0, y: 0, edge: port?.edge || 'top' };
         const shape = node.shape || 'rectangle';
         const { w, h } = node.size || { w: 200, h: 100 };
-        const target = window.GeometryUtils.getEdgePos(port.edge, port.position, w, h);
-        const cp = window.GeometryUtils.getClosestPointOnPolygon(shape, w, h, target.x, target.y);
+        const target = GeometryUtils.getEdgePos(port.edge, port.position, w, h);
+        const cp = GeometryUtils.getClosestPointOnPolygon(shape, w, h, target.x, target.y);
         const nx = node.position?.x || 0;
         const ny = node.position?.y || 0;
         return { x: nx + cp.x, y: ny + cp.y, edge: port.edge };
@@ -54,8 +55,8 @@ window.GeometryUtils = {
     getPortRelativePosition: (port, node) => {
         const shape = node.shape || 'rectangle';
         const { w, h } = node.size || { w: 200, h: 100 };
-        const target = window.GeometryUtils.getEdgePos(port.edge, port.position, w, h);
-        return window.GeometryUtils.getClosestPointOnPolygon(shape, w, h, target.x, target.y);
+        const target = GeometryUtils.getEdgePos(port.edge, port.position, w, h);
+        return GeometryUtils.getClosestPointOnPolygon(shape, w, h, target.x, target.y);
     },
     getSmartPlacement: (nodesToPlace, layer, allNodes) => {
         const existingNodes = Object.values(allNodes).filter(n => n.parentId === layer.id && !nodesToPlace.find(ntp => ntp.id === n.id));
@@ -113,3 +114,6 @@ window.GeometryUtils = {
         return { updatesById, newLayerSize: { w: layerW, h: layerH } };
     }
 };
+
+if (typeof window !== 'undefined') window.GeometryUtils = GeometryUtils;
+if (typeof module !== 'undefined') module.exports = GeometryUtils;
