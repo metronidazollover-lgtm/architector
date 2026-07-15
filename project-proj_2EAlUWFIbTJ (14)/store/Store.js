@@ -17,6 +17,8 @@ const defaultState = {
         offset: { x: -30, y: -50 },
         zoom: 0.65
     },
+    cameraByContext: {},
+    navHistory: { past: [], future: [] },
         ui: {
             libraryOpen: true,
             libraryTab: 'objects',
@@ -32,12 +34,12 @@ const defaultState = {
         }
     },
     aiChatHistory: [
-        { role: 'ai', content: 'Привет! Я построил для вас архитектуру Централизованной Криптобиржи (CEX) из 16 узлов и 3 слоев, как вы и просили!' }
+        { role: 'ai', content: 'Привет! Я ваш AI-ассистент. Помогу спроектировать архитектуру, ответить на вопросы и организовать ваши идеи на холсте.' }
     ],
     clipboard: null,
     past: [],
     future: [],
-    historyLogs: ['Инициализация CEX архитектуры']
+    historyLogs: ['Инициализация проекта']
 };
 
 const getInitialState = () => {
@@ -52,12 +54,6 @@ const getInitialState = () => {
                 Object.entries(parsed.nodes).forEach(([key, node]) => {
                     // Игнорируем явных призраков (узлы без базовых свойств)
                     if (!node || (!node.name && !node.type)) return;
-                    
-                    // Авто-заполнение пустого узла "Итог анализа рисков"
-                    if (node.name && node.name.toLowerCase().includes('итог анализа рисков') && (!node.content || node.content.trim() === '')) {
-                        node.content = "⚠️ АНАЛИЗ РИСКОВ И РЕШЕНИЯ\n\n1. Финансовые риски:\n- Внезапные просадки (Drawdowns)\n> Решение: Жесткий Margin Call Engine и резервный фонд (Insurance Fund).\n\n2. Технические риски:\n- Сбой в Matching Engine\n> Решение: Heartbeat-мониторинг, автоматический Failover (Kill Switch).\n\n3. Операционные риски:\n- Атака на горячие кошельки\n> Решение: Хранение 95% средств на холодных кошельках, мультисиг-подтверждение.";
-                        node.size = { w: 320, h: 220 }; // Корректируем размер под текст
-                    }
                     
                     // Жестко синхронизируем внутренний ID с ключом хранилища
                     cleanNodes[key] = { ...node, id: key };
@@ -110,6 +106,24 @@ const saveHistory = (state, logMessage) => {
     };
 };
 
+// История посещений контекстов (отдельна от undo/redo).
+// Хранит и breadcrumbs целиком: контекстом может быть порт или связь, путь к ним по parentId не восстановить.
+const MAX_NAV_HISTORY = 50;
+
+const pushNavEntry = (state) => {
+    const entry = { id: state.currentContext, breadcrumbs: state.breadcrumbs };
+    const past = [...((state.navHistory && state.navHistory.past) || []), entry];
+    if (past.length > MAX_NAV_HISTORY) past.shift();
+    return { past, future: [] };
+};
+
+const contextExists = (state, id) =>
+    id === 'root' ||
+    !!state.nodes[id] ||
+    !!state.ports[id] ||
+    !!(state.layers && state.layers[id]) ||
+    !!(state.links && state.links.find(l => l && l.id === id));
+
 const reducer = (state, action) => {
     switch (action.type) {
         case 'LOAD_STATE': {
@@ -124,6 +138,8 @@ const reducer = (state, action) => {
                 canvas: action.payload.canvas || { offset: { x: 0, y: 0 }, zoom: 1 },
                 currentContext: action.payload.currentContext || 'root',
                 breadcrumbs: action.payload.breadcrumbs || [{ id: 'root', name: 'Главный холст' }],
+                cameraByContext: action.payload.cameraByContext || {},
+                navHistory: { past: [], future: [] },
                 selectedIds: [],
                 isolatedIds: action.payload.isolatedIds || [],
                 interactionMode: 'default',
@@ -323,12 +339,17 @@ const reducer = (state, action) => {
                 }
             }
 
+            // Если уровень уже посещали, возвращаем его сохранённую камеру вместо расчётной
+            const savedCamera = (state.cameraByContext || {})[id];
+
             return {
                 ...state,
                 currentContext: id,
                 breadcrumbs: [...state.breadcrumbs, { id, name }],
                 selectedIds: [],
-                canvas: { offset: { x: targetOffsetX, y: targetOffsetY }, zoom: targetZoom },
+                canvas: savedCamera || { offset: { x: targetOffsetX, y: targetOffsetY }, zoom: targetZoom },
+                cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
+                navHistory: pushNavEntry(state),
                 ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [] }
             };
         }
@@ -337,12 +358,59 @@ const reducer = (state, action) => {
             if (index === state.breadcrumbs.length - 1) return state;
             const newBreadcrumbs = state.breadcrumbs.slice(0, index + 1);
             const newContext = newBreadcrumbs[newBreadcrumbs.length - 1].id;
+            const savedCamera = (state.cameraByContext || {})[newContext];
             return {
                 ...state,
                 currentContext: newContext,
                 breadcrumbs: newBreadcrumbs,
                 selectedIds: [],
-                canvas: { offset: { x: 0, y: 0 }, zoom: 1 }, // сброс камеры при выходе
+                canvas: savedCamera || { offset: { x: 0, y: 0 }, zoom: 1 },
+                cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
+                navHistory: pushNavEntry(state),
+                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [] }
+            };
+        }
+        case 'NAV_BACK': {
+            const past = [...((state.navHistory && state.navHistory.past) || [])];
+            let entry = null;
+            while (past.length > 0) {
+                const candidate = past.pop();
+                if (contextExists(state, candidate.id)) { entry = candidate; break; }
+            }
+            if (!entry) return state;
+            return {
+                ...state,
+                currentContext: entry.id,
+                breadcrumbs: entry.breadcrumbs,
+                selectedIds: [],
+                canvas: (state.cameraByContext || {})[entry.id] || { offset: { x: 0, y: 0 }, zoom: 1 },
+                cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
+                navHistory: {
+                    past,
+                    future: [{ id: state.currentContext, breadcrumbs: state.breadcrumbs }, ...((state.navHistory && state.navHistory.future) || [])]
+                },
+                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [] }
+            };
+        }
+        case 'NAV_FORWARD': {
+            const future = [...((state.navHistory && state.navHistory.future) || [])];
+            let entry = null;
+            while (future.length > 0) {
+                const candidate = future.shift();
+                if (contextExists(state, candidate.id)) { entry = candidate; break; }
+            }
+            if (!entry) return state;
+            return {
+                ...state,
+                currentContext: entry.id,
+                breadcrumbs: entry.breadcrumbs,
+                selectedIds: [],
+                canvas: (state.cameraByContext || {})[entry.id] || { offset: { x: 0, y: 0 }, zoom: 1 },
+                cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
+                navHistory: {
+                    past: [...((state.navHistory && state.navHistory.past) || []), { id: state.currentContext, breadcrumbs: state.breadcrumbs }],
+                    future
+                },
                 ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [] }
             };
         }
@@ -367,6 +435,9 @@ const reducer = (state, action) => {
                 ...state,
                 currentContext: targetId,
                 breadcrumbs,
+                canvas: (state.cameraByContext || {})[targetId] || state.canvas,
+                cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
+                navHistory: pushNavEntry(state),
                 ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [] }
             };
         }
