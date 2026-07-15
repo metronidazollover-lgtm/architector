@@ -2,13 +2,63 @@
 // Без JSX и React: файл исполняется и в браузере (text/babel), и в Node для тестов.
 // Двойной экспорт в конце файла (см. docs/PLAN.md, этап 0.2).
 
-const STORAGE_KEY = 'architector_state_v9';
+const STORAGE_KEY = 'architector_state_v10';
+const LEGACY_STORAGE_KEY_V9 = 'architector_state_v9';
+const FORMAT_VERSION = 10;
 
 // Доступ к окружению с оглядкой на Node (node:test): в браузере — window,
 // в тестах — global-заглушки или дефолты.
 const getGeometry = () =>
     (typeof window !== 'undefined' && window.GeometryUtils) ? window.GeometryUtils :
     (typeof global !== 'undefined' && global.GeometryUtils) ? global.GeometryUtils : null;
+
+const getHierarchy = () =>
+    (typeof window !== 'undefined' && window.HierarchyUtils) ? window.HierarchyUtils :
+    (typeof global !== 'undefined' && global.HierarchyUtils) ? global.HierarchyUtils :
+    (typeof module !== 'undefined' && typeof require !== 'undefined') ? require('../utils/hierarchy.js') : null;
+
+// Абсолютная позиция порта с учётом иерархии координат (v10: позиции детей относительные)
+const getPortAbs = (port, node, state) => {
+    const abs = getHierarchy().getAbsolutePosition(node.id, state.nodes, state.layers);
+    return getGeometry().getPortAbsolutePosition(port, node, abs);
+};
+
+// Миграция формата сохранений: v9 хранил все позиции в мировых координатах,
+// v10 хранит позиции детей относительно родителя (см. docs/MIGRATIONS.md).
+// Работает на исходных (мировых) значениях, поэтому порядок обхода не важен.
+const migrateToV10 = (data) => {
+    if (!data || (data.formatVersion || 9) >= FORMAT_VERSION) return data;
+    const oldNodes = data.nodes || {};
+    const oldLayers = data.layers || {};
+
+    const parentPos = (parentId) => {
+        if (!parentId || parentId === 'root') return null;
+        const parent = oldNodes[parentId] || oldLayers[parentId];
+        return (parent && parent.position) ? parent.position : null;
+    };
+    const convert = (entity) => {
+        if (!entity || !entity.position) return entity;
+        const pp = parentPos(entity.parentId);
+        if (!pp) return entity;
+        return { ...entity, position: { x: entity.position.x - pp.x, y: entity.position.y - pp.y } };
+    };
+
+    const nodes = {};
+    Object.entries(oldNodes).forEach(([key, n]) => { nodes[key] = convert(n); });
+    const layers = {};
+    Object.entries(oldLayers).forEach(([key, l]) => { layers[key] = convert(l); });
+
+    return {
+        ...data,
+        nodes,
+        layers,
+        // Снапшоты undo содержат старые мировые координаты — истории при миграции сбрасываются
+        past: [],
+        future: [],
+        historyLogs: ['Проект сконвертирован в формат v10 (относительные координаты)'],
+        formatVersion: FORMAT_VERSION
+    };
+};
 
 const getScreenSize = () =>
     (typeof window !== 'undefined') ? { w: window.innerWidth, h: window.innerHeight } : { w: 1280, h: 720 };
@@ -50,15 +100,17 @@ const defaultState = {
     clipboard: null,
     past: [],
     future: [],
-    historyLogs: ['Инициализация проекта']
+    historyLogs: ['Инициализация проекта'],
+    formatVersion: FORMAT_VERSION
 };
 
 const getInitialState = () => {
     if (typeof localStorage === 'undefined') return defaultState;
     try {
-        const saved = localStorage.getItem(STORAGE_KEY);
+        // Сначала текущий формат, затем legacy v9 с конвертацией на лету
+        const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY_V9);
         if (saved) {
-            const parsed = JSON.parse(saved);
+            const parsed = migrateToV10(JSON.parse(saved));
             
             // Миграция и самолечение: исправление рассинхрона ключей и ID узлов (удаление призраков)
             const cleanNodes = {};
@@ -139,21 +191,22 @@ const contextExists = (state, id) =>
 const reducer = (state, action) => {
     switch (action.type) {
         case 'LOAD_STATE': {
+            const payload = migrateToV10(action.payload) || {};
             const historyState = saveHistory(state, `Загружен проект из файла`);
             return {
                 ...state,
                 ...historyState,
-                layers: action.payload.layers || {},
-                nodes: action.payload.nodes || {},
-                ports: action.payload.ports || {},
-                links: action.payload.links || [],
-                canvas: action.payload.canvas || { offset: { x: 0, y: 0 }, zoom: 1 },
-                currentContext: action.payload.currentContext || 'root',
-                breadcrumbs: action.payload.breadcrumbs || [{ id: 'root', name: 'Главный холст' }],
-                cameraByContext: action.payload.cameraByContext || {},
+                layers: payload.layers || {},
+                nodes: payload.nodes || {},
+                ports: payload.ports || {},
+                links: payload.links || [],
+                canvas: payload.canvas || { offset: { x: 0, y: 0 }, zoom: 1 },
+                currentContext: payload.currentContext || 'root',
+                breadcrumbs: payload.breadcrumbs || [{ id: 'root', name: 'Главный холст' }],
+                cameraByContext: payload.cameraByContext || {},
                 navHistory: { past: [], future: [] },
                 selectedIds: [],
-                isolatedIds: action.payload.isolatedIds || [],
+                isolatedIds: payload.isolatedIds || [],
                 interactionMode: 'default',
                 pendingConnection: null
             };
@@ -188,10 +241,18 @@ const reducer = (state, action) => {
             const parentContext = state.layers[idToRemove]?.parentId || 'root';
             delete newLayers[idToRemove];
             
+            const removedLayerPos = state.layers[idToRemove]?.position || { x: 0, y: 0 };
             const newNodes = { ...state.nodes };
             Object.keys(newNodes).forEach(nodeId => {
                 if (newNodes[nodeId].parentId === idToRemove) {
-                    newNodes[nodeId] = { ...newNodes[nodeId], parentId: parentContext };
+                    // Ребёнок переезжает в контекст слоя: компенсируем смещение слоя,
+                    // чтобы абсолютная позиция не изменилась
+                    const n = newNodes[nodeId];
+                    newNodes[nodeId] = {
+                        ...n,
+                        parentId: parentContext,
+                        position: { x: (n.position?.x || 0) + removedLayerPos.x, y: (n.position?.y || 0) + removedLayerPos.y }
+                    };
                 }
             });
 
@@ -290,19 +351,21 @@ const reducer = (state, action) => {
 
             if (state.nodes[id]) {
                 const node = state.nodes[id];
-                const nx = node.position?.x || 0;
-                const ny = node.position?.y || 0;
-                
+                const nodeAbs = getHierarchy().getAbsolutePosition(id, state.nodes, state.layers);
+                const nx = nodeAbs.x;
+                const ny = nodeAbs.y;
+
                 // Рассчитываем Bounding Box для самого узла и всех его прямых детей
                 let minX = nx;
                 let minY = ny;
                 let maxX = nx + (node.size?.w || 200);
                 let maxY = ny + (node.size?.h || 100);
-                
+
                 Object.values(state.nodes).forEach(child => {
                     if (child.parentId === id) {
-                        const cx = child.position?.x || 0;
-                        const cy = child.position?.y || 0;
+                        // Дети хранят относительные координаты: мировые = позиция узла + смещение
+                        const cx = nx + (child.position?.x || 0);
+                        const cy = ny + (child.position?.y || 0);
                         minX = Math.min(minX, cx);
                         minY = Math.min(minY, cy);
                         maxX = Math.max(maxX, cx + (child.size?.w || 200));
@@ -325,7 +388,7 @@ const reducer = (state, action) => {
                 const node = state.nodes[port.nodeId];
                 if (node) {
                     targetZoom = 1; // Стандартное приближение
-                    const absPos = getGeometry().getPortAbsolutePosition(port, node);
+                    const absPos = getPortAbs(port, node, state);
                     targetOffsetX = (screenW / 2) - absPos.x * targetZoom;
                     targetOffsetY = (screenH / 2) - absPos.y * targetZoom;
                 }
@@ -338,8 +401,8 @@ const reducer = (state, action) => {
                         const sNode = state.nodes[sourcePort.nodeId];
                         const tNode = state.nodes[targetPort.nodeId];
                         if (sNode && tNode) {
-                            const p1 = getGeometry().getPortAbsolutePosition(sourcePort, sNode);
-                            const p2 = getGeometry().getPortAbsolutePosition(targetPort, tNode);
+                            const p1 = getPortAbs(sourcePort, sNode, state);
+                            const p2 = getPortAbs(targetPort, tNode, state);
                             const midX = (p1.x + p2.x) / 2;
                             const midY = (p1.y + p2.y) / 2;
                             targetZoom = 2;
@@ -662,11 +725,26 @@ const reducer = (state, action) => {
         case 'MOVE_SELECTED': {
             const { dx, dy, skipHistory } = action.payload;
             const historyState = skipHistory ? {} : saveHistory(state, `Перемещение выделенных элементов`);
-            
+
             const newNodes = { ...state.nodes };
             const newLayers = { ...state.layers };
-            
+
+            // Координаты относительные: если выделен и предок, и его потомок,
+            // двигаем только предка — потомок поедет вместе с ним автоматически
+            const selectedSet = new Set(state.selectedIds);
+            const hasSelectedAncestor = (id) => {
+                let current = state.nodes[id] || (state.layers && state.layers[id]);
+                const visited = new Set();
+                while (current && current.parentId && current.parentId !== 'root' && !visited.has(current.parentId)) {
+                    if (selectedSet.has(current.parentId)) return true;
+                    visited.add(current.parentId);
+                    current = state.nodes[current.parentId] || (state.layers && state.layers[current.parentId]) || null;
+                }
+                return false;
+            };
+
             state.selectedIds.forEach(id => {
+                if (hasSelectedAncestor(id)) return;
                 if (newNodes[id]) {
                     newNodes[id] = { ...newNodes[id], position: { x: newNodes[id].position.x + dx, y: newNodes[id].position.y + dy } };
                 } else if (newLayers[id]) {
@@ -675,6 +753,23 @@ const reducer = (state, action) => {
             });
 
             return { ...state, ...historyState, nodes: newNodes, layers: newLayers };
+        }
+        case 'REPARENT_ENTITY': {
+            // Перевложение с сохранением абсолютной позиции (см. docs/PLAN.md, этап 5.2)
+            const { id, newParentId } = action.payload;
+            const H = getHierarchy();
+            const entity = state.nodes[id] || (state.layers && state.layers[id]);
+            if (!entity || entity.parentId === newParentId) return state;
+            if (newParentId !== 'root' && H.isDescendantOf(newParentId, id, state.nodes, state.layers)) return state;
+
+            const abs = H.getAbsolutePosition(id, state.nodes, state.layers);
+            const rel = H.toRelativePosition(abs, newParentId, state.nodes, state.layers);
+            const historyState = saveHistory(state, `Элемент перевложен: ${entity.name}`);
+
+            if (state.nodes[id]) {
+                return { ...state, ...historyState, nodes: { ...state.nodes, [id]: { ...entity, parentId: newParentId, position: rel } } };
+            }
+            return { ...state, ...historyState, layers: { ...state.layers, [id]: { ...entity, parentId: newParentId, position: rel } } };
         }
         case 'DELETE_SELECTED': {
             if (state.selectedIds.length === 0) return state;
@@ -694,7 +789,7 @@ const reducer = (state, action) => {
                     Object.values(newPorts).forEach(p => { if(p.nodeId === id) portsToRemove.push(p.id); });
                 }
                 else if (newLayers[id]) {
-                    removedLayerIds.push({ id, parentId: newLayers[id].parentId || 'root' });
+                    removedLayerIds.push({ id, parentId: newLayers[id].parentId || 'root', position: newLayers[id].position || { x: 0, y: 0 } });
                     delete newLayers[id];
                 }
                 else if (newPorts[id]) portsToRemove.push(id);
@@ -706,7 +801,13 @@ const reducer = (state, action) => {
             removedLayerIds.forEach(removedLayer => {
                 Object.keys(newNodes).forEach(nodeId => {
                     if (newNodes[nodeId].parentId === removedLayer.id) {
-                        newNodes[nodeId] = { ...newNodes[nodeId], parentId: removedLayer.parentId };
+                        // Компенсация смещения удалённого слоя: абсолютная позиция сохраняется
+                        const n = newNodes[nodeId];
+                        newNodes[nodeId] = {
+                            ...n,
+                            parentId: removedLayer.parentId,
+                            position: { x: (n.position?.x || 0) + removedLayer.position.x, y: (n.position?.y || 0) + removedLayer.position.y }
+                        };
                     }
                 });
             });
@@ -742,8 +843,9 @@ const reducer = (state, action) => {
 
             if (state.nodes[id]) {
                 const node = state.nodes[id];
-                const nx = node.position?.x || 0;
-                const ny = node.position?.y || 0;
+                const nodeAbs = getHierarchy().getAbsolutePosition(id, state.nodes, state.layers);
+                const nx = nodeAbs.x;
+                const ny = nodeAbs.y;
                 const nw = node.size?.w || 200;
                 const nh = node.size?.h || 100;
                 const padding = 200;
@@ -754,8 +856,9 @@ const reducer = (state, action) => {
                 targetOffsetY = (screenH / 2) - (ny + nh / 2) * newZoom;
             } else if (state.layers && state.layers[id]) {
                 const layer = state.layers[id];
-                const lx = layer.position?.x || 0;
-                const ly = layer.position?.y || 0;
+                const layerAbs = getHierarchy().getAbsolutePosition(id, state.nodes, state.layers);
+                const lx = layerAbs.x;
+                const ly = layerAbs.y;
                 const lw = layer.size?.w || 600;
                 const lh = layer.size?.h || 400;
                 const padding = 200;
@@ -769,7 +872,7 @@ const reducer = (state, action) => {
                 const node = state.nodes[port.nodeId];
                 if (node) {
                     // Сохраняем текущий зум (newZoom остается равным targetZoom)
-                    const absPos = getGeometry().getPortAbsolutePosition(port, node);
+                    const absPos = getPortAbs(port, node, state);
                     targetOffsetX = visualCenterX - absPos.x * newZoom;
                     targetOffsetY = (screenH / 2) - absPos.y * newZoom;
                 }
@@ -782,11 +885,11 @@ const reducer = (state, action) => {
                         const sNode = state.nodes[sourcePort.nodeId];
                         const tNode = state.nodes[targetPort.nodeId];
                         if (sNode && tNode) {
-                            const p1 = getGeometry().getPortAbsolutePosition(sourcePort, sNode);
-                            const p2 = getGeometry().getPortAbsolutePosition(targetPort, tNode);
+                            const p1 = getPortAbs(sourcePort, sNode, state);
+                            const p2 = getPortAbs(targetPort, tNode, state);
                             const midX = (p1.x + p2.x) / 2;
                             const midY = (p1.y + p2.y) / 2;
-                            
+
                             const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
                             const scale = (screenW - libraryWidth - 200) / (dist || 1);
                             newZoom = Math.min(Math.max(scale, 0.5), 1.5);
@@ -819,6 +922,6 @@ const reducer = (state, action) => {
     }
 };
 
-const ArchitectorStore = { STORAGE_KEY, defaultState, getInitialState, reducer, saveHistory, pushNavEntry, contextExists };
+const ArchitectorStore = { STORAGE_KEY, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, defaultState, getInitialState, reducer, saveHistory, pushNavEntry, contextExists, migrateToV10 };
 if (typeof window !== 'undefined') window.ArchitectorStore = ArchitectorStore;
 if (typeof module !== 'undefined') module.exports = ArchitectorStore;

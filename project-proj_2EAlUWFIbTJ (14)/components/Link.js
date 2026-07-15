@@ -14,8 +14,10 @@ function Link({ data }) {
     if (!sourceNode || !targetNode) return null;
     if (sourceNode.hidden || targetNode.hidden) return null;
 
-    const p1 = window.GeometryUtils.getPortAbsolutePosition(sourcePort, sourceNode);
-    const p2 = window.GeometryUtils.getPortAbsolutePosition(targetPort, targetNode);
+    const sourceAbs = window.HierarchyUtils.getAbsolutePosition(sourceNode.id, nodes, state.layers);
+    const targetAbs = window.HierarchyUtils.getAbsolutePosition(targetNode.id, nodes, state.layers);
+    const p1 = window.GeometryUtils.getPortAbsolutePosition(sourcePort, sourceNode, sourceAbs);
+    const p2 = window.GeometryUtils.getPortAbsolutePosition(targetPort, targetNode, targetAbs);
 
     // Bezier curve calculation
     const dx = Math.max(Math.abs(p2.x - p1.x) / 2, 50);
@@ -197,8 +199,9 @@ function PendingLink() {
 
     const { offset, zoom } = state.canvas;
 
-    const p1 = window.GeometryUtils.getPortAbsolutePosition(sourcePort, sourceNode);
-    
+    const sourceAbs = window.HierarchyUtils.getAbsolutePosition(sourceNode.id, state.nodes, state.layers);
+    const p1 = window.GeometryUtils.getPortAbsolutePosition(sourcePort, sourceNode, sourceAbs);
+
     // Convert screen endPos to canvas absolute
     const p2x = (endPos.x - offset.x) / zoom;
     const p2y = (endPos.y - offset.y) / zoom;

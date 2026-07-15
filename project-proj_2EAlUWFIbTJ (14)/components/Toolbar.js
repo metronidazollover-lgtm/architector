@@ -2,8 +2,16 @@ function Toolbar() {
     const { dispatch, state } = useStore();
     const fileInputRef = React.useRef(null);
 
+    // Новые сущности получают parentId = currentContext, а их position относительна
+    // родителю (v10). Мировую точку центра экрана переводим в систему контекста.
+    const toContextRelative = (worldX, worldY) => {
+        const ctxAbs = window.HierarchyUtils.getAbsolutePosition(state.currentContext, state.nodes, state.layers);
+        return { x: worldX - ctxAbs.x, y: worldY - ctxAbs.y };
+    };
+
     const handleExport = () => {
         const data = {
+            formatVersion: state.formatVersion || 10,
             layers: state.layers,
             nodes: state.nodes,
             ports: state.ports,
@@ -54,7 +62,7 @@ function Toolbar() {
             type: 'ADD_NODE',
             payload: {
                 name: 'New Node',
-                position: { x: centerX - 100, y: centerY - 50 },
+                position: toContextRelative(centerX - 100, centerY - 50),
                 size: { w: 200, h: 100 },
                 color: '#1a1a1a',
                 shape: 'rectangle'
@@ -101,7 +109,7 @@ function Toolbar() {
                         type: 'ADD_LAYER',
                         payload: {
                             name: 'Новый слой',
-                            position: { x: centerX - 300, y: centerY - 200 },
+                            position: toContextRelative(centerX - 300, centerY - 200),
                             size: { w: 600, h: 400 },
                             color: '#ff9500'
                         }
@@ -157,7 +165,7 @@ function Toolbar() {
                         payload: {
                             name: '💬 AI Assistant Copilot',
                             type: 'ai-agent',
-                            position: { x: -state.canvas.offset.x / state.canvas.zoom + 200, y: -state.canvas.offset.y / state.canvas.zoom + 100 },
+                            position: toContextRelative(-state.canvas.offset.x / state.canvas.zoom + 200, -state.canvas.offset.y / state.canvas.zoom + 100),
                             size: { w: 320, h: 450 },
                             color: '#3b0764'
                         }

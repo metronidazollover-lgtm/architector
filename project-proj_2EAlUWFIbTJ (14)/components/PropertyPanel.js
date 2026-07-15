@@ -49,11 +49,18 @@ function PropertyPanel() {
             if (targetLayer) {
                 const nodesToPlace = nodeIds.map(id => nodes[id]);
                 const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(nodesToPlace, targetLayer, nodes);
-                
+
                 dispatch({ type: 'UPDATE_LAYER', payload: { id: parentId, updates: { size: newLayerSize } } });
                 dispatch({ type: 'MASS_UPDATE', payload: { ids: nodeIds, updatesById } });
             } else {
-                dispatch({ type: 'MASS_UPDATE', payload: { ids: nodeIds, updates: { parentId } } });
+                // Смена контекста без слоя: сохраняем абсолютные позиции (v10)
+                const H = window.HierarchyUtils;
+                const updatesById = {};
+                nodeIds.forEach(id => {
+                    const abs = H.getAbsolutePosition(id, nodes, layers);
+                    updatesById[id] = { parentId, position: H.toRelativePosition(abs, parentId, nodes, layers) };
+                });
+                dispatch({ type: 'MASS_UPDATE', payload: { ids: nodeIds, updatesById } });
             }
         };
 
@@ -359,18 +366,20 @@ function PropertyPanel() {
     }
 
     const handleChange = (field, value) => {
-        if (field === 'parentId' && value !== 'root' && layers[value]) {
-            const targetLayer = layers[value];
-            dispatch({ type: 'UPDATE_NODE', payload: { 
-                id: selectedNode.id, 
-                updates: { 
-                    parentId: value,
-                    position: {
-                        x: targetLayer.position.x + 40,
-                        y: targetLayer.position.y + 90
+        if (field === 'parentId') {
+            if (value !== 'root' && layers[value]) {
+                // Телепорт в слой: позиция относительна слою (v10)
+                dispatch({ type: 'UPDATE_NODE', payload: {
+                    id: selectedNode.id,
+                    updates: {
+                        parentId: value,
+                        position: { x: 40, y: 90 }
                     }
-                } 
-            }});
+                }});
+            } else {
+                // Перевложение с сохранением абсолютной позиции
+                dispatch({ type: 'REPARENT_ENTITY', payload: { id: selectedNode.id, newParentId: value } });
+            }
         } else {
             dispatch({ type: 'UPDATE_NODE', payload: { id: selectedNode.id, updates: { [field]: value } } });
         }

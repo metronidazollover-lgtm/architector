@@ -28,9 +28,10 @@ function Port({ data, nodeData }) {
                 const mouseX = (moveEvent.clientX - state.canvas.offset.x) / zoom;
                 const mouseY = (moveEvent.clientY - state.canvas.offset.y) / zoom;
                 
-                // Get relative position to the node's top-left corner
-                const localX = mouseX - nodeData.position.x;
-                const localY = mouseY - nodeData.position.y;
+                // Get relative position to the node's top-left corner (v10: мировая позиция узла)
+                const nodeAbs = window.HierarchyUtils.getAbsolutePosition(nodeData.id, state.nodes, state.layers);
+                const localX = mouseX - nodeAbs.x;
+                const localY = mouseY - nodeAbs.y;
                 
                 // Calculate distances to all 4 edges
                 const distTop = Math.abs(localY);
@@ -122,7 +123,8 @@ function Port({ data, nodeData }) {
                 const node = nodes[port.nodeId];
                 if (!node) return;
                 
-                const absPos = window.GeometryUtils.getPortAbsolutePosition(port, node);
+                const nodeAbs = window.HierarchyUtils.getAbsolutePosition(node.id, nodes, state.layers);
+                const absPos = window.GeometryUtils.getPortAbsolutePosition(port, node, nodeAbs);
                 const dist = Math.hypot(p2x - absPos.x, p2y - absPos.y);
                 if (dist < minDist) {
                     minDist = dist;
@@ -145,12 +147,13 @@ function Port({ data, nodeData }) {
                 Object.values(nodes).forEach(node => {
                     const nw = node.size?.w || 200;
                     const nh = node.size?.h || 100;
-                    if (p2x >= node.position.x && p2x <= node.position.x + nw &&
-                        p2y >= node.position.y && p2y <= node.position.y + nh) {
+                    const nodeAbs = window.HierarchyUtils.getAbsolutePosition(node.id, nodes, state.layers);
+                    if (p2x >= nodeAbs.x && p2x <= nodeAbs.x + nw &&
+                        p2y >= nodeAbs.y && p2y <= nodeAbs.y + nh) {
                         targetNodeId = node.id;
-                        
-                        const localX = p2x - node.position.x;
-                        const localY = p2y - node.position.y;
+
+                        const localX = p2x - nodeAbs.x;
+                        const localY = p2y - nodeAbs.y;
                         
                         const distTop = Math.abs(localY);
                         const distBottom = Math.abs(nh - localY);
