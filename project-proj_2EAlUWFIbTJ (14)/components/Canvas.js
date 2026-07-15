@@ -124,8 +124,19 @@ function Canvas() {
             }
         };
 
+        // Отпустили Alt — peek гаснет (см. этап 3.2 плана)
+        const handleKeyUp = (e) => {
+            if (e.key === 'Alt' && state.ui.peekNodeId) {
+                dispatch({ type: 'SET_UI', payload: { peekNodeId: null } });
+            }
+        };
+
         window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
+        };
     }, [state, dispatch]);
 
     React.useEffect(() => {
@@ -427,20 +438,22 @@ function Canvas() {
                     const contextDepth = getContextDepth(effectiveContextId);
                     const isExplicitlyVisible = (state.ui.xRayLevels || []).includes(contextDepth);
                     const isBreadcrumbAncestor = state.breadcrumbs.some(b => b.id === layer.id) && !isTheContextItself;
-                    
-                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor) return null;
-                    
-                    const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isExplicitlyVisible;
-                    
+                    const isPeekChild = !!state.ui.peekNodeId && effectiveContextId === state.ui.peekNodeId;
+
+                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild) return null;
+
+                    const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isExplicitlyVisible && !isPeekChild;
+
                     return (
-                        <div 
+                        <div
                             key={layer.id || `layer-${idx}`}
                             className={`
-                                ${isDimmed ? 'opacity-30 pointer-events-none grayscale' : ''} 
+                                ${isDimmed ? 'opacity-30 pointer-events-none grayscale' : ''}
                                 ${isExplicitlyVisible && !isCurrentChild ? 'pointer-events-auto' : ''}
                                 ${isBreadcrumbAncestor ? 'animate-pulse opacity-50 ring-2 ring-[var(--accent-blue)] rounded-xl' : ''}
+                                ${isPeekChild ? 'opacity-100 pointer-events-none' : ''}
                             `}
-                            style={{ zIndex: isCurrentChild ? 5 : (isExplicitlyVisible ? 2 : (isBreadcrumbAncestor ? 1 : 0)) }}
+                            style={{ zIndex: isPeekChild ? 30 : (isCurrentChild ? 5 : (isExplicitlyVisible ? 2 : (isBreadcrumbAncestor ? 1 : 0))) }}
                         >
                             <Layer data={layer} />
                         </div>
@@ -503,12 +516,14 @@ function Canvas() {
                         return null; // Разные контексты на одной глубине без X-Ray
                     }
 
-                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor) return null;
-                    
-                    const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isExplicitlyVisible;
-                    
+                    const isPeekChildLink = !!state.ui.peekNodeId && effectiveContextId === state.ui.peekNodeId;
+
+                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChildLink) return null;
+
+                    const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isExplicitlyVisible && !isPeekChildLink;
+
                     return (
-                        <div key={link.id || `link-${idx}`} className={`${isDimmed ? 'opacity-30 pointer-events-none grayscale' : ''} ${isExplicitlyVisible && !isCurrentChild ? 'pointer-events-auto opacity-100' : ''}`} style={{ zIndex: isCurrentChild ? 10 : (isExplicitlyVisible ? 5 : 0) }}>
+                        <div key={link.id || `link-${idx}`} className={`${isDimmed ? 'opacity-30 pointer-events-none grayscale' : ''} ${isExplicitlyVisible && !isCurrentChild ? 'pointer-events-auto opacity-100' : ''} ${isPeekChildLink ? 'opacity-100 pointer-events-none' : ''}`} style={{ zIndex: isPeekChildLink ? 30 : (isCurrentChild ? 10 : (isExplicitlyVisible ? 5 : 0)) }}>
                             <Link data={link} />
                         </div>
                     );
@@ -552,7 +567,13 @@ function Canvas() {
                         }
                     }
 
-                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isExplicitlyVisible && !isBreadcrumbAncestor) return null;
+                    // Alt+hover peek: дети peek-узла временно видимы в полный размер
+                    const peekId = state.ui.peekNodeId;
+                    const isPeekChild = !!peekId && effectiveContextId === peekId;
+                    const isPeekSource = peekId === node.id;
+                    const isPeekDimmed = !!peekId && !isPeekChild && !isPeekSource && isCurrentChild;
+
+                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild) return null;
                     if (node.hidden) return null;
                     
                     // Проверяем, выделен ли хотя бы один из истинных детей этого узла
@@ -584,8 +605,11 @@ function Canvas() {
                                 ${isExplicitlyVisible && !isCurrentChild && !hasSelectedChild ? 'opacity-100 pointer-events-auto shadow-md' : ''}
                                 ${isBreadcrumbAncestor && !isPulsing && !isHighlightedContext ? 'opacity-50 pointer-events-none ring-4 ring-[var(--accent-blue)] ring-opacity-50 rounded-lg' : ''}
                                 ${isPulsing ? 'ring-4 ring-[var(--accent-blue)] ring-opacity-80 rounded-lg animate-[pulse_2s_cubic-bezier(0.4,0,0.6,1)_infinite] opacity-100 pointer-events-auto shadow-xl' : ''}
+                                ${isPeekChild ? 'opacity-100 pointer-events-none shadow-xl' : ''}
+                                ${isPeekDimmed ? 'opacity-25 grayscale' : ''}
+                                ${isPeekSource ? 'ring-4 ring-[var(--accent-blue)]/60 rounded-lg' : ''}
                             `}
-                            style={{ zIndex: isPulsing ? 20 : (isCurrentChild ? 10 : (hasSelectedChild ? 15 : (isExplicitlyVisible ? 5 : (isHighlightedContext ? 2 : (isBreadcrumbAncestor ? 1 : 1))))) }}
+                            style={{ zIndex: isPeekChild ? 30 : (isPulsing ? 20 : (isCurrentChild ? 10 : (hasSelectedChild ? 15 : (isExplicitlyVisible ? 5 : (isHighlightedContext ? 2 : (isBreadcrumbAncestor ? 1 : 1)))))) }}
                         >
                             <Node data={node} isContextNode={isHighlightedContext || isBreadcrumbAncestor || isPulsing} isSiblingOfSelected={isSiblingOfSelected} />
                         </div>
