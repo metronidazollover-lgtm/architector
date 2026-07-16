@@ -1,6 +1,6 @@
 # План: прозрачный UX для рекурсивных нод
 
-Проект: Architector (`project-proj_2EAlUWFIbTJ (14)/`), React 18 + Babel standalone, без сборки.
+Проект: Architector (`app/`), React 18 + Babel standalone, без сборки.
 Все новые компоненты подключаются `<script type="text/babel">` в `index.html` (порядок важен: Store → utils → компоненты → app).
 
 ## Цель
