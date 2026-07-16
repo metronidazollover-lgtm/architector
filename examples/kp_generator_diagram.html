@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Архитектура генератора КП — B2B</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 0;
+  }
+
+  .page {
+    width: 1400px;
+    min-height: 900px;
+    margin: 40px auto;
+    background: #1e293b;
+    border-radius: 16px;
+    padding: 40px;
+    page-break-after: always;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .page::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: var(--accent, #3b82f6);
+  }
+
+  .page-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 32px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #334155;
+  }
+
+  .page-header .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px; height: 48px;
+    border-radius: 12px;
+    font-size: 20px;
+    font-weight: 700;
+    color: white;
+    background: var(--accent, #3b82f6);
+    flex-shrink: 0;
+  }
+
+  .page-header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: #f1f5f9;
+  }
+
+  .page-header p {
+    font-size: 14px;
+    color: #94a3b8;
+    margin-top: 4px;
+  }
+
+  .page-number {
+    position: absolute;
+    bottom: 20px;
+    right: 40px;
+    font-size: 12px;
+    color: #475569;
+  }
+
+  .page-footer-left {
+    position: absolute;
+    bottom: 20px;
+    left: 40px;
+    font-size: 12px;
+    color: #475569;
+  }
+
+  /* Overview page */
+  .overview-svg {
+    width: 100%;
+    height: 720px;
+    border-radius: 12px;
+    background: #0f172a;
+    border: 1px solid #334155;
+  }
+
+  /* Detail page */
+  .detail-svg {
+    width: 100%;
+    height: 520px;
+    border-radius: 12px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    margin-bottom: 24px;
+  }
+
+  .detail-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+  }
+
+  .detail-card {
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 16px;
+    border-left: 4px solid var(--card-color, #3b82f6);
+  }
+
+  .detail-card h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #f1f5f9;
+    margin-bottom: 8px;
+  }
+
+  .detail-card p {
+    font-size: 12px;
+    color: #94a3b8;
+    line-height: 1.6;
+    white-space: pre-line;
+  }
+
+  .detail-card .group-badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.08);
+    color: #64748b;
+    margin-bottom: 8px;
+  }
+
+  /* Links table */
+  .links-section { margin-top: 24px; }
+  .links-section h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: #cbd5e1;
+  }
+
+  .links-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .links-table th {
+    text-align: left;
+    padding: 8px 12px;
+    background: #0f172a;
+    color: #64748b;
+    font-weight: 600;
+    border-bottom: 1px solid #334155;
+  }
+
+  .links-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #1e293b;
+    color: #94a3b8;
+  }
+
+  .links-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .color-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    gap: 24px;
+    margin-top: 16px;
+    padding: 12px 16px;
+    background: #0f172a;
+    border-radius: 8px;
+    font-size: 12px;
+    color: #64748b;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .legend-swatch {
+    width: 32px; height: 16px;
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+
+  /* Stats row */
+  .stats-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .stat-card {
+    flex: 1;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+  }
+
+  .stat-card .number {
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--accent, #3b82f6);
+  }
+
+  .stat-card .label {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 4px;
+  }
+
+  @media print {
+    body { background: white; color: #1e293b; }
+    .page {
+      margin: 0;
+      border-radius: 0;
+      background: white;
+      box-shadow: none;
+      width: 100%;
+      padding: 30px;
+    }
+    .page::before { display: none; }
+    .overview-svg, .detail-svg { background: #f8fafc; border-color: #e2e8f0; }
+    .detail-card { background: #f8fafc; border-color: #e2e8f0; }
+    .stat-card { background: #f8fafc; border-color: #e2e8f0; }
+    .legend { background: #f8fafc; }
+    .page-header h1 { color: #1e293b; }
+    .page-header p { color: #64748b; }
+    .page-number, .page-footer-left { color: #94a3b8; }
+    .links-table th { background: #f1f5f9; color: #475569; }
+    .links-table td { color: #475569; }
+    .detail-card h3 { color: #1e293b; }
+    .detail-card p { color: #475569; }
+  }
+</style>
+</head>
+<body>
+<script>
+const DATA = {
+  "layers": {
+    "layer-input": {
+      "id": "layer-input", "name": "1. Входные данные",
+      "content": "Приём и валидация брифинга от клиента. Проверка полноты данных и формирование уточняющих вопросов при необходимости.",
+      "color": "#1d4ed8",
+      "position": { "x": -2500, "y": -350 }, "size": { "w": 1700, "h": 1050 },
+      "parentId": "root"
+    },
+    "layer-ai-core": {
+      "id": "layer-ai-core", "name": "2. AI-Ядро обработки",
+      "content": "Системный промт, анализ контекста клиента и последовательная генерация всех секций коммерческого предложения.",
+      "color": "#047857",
+      "position": { "x": -600, "y": -350 }, "size": { "w": 850, "h": 1050 },
+      "parentId": "root"
+    },
+    "layer-kp-structure": {
+      "id": "layer-kp-structure", "name": "3. Структура КП",
+      "content": "Девять обязательных секций коммерческого предложения.",
+      "color": "#b45309",
+      "position": { "x": 450, "y": -700 }, "size": { "w": 2850, "h": 1900 },
+      "parentId": "root"
+    },
+    "layer-quality": {
+      "id": "layer-quality", "name": "4. Контроль качества и выход",
+      "content": "Применение правил качества, проверка стиля и финализация готового КП.",
+      "color": "#991b1b",
+      "position": { "x": 3500, "y": -350 }, "size": { "w": 950, "h": 1050 },
+      "parentId": "root"
+    }
+  },
+  "nodes": {
+    "node-briefing": { "id": "node-briefing", "name": "Брифинг клиента", "group": "1. Вход", "content": "Клиент предоставляет входные данные:\n• Название компании / проекта\n• Описание задачи и целей\n• Бюджетные рамки\n• Желаемые сроки\n• Ожидания от результата", "color": "#1e293b", "position": { "x": -2460, "y": -270 }, "size": { "w": 480, "h": 240 }, "parentId": "layer-input" },
+    "node-brief-full": { "id": "node-brief-full", "name": "✅ Данные достаточны", "group": "1. Вход", "content": "Бриф содержит всю необходимую информацию.\nМожно сразу передать данные в AI-ядро.", "color": "#2563eb", "position": { "x": -1860, "y": -270 }, "size": { "w": 460, "h": 240 }, "parentId": "layer-input" },
+    "node-brief-partial": { "id": "node-brief-partial", "name": "⚠️ Данные неполные", "group": "1. Вход", "content": "В брифе обнаружены пробелы.\nСистема формирует уточняющие вопросы и помечает допущения.", "color": "#d97706", "position": { "x": -1860, "y": 30 }, "size": { "w": 460, "h": 240 }, "parentId": "layer-input" },
+    "node-questions": { "id": "node-questions", "name": "❓ Уточняющие вопросы", "group": "1. Вход", "content": "Список вопросов клиенту:\n• Недостающие сроки\n• Неясный бюджет\n• Размытые требования\n• Противоречия в брифе", "color": "#1e40af", "position": { "x": -1860, "y": 340 }, "size": { "w": 460, "h": 260 }, "parentId": "layer-input" },
+    "node-system-prompt": { "id": "node-system-prompt", "name": "🧠 Системный промт", "group": "2. AI-Ядро", "content": "Ядро генератора КП.\nИнструкция: «Генерируй структурированное, профессиональное и правдивое КП на русском языке.»\nСтиль: деловой, ясный, краткий.", "color": "#15803d", "position": { "x": -560, "y": -270 }, "size": { "w": 720, "h": 260 }, "parentId": "layer-ai-core" },
+    "node-context-analysis": { "id": "node-context-analysis", "name": "🔍 Анализ контекста", "group": "2. AI-Ядро", "content": "Определяет:\n• Ключевые цели проекта\n• Ограничения\n• Ожидаемый результат\n• Неявные потребности\n• Оптимальный вариант решения", "color": "#15803d", "position": { "x": -560, "y": 90 }, "size": { "w": 720, "h": 260 }, "parentId": "layer-ai-core" },
+    "node-section-generator": { "id": "node-section-generator", "name": "⚙️ Генератор секций КП", "group": "2. AI-Ядро", "content": "Создаёт все 9 секций КП:\n→ Шапка (1-3)\n→ Решение (4-6)\n→ Коммерция (7-9)", "color": "#047857", "position": { "x": -560, "y": 450 }, "size": { "w": 720, "h": 260 }, "parentId": "layer-ai-core" },
+    "node-s1": { "id": "node-s1", "name": "1. Заголовок", "group": "3. Секции КП", "content": "Название предложения\nКомпания / проект\nДата подготовки", "color": "#92400e", "position": { "x": 490, "y": -620 }, "size": { "w": 800, "h": 220 }, "parentId": "layer-kp-structure" },
+    "node-s2": { "id": "node-s2", "name": "2. Резюме задачи", "group": "3. Секции КП", "content": "2–4 предложения:\n• Что нужно клиенту\n• Какую задачу решает КП", "color": "#92400e", "position": { "x": 1410, "y": -620 }, "size": { "w": 800, "h": 220 }, "parentId": "layer-kp-structure" },
+    "node-s3": { "id": "node-s3", "name": "3. Понимание запроса", "group": "3. Секции КП", "content": "Формулировка потребности\nКлючевые цели\nОграничения\nОжидаемый результат", "color": "#92400e", "position": { "x": 2330, "y": -620 }, "size": { "w": 800, "h": 220 }, "parentId": "layer-kp-structure" },
+    "node-s4": { "id": "node-s4", "name": "4. Предлагаемое решение", "group": "3. Секции КП", "content": "Описание по пунктам\nРазделение на этапы/модули\nКонкретика без общих слов", "color": "#92400e", "position": { "x": 490, "y": -300 }, "size": { "w": 800, "h": 220 }, "parentId": "layer-kp-structure" },
+    "node-s5": { "id": "node-s5", "name": "5. Состав работ", "group": "3. Секции КП", "content": "Список работ:\n• Что делается\n• Какой результат клиент получает", "color": "#92400e", "position": { "x": 1410, "y": -300 }, "size": { "w": 800, "h": 220 }, "parentId": "layer-kp-structure" },
+    "node-s6": { "id": "node-s6", "name": "6. Сроки", "group": "3. Секции КП", "content": "Ориентировочные сроки\nЗависимость от вводных\nРазбивка по этапам", "color": "#92400e", "position": { "x": 2330, "y": -300 }, "size": { "w": 800, "h": 220 }, "parentId": "layer-kp-structure" },
+    "node-s7": { "id": "node-s7", "name": "7. Стоимость", "group": "3. Секции КП", "content": "Цена из брифа / место для заполнения\nРазбивка по этапам", "color": "#92400e", "position": { "x": 490, "y": 20 }, "size": { "w": 800, "h": 220 }, "parentId": "layer-kp-structure" },
+    "node-s8": { "id": "node-s8", "name": "8. Что от клиента", "group": "3. Секции КП", "content": "Материалы и данные\nДоступы\nСогласования\nКонтактные лица", "color": "#92400e", "position": { "x": 1410, "y": 20 }, "size": { "w": 800, "h": 220 }, "parentId": "layer-kp-structure" },
+    "node-s9": { "id": "node-s9", "name": "9. Итог и следующий шаг", "group": "3. Секции КП", "content": "Резюме ценности\nСледующий шаг:\n— Согласование\n— Оплата\n— Встреча", "color": "#92400e", "position": { "x": 2330, "y": 20 }, "size": { "w": 800, "h": 220 }, "parentId": "layer-kp-structure" },
+    "node-assembly": { "id": "node-assembly", "name": "📄 Сборка документа", "group": "3. Секции КП", "content": "Объединение 9 секций в единый документ.\nПроверка связности, повторов и тона.", "color": "#78350f", "position": { "x": 1410, "y": 420 }, "size": { "w": 800, "h": 260 }, "parentId": "layer-kp-structure" },
+    "node-quality-rules": { "id": "node-quality-rules", "name": "✅ Правила качества", "group": "4. Контроль", "content": "Чек-лист:\n• Нет выдуманных фактов\n• Противоречия указаны\n• Каждый пункт связан с брифом\n• Готово к отправке", "color": "#991b1b", "position": { "x": 3540, "y": -270 }, "size": { "w": 820, "h": 260 }, "parentId": "layer-quality" },
+    "node-style-check": { "id": "node-style-check", "name": "🎨 Стиль документа", "group": "4. Контроль", "content": "Деловой тон без воды\nПрофессиональная терминология\nКороткие абзацы, списки\nБез канцелярита", "color": "#991b1b", "position": { "x": 3540, "y": 90 }, "size": { "w": 820, "h": 260 }, "parentId": "layer-quality" },
+    "node-final-doc": { "id": "node-final-doc", "name": "📨 Готовое КП", "group": "4. Контроль", "content": "Финальный документ.\nГотов к отправке клиенту\nпосле минимальной правки менеджером.", "color": "#7f1d1d", "position": { "x": 3540, "y": 450 }, "size": { "w": 820, "h": 240 }, "parentId": "layer-quality" }
+  },
+  "ports": {
+    "port-briefing-out": { "id": "port-briefing-out", "nodeId": "node-briefing", "type": "output", "edge": "right", "position": 0.35, "color": "#3b82f6" },
+    "port-briefing-out-2": { "id": "port-briefing-out-2", "nodeId": "node-briefing", "type": "output", "edge": "right", "position": 0.65, "color": "#f59e0b" },
+    "port-brief-full-in": { "id": "port-brief-full-in", "nodeId": "node-brief-full", "type": "input", "edge": "left", "position": 0.5, "color": "#3b82f6" },
+    "port-brief-full-out": { "id": "port-brief-full-out", "nodeId": "node-brief-full", "type": "output", "edge": "right", "position": 0.5, "color": "#10b981" },
+    "port-brief-partial-in": { "id": "port-brief-partial-in", "nodeId": "node-brief-partial", "type": "input", "edge": "left", "position": 0.5, "color": "#f59e0b" },
+    "port-brief-partial-out": { "id": "port-brief-partial-out", "nodeId": "node-brief-partial", "type": "output", "edge": "bottom", "position": 0.5, "color": "#f59e0b" },
+    "port-brief-partial-out-2": { "id": "port-brief-partial-out-2", "nodeId": "node-brief-partial", "type": "output", "edge": "right", "position": 0.5, "color": "#10b981" },
+    "port-questions-in": { "id": "port-questions-in", "nodeId": "node-questions", "type": "input", "edge": "top", "position": 0.5, "color": "#f59e0b" },
+    "port-system-prompt-in": { "id": "port-system-prompt-in", "nodeId": "node-system-prompt", "type": "input", "edge": "left", "position": 0.5, "color": "#10b981" },
+    "port-system-prompt-out": { "id": "port-system-prompt-out", "nodeId": "node-system-prompt", "type": "output", "edge": "bottom", "position": 0.5, "color": "#10b981" },
+    "port-context-in": { "id": "port-context-in", "nodeId": "node-context-analysis", "type": "input", "edge": "top", "position": 0.5, "color": "#10b981" },
+    "port-context-in-2": { "id": "port-context-in-2", "nodeId": "node-context-analysis", "type": "input", "edge": "left", "position": 0.5, "color": "#10b981" },
+    "port-context-out": { "id": "port-context-out", "nodeId": "node-context-analysis", "type": "output", "edge": "bottom", "position": 0.5, "color": "#10b981" },
+    "port-generator-in": { "id": "port-generator-in", "nodeId": "node-section-generator", "type": "input", "edge": "top", "position": 0.5, "color": "#10b981" },
+    "port-generator-out-1": { "id": "port-generator-out-1", "nodeId": "node-section-generator", "type": "output", "edge": "right", "position": 0.2, "color": "#f59e0b" },
+    "port-generator-out-2": { "id": "port-generator-out-2", "nodeId": "node-section-generator", "type": "output", "edge": "right", "position": 0.5, "color": "#f59e0b" },
+    "port-generator-out-3": { "id": "port-generator-out-3", "nodeId": "node-section-generator", "type": "output", "edge": "right", "position": 0.8, "color": "#f59e0b" },
+    "port-s1-in": { "id": "port-s1-in", "nodeId": "node-s1", "type": "input", "edge": "left", "position": 0.5, "color": "#f59e0b" },
+    "port-s1-out": { "id": "port-s1-out", "nodeId": "node-s1", "type": "output", "edge": "right", "position": 0.5, "color": "#f59e0b" },
+    "port-s2-in": { "id": "port-s2-in", "nodeId": "node-s2", "type": "input", "edge": "left", "position": 0.5, "color": "#f59e0b" },
+    "port-s2-out": { "id": "port-s2-out", "nodeId": "node-s2", "type": "output", "edge": "right", "position": 0.5, "color": "#f59e0b" },
+    "port-s3-in": { "id": "port-s3-in", "nodeId": "node-s3", "type": "input", "edge": "left", "position": 0.5, "color": "#f59e0b" },
+    "port-s3-out": { "id": "port-s3-out", "nodeId": "node-s3", "type": "output", "edge": "right", "position": 0.5, "color": "#f59e0b" },
+    "port-s4-in": { "id": "port-s4-in", "nodeId": "node-s4", "type": "input", "edge": "left", "position": 0.5, "color": "#f59e0b" },
+    "port-s4-out": { "id": "port-s4-out", "nodeId": "node-s4", "type": "output", "edge": "right", "position": 0.5, "color": "#f59e0b" },
+    "port-s5-in": { "id": "port-s5-in", "nodeId": "node-s5", "type": "input", "edge": "left", "position": 0.5, "color": "#f59e0b" },
+    "port-s5-out": { "id": "port-s5-out", "nodeId": "node-s5", "type": "output", "edge": "right", "position": 0.5, "color": "#f59e0b" },
+    "port-s6-in": { "id": "port-s6-in", "nodeId": "node-s6", "type": "input", "edge": "left", "position": 0.5, "color": "#f59e0b" },
+    "port-s6-out": { "id": "port-s6-out", "nodeId": "node-s6", "type": "output", "edge": "right", "position": 0.5, "color": "#f59e0b" },
+    "port-s7-in": { "id": "port-s7-in", "nodeId": "node-s7", "type": "input", "edge": "left", "position": 0.5, "color": "#f59e0b" },
+    "port-s7-out": { "id": "port-s7-out", "nodeId": "node-s7", "type": "output", "edge": "right", "position": 0.5, "color": "#f59e0b" },
+    "port-s8-in": { "id": "port-s8-in", "nodeId": "node-s8", "type": "input", "edge": "left", "position": 0.5, "color": "#f59e0b" },
+    "port-s8-out": { "id": "port-s8-out", "nodeId": "node-s8", "type": "output", "edge": "right", "position": 0.5, "color": "#f59e0b" },
+    "port-s9-in": { "id": "port-s9-in", "nodeId": "node-s9", "type": "input", "edge": "left", "position": 0.5, "color": "#f59e0b" },
+    "port-s9-out": { "id": "port-s9-out", "nodeId": "node-s9", "type": "output", "edge": "right", "position": 0.5, "color": "#f59e0b" },
+    "port-assembly-in-1": { "id": "port-assembly-in-1", "nodeId": "node-assembly", "type": "input", "edge": "top", "position": 0.25, "color": "#f59e0b" },
+    "port-assembly-in-2": { "id": "port-assembly-in-2", "nodeId": "node-assembly", "type": "input", "edge": "top", "position": 0.5, "color": "#f59e0b" },
+    "port-assembly-in-3": { "id": "port-assembly-in-3", "nodeId": "node-assembly", "type": "input", "edge": "top", "position": 0.75, "color": "#f59e0b" },
+    "port-assembly-out": { "id": "port-assembly-out", "nodeId": "node-assembly", "type": "output", "edge": "right", "position": 0.5, "color": "#ef4444" },
+    "port-quality-in": { "id": "port-quality-in", "nodeId": "node-quality-rules", "type": "input", "edge": "left", "position": 0.5, "color": "#ef4444" },
+    "port-quality-out": { "id": "port-quality-out", "nodeId": "node-quality-rules", "type": "output", "edge": "bottom", "position": 0.5, "color": "#ef4444" },
+    "port-style-in": { "id": "port-style-in", "nodeId": "node-style-check", "type": "input", "edge": "top", "position": 0.5, "color": "#ef4444" },
+    "port-style-out": { "id": "port-style-out", "nodeId": "node-style-check", "type": "output", "edge": "bottom", "position": 0.5, "color": "#ef4444" },
+    "port-final-in": { "id": "port-final-in", "nodeId": "node-final-doc", "type": "input", "edge": "top", "position": 0.5, "color": "#ef4444" }
+  },
+  "links": [
+    { "id": "link-1", "sourcePortId": "port-briefing-out", "targetPortId": "port-brief-full-in", "name": "Бриф полный", "color": "#3b82f6", "linkStyle": "bezier" },
+    { "id": "link-2", "sourcePortId": "port-briefing-out-2", "targetPortId": "port-brief-partial-in", "name": "Бриф неполный", "color": "#f59e0b", "linkStyle": "bezier" },
+    { "id": "link-3", "sourcePortId": "port-brief-partial-out", "targetPortId": "port-questions-in", "name": "Генерация вопросов", "color": "#f59e0b", "linkStyle": "bezier" },
+    { "id": "link-4", "sourcePortId": "port-brief-full-out", "targetPortId": "port-system-prompt-in", "name": "Передача в AI", "color": "#10b981", "linkStyle": "bezier" },
+    { "id": "link-5", "sourcePortId": "port-brief-partial-out-2", "targetPortId": "port-context-in-2", "name": "С допущениями", "color": "#10b981", "linkStyle": "bezier" },
+    { "id": "link-6", "sourcePortId": "port-system-prompt-out", "targetPortId": "port-context-in", "name": "Инструкция → Анализ", "color": "#10b981", "linkStyle": "bezier" },
+    { "id": "link-7", "sourcePortId": "port-context-out", "targetPortId": "port-generator-in", "name": "Контекст → Генератор", "color": "#10b981", "linkStyle": "bezier" },
+    { "id": "link-8", "sourcePortId": "port-generator-out-1", "targetPortId": "port-s1-in", "name": "Поток: Шапка", "color": "#f59e0b", "linkStyle": "bezier" },
+    { "id": "link-9", "sourcePortId": "port-generator-out-2", "targetPortId": "port-s4-in", "name": "Поток: Решение", "color": "#f59e0b", "linkStyle": "bezier" },
+    { "id": "link-10", "sourcePortId": "port-generator-out-3", "targetPortId": "port-s7-in", "name": "Поток: Коммерция", "color": "#f59e0b", "linkStyle": "bezier" },
+    { "id": "link-11", "sourcePortId": "port-s1-out", "targetPortId": "port-s2-in", "name": "1 → 2", "color": "#d97706", "linkStyle": "bezier" },
+    { "id": "link-12", "sourcePortId": "port-s2-out", "targetPortId": "port-s3-in", "name": "2 → 3", "color": "#d97706", "linkStyle": "bezier" },
+    { "id": "link-13", "sourcePortId": "port-s4-out", "targetPortId": "port-s5-in", "name": "4 → 5", "color": "#d97706", "linkStyle": "bezier" },
+    { "id": "link-14", "sourcePortId": "port-s5-out", "targetPortId": "port-s6-in", "name": "5 → 6", "color": "#d97706", "linkStyle": "bezier" },
+    { "id": "link-15", "sourcePortId": "port-s7-out", "targetPortId": "port-s8-in", "name": "7 → 8", "color": "#d97706", "linkStyle": "bezier" },
+    { "id": "link-16", "sourcePortId": "port-s8-out", "targetPortId": "port-s9-in", "name": "8 → 9", "color": "#d97706", "linkStyle": "bezier" },
+    { "id": "link-17", "sourcePortId": "port-s3-out", "targetPortId": "port-assembly-in-1", "name": "Шапка → Сборка", "color": "#b45309", "linkStyle": "bezier" },
+    { "id": "link-18", "sourcePortId": "port-s6-out", "targetPortId": "port-assembly-in-2", "name": "Решение → Сборка", "color": "#b45309", "linkStyle": "bezier" },
+    { "id": "link-19", "sourcePortId": "port-s9-out", "targetPortId": "port-assembly-in-3", "name": "Коммерция → Сборка", "color": "#b45309", "linkStyle": "bezier" },
+    { "id": "link-20", "sourcePortId": "port-assembly-out", "targetPortId": "port-quality-in", "name": "На проверку", "color": "#ef4444", "linkStyle": "bezier" },
+    { "id": "link-21", "sourcePortId": "port-quality-out", "targetPortId": "port-style-in", "name": "Качество → Стиль", "color": "#ef4444", "linkStyle": "bezier" },
+    { "id": "link-22", "sourcePortId": "port-style-out", "targetPortId": "port-final-in", "name": "Стиль → Финал", "color": "#ef4444", "linkStyle": "bezier" }
+  ]
+};
+
+// ─── SVG RENDERER ─────────────────────────────────────────────
+
+function getPortPos(port) {
+  const node = DATA.nodes[port.nodeId];
+  if (!node) return { x: 0, y: 0 };
+  const { x, y } = node.position;
+  const { w, h } = node.size;
+  switch (port.edge) {
+    case 'left':   return { x: x, y: y + h * port.position };
+    case 'right':  return { x: x + w, y: y + h * port.position };
+    case 'top':    return { x: x + w * port.position, y: y };
+    case 'bottom': return { x: x + w * port.position, y: y + h };
+    default:       return { x: x, y: y };
+  }
+}
+
+function getControlOffset(edge, dist) {
+  const d = Math.min(Math.max(dist * 0.4, 60), 300);
+  switch (edge) {
+    case 'left':   return { dx: -d, dy: 0 };
+    case 'right':  return { dx: d, dy: 0 };
+    case 'top':    return { dx: 0, dy: -d };
+    case 'bottom': return { dx: 0, dy: d };
+    default:       return { dx: d, dy: 0 };
+  }
+}
+
+function renderSVG(containerId, viewBox, opts = {}) {
+  const { showLabels = false, highlightLayer = null } = opts;
+  const container = document.getElementById(containerId);
+
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" class="${opts.className || 'overview-svg'}" preserveAspectRatio="xMidYMid meet">`;
+  svg += `<defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto" fill="#64748b">
+      <polygon points="0 0, 8 3, 0 6"/>
+    </marker>
+  </defs>`;
+
+  // Layers
+  for (const layer of Object.values(DATA.layers)) {
+    const dim = (highlightLayer && layer.id !== highlightLayer) ? 0.15 : 1;
+    const { x, y } = layer.position;
+    const { w, h } = layer.size;
+    svg += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="16" fill="${layer.color}" fill-opacity="${0.08 * dim}" stroke="${layer.color}" stroke-opacity="${0.4 * dim}" stroke-width="2" stroke-dasharray="8 4"/>`;
+    svg += `<text x="${x + 16}" y="${y + 28}" font-family="Inter, sans-serif" font-size="18" font-weight="700" fill="${layer.color}" fill-opacity="${0.7 * dim}">${escSvg(layer.name)}</text>`;
+  }
+
+  // Links
+  for (const link of DATA.links) {
+    const sp = DATA.ports[link.sourcePortId];
+    const tp = DATA.ports[link.targetPortId];
+    if (!sp || !tp) continue;
+    const src = getPortPos(sp);
+    const tgt = getPortPos(tp);
+    const dist = Math.sqrt((tgt.x - src.x) ** 2 + (tgt.y - src.y) ** 2);
+    const co1 = getControlOffset(sp.edge, dist);
+    const co2 = getControlOffset(tp.edge, dist);
+
+    const dim = highlightLayer ? 0.4 : 1;
+    svg += `<path d="M${src.x},${src.y} C${src.x + co1.dx},${src.y + co1.dy} ${tgt.x + co2.dx},${tgt.y + co2.dy} ${tgt.x},${tgt.y}" fill="none" stroke="${link.color}" stroke-width="2.5" stroke-opacity="${0.7 * dim}" marker-end="url(#arrowhead)"/>`;
+
+    if (showLabels) {
+      const mx = (src.x + tgt.x) / 2;
+      const my = (src.y + tgt.y) / 2 - 8;
+      svg += `<text x="${mx}" y="${my}" font-family="Inter, sans-serif" font-size="10" fill="${link.color}" fill-opacity="0.6" text-anchor="middle">${escSvg(link.name)}</text>`;
+    }
+  }
+
+  // Nodes
+  for (const node of Object.values(DATA.nodes)) {
+    const dim = (highlightLayer && node.parentId !== highlightLayer) ? 0.2 : 1;
+    const { x, y } = node.position;
+    const { w, h } = node.size;
+    svg += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${node.color}" fill-opacity="${0.9 * dim}" stroke="${lighten(node.color, 30)}" stroke-opacity="${0.5 * dim}" stroke-width="1.5" filter="url(#shadow)"/>`;
+    // Title bar
+    svg += `<rect x="${x}" y="${y}" width="${w}" height="36" rx="10" fill="rgba(255,255,255,0.08)" fill-opacity="${dim}"/>`;
+    svg += `<text x="${x + 14}" y="${y + 24}" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="white" fill-opacity="${0.95 * dim}">${escSvg(truncate(node.name, 40))}</text>`;
+
+    // Content lines
+    if (dim > 0.5) {
+      const lines = node.content.split('\n').slice(0, 5);
+      lines.forEach((line, i) => {
+        svg += `<text x="${x + 14}" y="${y + 54 + i * 16}" font-family="Inter, sans-serif" font-size="10" fill="white" fill-opacity="0.5">${escSvg(truncate(line, 55))}</text>`;
+      });
+    }
+  }
+
+  // Ports
+  for (const port of Object.values(DATA.ports)) {
+    const pos = getPortPos(port);
+    const dim = highlightLayer ? 0.5 : 1;
+    svg += `<circle cx="${pos.x}" cy="${pos.y}" r="5" fill="${port.color}" fill-opacity="${0.8 * dim}" stroke="white" stroke-width="1.5" stroke-opacity="${0.3 * dim}"/>`;
+  }
+
+  svg += `</svg>`;
+  container.innerHTML = svg;
+}
+
+function escSvg(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
+function lighten(hex, pct) {
+  const num = parseInt(hex.replace('#', ''), 16);
+  const r = Math.min(255, (num >> 16) + pct);
+  const g = Math.min(255, ((num >> 8) & 0xff) + pct);
+  const b = Math.min(255, (num & 0xff) + pct);
+  return `rgb(${r},${g},${b})`;
+}
+
+// ─── BUILD PAGES ─────────────────────────────────────────────
+
+function buildPages() {
+  const root = document.getElementById('root');
+
+  const layerOrder = ['layer-input', 'layer-ai-core', 'layer-kp-structure', 'layer-quality'];
+  const layerEmojis = ['📥', '🧠', '📋', '✅'];
+  const nodeCount = Object.keys(DATA.nodes).length;
+  const linkCount = DATA.links.length;
+  const portCount = Object.keys(DATA.ports).length;
+  const layerCount = Object.keys(DATA.layers).length;
+
+  // ── Page 1: Title & Overview ──
+  let html = `
+  <div class="page" style="--accent: #3b82f6">
+    <div class="page-header">
+      <div class="badge">КП</div>
+      <div>
+        <h1>Архитектура генератора коммерческих предложений</h1>
+        <p>B2B • Визуальная карта системы • ${new Date().toLocaleDateString('ru-RU')}</p>
+      </div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-card" style="--accent:#3b82f6"><div class="number">${layerCount}</div><div class="label">Слоя</div></div>
+      <div class="stat-card" style="--accent:#10b981"><div class="number">${nodeCount}</div><div class="label">Узлов</div></div>
+      <div class="stat-card" style="--accent:#f59e0b"><div class="number">${linkCount}</div><div class="label">Связей</div></div>
+      <div class="stat-card" style="--accent:#ef4444"><div class="number">${portCount}</div><div class="label">Портов</div></div>
+    </div>
+    <div id="svg-overview"></div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-swatch" style="background:#1d4ed8"></div>Входные данные</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#047857"></div>AI-Ядро</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#b45309"></div>Структура КП</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#991b1b"></div>Контроль качества</div>
+    </div>
+    <div class="page-footer-left">Генератор КП — Architector</div>
+    <div class="page-number">1 / ${layerCount + 2}</div>
+  </div>`;
+
+  // ── Pages 2-5: Layer Details ──
+  layerOrder.forEach((layerId, idx) => {
+    const layer = DATA.layers[layerId];
+    const layerNodes = Object.values(DATA.nodes).filter(n => n.parentId === layerId);
+    const { x, y } = layer.position;
+    const { w, h } = layer.size;
+    const pad = 60;
+    const vb = `${x - pad} ${y - pad} ${w + pad * 2} ${h + pad * 2}`;
+
+    html += `
+    <div class="page" style="--accent: ${layer.color}">
+      <div class="page-header">
+        <div class="badge">${layerEmojis[idx]}</div>
+        <div>
+          <h1>${layer.name}</h1>
+          <p>${layer.content} • ${layerNodes.length} узлов</p>
+        </div>
+      </div>
+      <div id="svg-layer-${idx}"></div>
+      <div class="detail-cards">
+        ${layerNodes.map(n => `
+          <div class="detail-card" style="--card-color: ${layer.color}">
+            <div class="group-badge">${n.group}</div>
+            <h3>${n.name}</h3>
+            <p>${n.content}</p>
+          </div>
+        `).join('')}
+      </div>
+      <div class="page-footer-left">Генератор КП — ${layer.name}</div>
+      <div class="page-number">${idx + 2} / ${layerCount + 2}</div>
+    </div>`;
+  });
+
+  // ── Page 6: Links Table ──
+  html += `
+  <div class="page" style="--accent: #8b5cf6">
+    <div class="page-header">
+      <div class="badge">🔗</div>
+      <div>
+        <h1>Карта связей</h1>
+        <p>Все ${linkCount} соединений между узлами системы</p>
+      </div>
+    </div>
+    <table class="links-table">
+      <thead>
+        <tr><th>#</th><th>Связь</th><th>Откуда</th><th>Куда</th><th>Тип</th></tr>
+      </thead>
+      <tbody>
+        ${DATA.links.map((link, i) => {
+          const sp = DATA.ports[link.sourcePortId];
+          const tp = DATA.ports[link.targetPortId];
+          const srcNode = sp ? DATA.nodes[sp.nodeId] : null;
+          const tgtNode = tp ? DATA.nodes[tp.nodeId] : null;
+          return `<tr>
+            <td>${i + 1}</td>
+            <td><span class="color-dot" style="background:${link.color}"></span>${link.name}</td>
+            <td>${srcNode ? srcNode.name : '?'}</td>
+            <td>${tgtNode ? tgtNode.name : '?'}</td>
+            <td>${link.linkStyle}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    <div class="page-footer-left">Генератор КП — Связи</div>
+    <div class="page-number">${layerCount + 2} / ${layerCount + 2}</div>
+  </div>`;
+
+  root.innerHTML = html;
+
+  // Render SVGs
+  renderSVG('svg-overview', '-2600 -800 7200 2100', { className: 'overview-svg' });
+  layerOrder.forEach((layerId, idx) => {
+    const layer = DATA.layers[layerId];
+    const { x, y } = layer.position;
+    const { w, h } = layer.size;
+    const pad = 80;
+    renderSVG(`svg-layer-${idx}`, `${x - pad} ${y - pad} ${w + pad * 2} ${h + pad * 2}`, {
+      className: 'detail-svg',
+      showLabels: true,
+      highlightLayer: layerId
+    });
+  });
+}
+
+document.addEventListener('DOMContentLoaded', buildPages);
+</script>
+
+<div id="root"></div>
+
+</body>
+</html>

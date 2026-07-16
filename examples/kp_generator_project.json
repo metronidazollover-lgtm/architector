@@ -1,0 +1,894 @@
+{
+  "layers": {
+    "layer-input": {
+      "id": "layer-input",
+      "name": "1. Входные данные",
+      "content": "Приём и валидация брифинга от клиента. Проверка полноты данных и формирование уточняющих вопросов при необходимости.",
+      "color": "#1d4ed8",
+      "position": { "x": -2500, "y": -350 },
+      "size": { "w": 1700, "h": 1050 },
+      "locked": false,
+      "parentId": "root",
+      "snapToGrid": true
+    },
+    "layer-ai-core": {
+      "id": "layer-ai-core",
+      "name": "2. AI-Ядро обработки",
+      "content": "Системный промт, анализ контекста клиента и последовательная генерация всех секций коммерческого предложения.",
+      "color": "#047857",
+      "position": { "x": -600, "y": -350 },
+      "size": { "w": 850, "h": 1050 },
+      "locked": false,
+      "parentId": "root",
+      "snapToGrid": true
+    },
+    "layer-kp-structure": {
+      "id": "layer-kp-structure",
+      "name": "3. Структура КП",
+      "content": "Девять обязательных секций коммерческого предложения. Каждая секция генерируется на основе данных брифинга и результатов анализа контекста.",
+      "color": "#b45309",
+      "position": { "x": 450, "y": -700 },
+      "size": { "w": 2850, "h": 1900 },
+      "locked": false,
+      "parentId": "root",
+      "snapToGrid": true
+    },
+    "layer-quality": {
+      "id": "layer-quality",
+      "name": "4. Контроль качества и выход",
+      "content": "Применение правил качества, проверка стиля и финализация готового КП. Документ должен быть готов к отправке клиенту после минимальной правки.",
+      "color": "#991b1b",
+      "position": { "x": 3500, "y": -350 },
+      "size": { "w": 950, "h": 1050 },
+      "locked": false,
+      "parentId": "root",
+      "snapToGrid": true
+    }
+  },
+  "nodes": {
+    "node-briefing": {
+      "id": "node-briefing",
+      "name": "Брифинг клиента",
+      "group": "1. Вход",
+      "content": "Клиент предоставляет входные данные:\n• Название компании / проекта\n• Описание задачи и целей\n• Бюджетные рамки (если есть)\n• Желаемые сроки\n• Ожидания от результата\n• Контактные данные\n\nЭто единственный источник фактов для генерации КП.",
+      "color": "#1e293b",
+      "position": { "x": -2460, "y": -270 },
+      "size": { "w": 480, "h": 240 },
+      "parentId": "layer-input",
+      "snapToGrid": true
+    },
+    "node-brief-full": {
+      "id": "node-brief-full",
+      "name": "✅ Данные достаточны",
+      "group": "1. Вход",
+      "content": "Бриф содержит всю необходимую информацию для генерации КП.\n\nМожно сразу передать данные в AI-ядро без дополнительных уточнений. Все 9 секций будут заполнены на основе фактов.",
+      "color": "#2563eb",
+      "position": { "x": -1860, "y": -270 },
+      "size": { "w": 460, "h": 240 },
+      "parentId": "layer-input",
+      "snapToGrid": true
+    },
+    "node-brief-partial": {
+      "id": "node-brief-partial",
+      "name": "⚠️ Данные неполные",
+      "group": "1. Вход",
+      "content": "В брифе обнаружены пробелы.\n\nСистема формирует уточняющие вопросы и явно помечает допущения, которые будут указаны в тексте КП.",
+      "color": "#d97706",
+      "position": { "x": -1860, "y": 30 },
+      "size": { "w": 460, "h": 240 },
+      "parentId": "layer-input",
+      "snapToGrid": true
+    },
+    "node-questions": {
+      "id": "node-questions",
+      "name": "❓ Уточняющие вопросы",
+      "group": "1. Вход",
+      "content": "Автоматически сгенерированный список вопросов клиенту:\n• Недостающие сроки\n• Неясный бюджет\n• Размытые требования\n• Противоречия в брифе\n• Отсутствие критериев успеха\n\nВозвращаются клиенту до генерации КП.",
+      "color": "#1e40af",
+      "position": { "x": -1860, "y": 340 },
+      "size": { "w": 460, "h": 260 },
+      "parentId": "layer-input",
+      "snapToGrid": true
+    },
+    "node-system-prompt": {
+      "id": "node-system-prompt",
+      "name": "🧠 Системный промт",
+      "group": "2. AI-Ядро",
+      "content": "Ядро генератора КП.\n\nИнструкция: «Ты — генератор коммерческих предложений. На основе входного брифинга создавай структурированное, профессиональное и правдивое КП на русском языке. Не выдумывай отсутствующие данные. Если информации не хватает, явно отмечай это.»\n\nСтиль: деловой, ясный, краткий, без воды.",
+      "color": "#15803d",
+      "position": { "x": -560, "y": -270 },
+      "size": { "w": 720, "h": 260 },
+      "parentId": "layer-ai-core",
+      "snapToGrid": true
+    },
+    "node-context-analysis": {
+      "id": "node-context-analysis",
+      "name": "🔍 Анализ контекста",
+      "group": "2. AI-Ядро",
+      "content": "Модуль понимания потребностей клиента.\n\nОпределяет:\n• Ключевые цели проекта\n• Ограничения (бюджет, сроки, технологии)\n• Ожидаемый результат\n• Неявные потребности\n• Оптимальный вариант решения (если несколько)",
+      "color": "#15803d",
+      "position": { "x": -560, "y": 90 },
+      "size": { "w": 720, "h": 260 },
+      "parentId": "layer-ai-core",
+      "snapToGrid": true
+    },
+    "node-section-generator": {
+      "id": "node-section-generator",
+      "name": "⚙️ Генератор секций КП",
+      "group": "2. AI-Ядро",
+      "content": "Создаёт все 9 секций КП параллельно.\n\nКаждая секция привязана к данным из брифа и результатам анализа контекста. Если данных нет — явно помечает допущения.\n\nРаздаёт задачи по трём потокам:\n→ Шапка (заголовок, резюме, понимание)\n→ Решение (описание, работы, сроки)\n→ Коммерция (стоимость, от клиента, итог)",
+      "color": "#047857",
+      "position": { "x": -560, "y": 450 },
+      "size": { "w": 720, "h": 260 },
+      "parentId": "layer-ai-core",
+      "snapToGrid": true
+    },
+    "node-s1": {
+      "id": "node-s1",
+      "name": "1. Заголовок",
+      "group": "3. Секции КП",
+      "content": "• Название коммерческого предложения\n• Для какой компании / проекта подготовлено\n• Дата подготовки документа\n\nФормат: лаконичный, профессиональный, без лишних слов.",
+      "color": "#92400e",
+      "position": { "x": 490, "y": -620 },
+      "size": { "w": 800, "h": 220 },
+      "parentId": "layer-kp-structure",
+      "snapToGrid": true
+    },
+    "node-s2": {
+      "id": "node-s2",
+      "name": "2. Резюме задачи",
+      "group": "3. Секции КП",
+      "content": "В 2–4 предложениях описать:\n• Что нужно клиенту\n• Какую задачу решает предложение\n\nКраткий обзор сути проекта, чтобы читатель сразу понял контекст.",
+      "color": "#92400e",
+      "position": { "x": 1410, "y": -620 },
+      "size": { "w": 800, "h": 220 },
+      "parentId": "layer-kp-structure",
+      "snapToGrid": true
+    },
+    "node-s3": {
+      "id": "node-s3",
+      "name": "3. Понимание запроса",
+      "group": "3. Секции КП",
+      "content": "• Формулировка потребности клиента своими словами\n• Ключевые цели проекта\n• Ограничения и рамки\n• Ожидаемый результат\n\nДемонстрирует, что исполнитель глубоко понял задачу.",
+      "color": "#92400e",
+      "position": { "x": 2330, "y": -620 },
+      "size": { "w": 800, "h": 220 },
+      "parentId": "layer-kp-structure",
+      "snapToGrid": true
+    },
+    "node-s4": {
+      "id": "node-s4",
+      "name": "4. Предлагаемое решение",
+      "group": "3. Секции КП",
+      "content": "• Описание решения по пунктам\n• Разделение на этапы, модули или состав работ\n• Конкретика без общих слов\n\nЕсли есть несколько вариантов — выбрать оптимальный и объяснить почему.",
+      "color": "#92400e",
+      "position": { "x": 490, "y": -300 },
+      "size": { "w": 800, "h": 220 },
+      "parentId": "layer-kp-structure",
+      "snapToGrid": true
+    },
+    "node-s5": {
+      "id": "node-s5",
+      "name": "5. Состав работ / услуги",
+      "group": "3. Секции КП",
+      "content": "Список работ, входящих в предложение.\n\nДля каждого пункта указать:\n• Что именно делается\n• Какой результат получает клиент\n\nФормат: нумерованный список с кратким описанием каждой позиции.",
+      "color": "#92400e",
+      "position": { "x": 1410, "y": -300 },
+      "size": { "w": 800, "h": 220 },
+      "parentId": "layer-kp-structure",
+      "snapToGrid": true
+    },
+    "node-s6": {
+      "id": "node-s6",
+      "name": "6. Сроки",
+      "group": "3. Секции КП",
+      "content": "• Ориентировочные сроки выполнения\n• Если срок зависит от вводных данных — указать это прямо\n• Разбивка по этапам (если применимо)\n\nЧестная оценка без занижения для привлечения клиента.",
+      "color": "#92400e",
+      "position": { "x": 2330, "y": -300 },
+      "size": { "w": 800, "h": 220 },
+      "parentId": "layer-kp-structure",
+      "snapToGrid": true
+    },
+    "node-s7": {
+      "id": "node-s7",
+      "name": "7. Стоимость",
+      "group": "3. Секции КП",
+      "content": "• Если цена есть в брифе — отразить\n• Если нет — оставить место для заполнения\n• Разбивка по этапам при необходимости\n\nУказать, что стоимость рассчитывается после уточнения объёма работ (если данных недостаточно).",
+      "color": "#92400e",
+      "position": { "x": 490, "y": 20 },
+      "size": { "w": 800, "h": 220 },
+      "parentId": "layer-kp-structure",
+      "snapToGrid": true
+    },
+    "node-s8": {
+      "id": "node-s8",
+      "name": "8. Что потребуется от клиента",
+      "group": "3. Секции КП",
+      "content": "Перечень необходимого для старта:\n• Материалы и исходные данные\n• Доступы к системам\n• Согласования и решения\n• Контактные лица\n• Дедлайны обратной связи",
+      "color": "#92400e",
+      "position": { "x": 1410, "y": 20 },
+      "size": { "w": 800, "h": 220 },
+      "parentId": "layer-kp-structure",
+      "snapToGrid": true
+    },
+    "node-s9": {
+      "id": "node-s9",
+      "name": "9. Итог и следующий шаг",
+      "group": "3. Секции КП",
+      "content": "Завершение предложения:\n• Краткое резюме ценности\n• Что нужно для запуска проекта:\n  — Согласование КП\n  — Оплата (аванс/полная)\n  — Установочная встреча\n  — Уточнение деталей",
+      "color": "#92400e",
+      "position": { "x": 2330, "y": 20 },
+      "size": { "w": 800, "h": 220 },
+      "parentId": "layer-kp-structure",
+      "snapToGrid": true
+    },
+    "node-assembly": {
+      "id": "node-assembly",
+      "name": "📄 Сборка документа",
+      "group": "3. Секции КП",
+      "content": "Объединение всех 9 секций в единый документ.\n\nПроверка:\n• Логическая связность между секциями\n• Отсутствие повторов и противоречий\n• Единый тон и терминология\n• Все допущения явно помечены",
+      "color": "#78350f",
+      "position": { "x": 1410, "y": 420 },
+      "size": { "w": 800, "h": 260 },
+      "parentId": "layer-kp-structure",
+      "snapToGrid": true
+    },
+    "node-quality-rules": {
+      "id": "node-quality-rules",
+      "name": "✅ Правила качества",
+      "group": "4. Контроль",
+      "content": "Проверка по чек-листу:\n• Не выдуманы факты, отсутствующие в брифе\n• Противоречия указаны с предложением уточнения\n• Выбран оптимальный вариант решения с обоснованием\n• Каждый пункт связан с брифом\n• Документ готов к отправке после минимальной правки",
+      "color": "#991b1b",
+      "position": { "x": 3540, "y": -270 },
+      "size": { "w": 820, "h": 260 },
+      "parentId": "layer-quality",
+      "snapToGrid": true
+    },
+    "node-style-check": {
+      "id": "node-style-check",
+      "name": "🎨 Стиль документа",
+      "group": "4. Контроль",
+      "content": "Требования к стилю:\n• Деловой, уверенный тон без маркетинговой воды\n• Профессиональная терминология\n• Короткие абзацы, списки\n• Без канцелярита\n• Без шаблонных фраз\n\nКаждый пункт должен быть связан с конкретным брифом.",
+      "color": "#991b1b",
+      "position": { "x": 3540, "y": 90 },
+      "size": { "w": 820, "h": 260 },
+      "parentId": "layer-quality",
+      "snapToGrid": true
+    },
+    "node-final-doc": {
+      "id": "node-final-doc",
+      "name": "📨 Готовое КП",
+      "group": "4. Контроль",
+      "content": "Финальный документ, готовый к отправке.\n\nФормат вывода: текст коммерческого предложения без пояснений о процессе создания.\n\nДокумент можно сразу отправить клиенту после минимальной правки менеджером.",
+      "color": "#7f1d1d",
+      "position": { "x": 3540, "y": 450 },
+      "size": { "w": 820, "h": 240 },
+      "parentId": "layer-quality",
+      "snapToGrid": true
+    }
+  },
+  "ports": {
+    "port-briefing-out": {
+      "id": "port-briefing-out",
+      "nodeId": "node-briefing",
+      "type": "output",
+      "edge": "right",
+      "position": 0.35,
+      "name": "Проверка",
+      "color": "#3b82f6"
+    },
+    "port-briefing-out-2": {
+      "id": "port-briefing-out-2",
+      "nodeId": "node-briefing",
+      "type": "output",
+      "edge": "right",
+      "position": 0.65,
+      "name": "Пробелы",
+      "color": "#f59e0b"
+    },
+    "port-brief-full-in": {
+      "id": "port-brief-full-in",
+      "nodeId": "node-brief-full",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Данные",
+      "color": "#3b82f6"
+    },
+    "port-brief-full-out": {
+      "id": "port-brief-full-out",
+      "nodeId": "node-brief-full",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "К AI",
+      "color": "#10b981"
+    },
+    "port-brief-partial-in": {
+      "id": "port-brief-partial-in",
+      "nodeId": "node-brief-partial",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Пробелы",
+      "color": "#f59e0b"
+    },
+    "port-brief-partial-out": {
+      "id": "port-brief-partial-out",
+      "nodeId": "node-brief-partial",
+      "type": "output",
+      "edge": "bottom",
+      "position": 0.5,
+      "name": "Вопросы",
+      "color": "#f59e0b"
+    },
+    "port-brief-partial-out-2": {
+      "id": "port-brief-partial-out-2",
+      "nodeId": "node-brief-partial",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "К AI (с допущениями)",
+      "color": "#10b981"
+    },
+    "port-questions-in": {
+      "id": "port-questions-in",
+      "nodeId": "node-questions",
+      "type": "input",
+      "edge": "top",
+      "position": 0.5,
+      "name": "Пробелы",
+      "color": "#f59e0b"
+    },
+    "port-system-prompt-in": {
+      "id": "port-system-prompt-in",
+      "nodeId": "node-system-prompt",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Бриф",
+      "color": "#10b981"
+    },
+    "port-system-prompt-out": {
+      "id": "port-system-prompt-out",
+      "nodeId": "node-system-prompt",
+      "type": "output",
+      "edge": "bottom",
+      "position": 0.5,
+      "name": "Инструкция",
+      "color": "#10b981"
+    },
+    "port-context-in": {
+      "id": "port-context-in",
+      "nodeId": "node-context-analysis",
+      "type": "input",
+      "edge": "top",
+      "position": 0.5,
+      "name": "Промт",
+      "color": "#10b981"
+    },
+    "port-context-in-2": {
+      "id": "port-context-in-2",
+      "nodeId": "node-context-analysis",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Допущения",
+      "color": "#10b981"
+    },
+    "port-context-out": {
+      "id": "port-context-out",
+      "nodeId": "node-context-analysis",
+      "type": "output",
+      "edge": "bottom",
+      "position": 0.5,
+      "name": "Контекст",
+      "color": "#10b981"
+    },
+    "port-generator-in": {
+      "id": "port-generator-in",
+      "nodeId": "node-section-generator",
+      "type": "input",
+      "edge": "top",
+      "position": 0.5,
+      "name": "Анализ",
+      "color": "#10b981"
+    },
+    "port-generator-out-1": {
+      "id": "port-generator-out-1",
+      "nodeId": "node-section-generator",
+      "type": "output",
+      "edge": "right",
+      "position": 0.2,
+      "name": "Шапка",
+      "color": "#f59e0b"
+    },
+    "port-generator-out-2": {
+      "id": "port-generator-out-2",
+      "nodeId": "node-section-generator",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Решение",
+      "color": "#f59e0b"
+    },
+    "port-generator-out-3": {
+      "id": "port-generator-out-3",
+      "nodeId": "node-section-generator",
+      "type": "output",
+      "edge": "right",
+      "position": 0.8,
+      "name": "Коммерция",
+      "color": "#f59e0b"
+    },
+    "port-s1-in": {
+      "id": "port-s1-in",
+      "nodeId": "node-s1",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Генерация",
+      "color": "#f59e0b"
+    },
+    "port-s1-out": {
+      "id": "port-s1-out",
+      "nodeId": "node-s1",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s2-in": {
+      "id": "port-s2-in",
+      "nodeId": "node-s2",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s2-out": {
+      "id": "port-s2-out",
+      "nodeId": "node-s2",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s3-in": {
+      "id": "port-s3-in",
+      "nodeId": "node-s3",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s3-out": {
+      "id": "port-s3-out",
+      "nodeId": "node-s3",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Сборка",
+      "color": "#f59e0b"
+    },
+    "port-s4-in": {
+      "id": "port-s4-in",
+      "nodeId": "node-s4",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Генерация",
+      "color": "#f59e0b"
+    },
+    "port-s4-out": {
+      "id": "port-s4-out",
+      "nodeId": "node-s4",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s5-in": {
+      "id": "port-s5-in",
+      "nodeId": "node-s5",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s5-out": {
+      "id": "port-s5-out",
+      "nodeId": "node-s5",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s6-in": {
+      "id": "port-s6-in",
+      "nodeId": "node-s6",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s6-out": {
+      "id": "port-s6-out",
+      "nodeId": "node-s6",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Сборка",
+      "color": "#f59e0b"
+    },
+    "port-s7-in": {
+      "id": "port-s7-in",
+      "nodeId": "node-s7",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Генерация",
+      "color": "#f59e0b"
+    },
+    "port-s7-out": {
+      "id": "port-s7-out",
+      "nodeId": "node-s7",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s8-in": {
+      "id": "port-s8-in",
+      "nodeId": "node-s8",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s8-out": {
+      "id": "port-s8-out",
+      "nodeId": "node-s8",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s9-in": {
+      "id": "port-s9-in",
+      "nodeId": "node-s9",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "→",
+      "color": "#f59e0b"
+    },
+    "port-s9-out": {
+      "id": "port-s9-out",
+      "nodeId": "node-s9",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Сборка",
+      "color": "#f59e0b"
+    },
+    "port-assembly-in-1": {
+      "id": "port-assembly-in-1",
+      "nodeId": "node-assembly",
+      "type": "input",
+      "edge": "top",
+      "position": 0.25,
+      "name": "Шапка",
+      "color": "#f59e0b"
+    },
+    "port-assembly-in-2": {
+      "id": "port-assembly-in-2",
+      "nodeId": "node-assembly",
+      "type": "input",
+      "edge": "top",
+      "position": 0.5,
+      "name": "Решение",
+      "color": "#f59e0b"
+    },
+    "port-assembly-in-3": {
+      "id": "port-assembly-in-3",
+      "nodeId": "node-assembly",
+      "type": "input",
+      "edge": "top",
+      "position": 0.75,
+      "name": "Коммерция",
+      "color": "#f59e0b"
+    },
+    "port-assembly-out": {
+      "id": "port-assembly-out",
+      "nodeId": "node-assembly",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Документ",
+      "color": "#ef4444"
+    },
+    "port-quality-in": {
+      "id": "port-quality-in",
+      "nodeId": "node-quality-rules",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Черновик",
+      "color": "#ef4444"
+    },
+    "port-quality-out": {
+      "id": "port-quality-out",
+      "nodeId": "node-quality-rules",
+      "type": "output",
+      "edge": "bottom",
+      "position": 0.5,
+      "name": "Проверено",
+      "color": "#ef4444"
+    },
+    "port-style-in": {
+      "id": "port-style-in",
+      "nodeId": "node-style-check",
+      "type": "input",
+      "edge": "top",
+      "position": 0.5,
+      "name": "Контент",
+      "color": "#ef4444"
+    },
+    "port-style-out": {
+      "id": "port-style-out",
+      "nodeId": "node-style-check",
+      "type": "output",
+      "edge": "bottom",
+      "position": 0.5,
+      "name": "Стилизовано",
+      "color": "#ef4444"
+    },
+    "port-final-in": {
+      "id": "port-final-in",
+      "nodeId": "node-final-doc",
+      "type": "input",
+      "edge": "top",
+      "position": 0.5,
+      "name": "Финал",
+      "color": "#ef4444"
+    }
+  },
+  "links": [
+    {
+      "id": "link-briefing-to-full",
+      "sourcePortId": "port-briefing-out",
+      "targetPortId": "port-brief-full-in",
+      "name": "Бриф полный",
+      "content": "Данные брифинга прошли проверку — информации достаточно для генерации КП.",
+      "color": "#3b82f6",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-briefing-to-partial",
+      "sourcePortId": "port-briefing-out-2",
+      "targetPortId": "port-brief-partial-in",
+      "name": "Бриф неполный",
+      "content": "В брифе обнаружены пробелы — требуются уточнения от клиента.",
+      "color": "#f59e0b",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-partial-to-questions",
+      "sourcePortId": "port-brief-partial-out",
+      "targetPortId": "port-questions-in",
+      "name": "Генерация вопросов",
+      "content": "Система формирует список уточняющих вопросов по пробелам в брифе.",
+      "color": "#f59e0b",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-full-to-prompt",
+      "sourcePortId": "port-brief-full-out",
+      "targetPortId": "port-system-prompt-in",
+      "name": "Передача в AI",
+      "content": "Полные данные брифинга передаются в AI-ядро для обработки.",
+      "color": "#10b981",
+      "linkStyle": "orthogonal",
+      "context": "root"
+    },
+    {
+      "id": "link-partial-to-context",
+      "sourcePortId": "port-brief-partial-out-2",
+      "targetPortId": "port-context-in-2",
+      "name": "С допущениями",
+      "content": "Неполные данные передаются в анализ с явной пометкой допущений.",
+      "color": "#10b981",
+      "linkStyle": "orthogonal",
+      "context": "root"
+    },
+    {
+      "id": "link-prompt-to-context",
+      "sourcePortId": "port-system-prompt-out",
+      "targetPortId": "port-context-in",
+      "name": "Инструкция → Анализ",
+      "content": "Системный промт определяет правила анализа контекста клиента.",
+      "color": "#10b981",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-context-to-generator",
+      "sourcePortId": "port-context-out",
+      "targetPortId": "port-generator-in",
+      "name": "Контекст → Генератор",
+      "content": "Результаты анализа (цели, ограничения, решение) передаются в генератор секций.",
+      "color": "#10b981",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-gen-to-s1",
+      "sourcePortId": "port-generator-out-1",
+      "targetPortId": "port-s1-in",
+      "name": "Поток: Шапка",
+      "content": "Генерация секций 1–3: Заголовок, Резюме, Понимание запроса.",
+      "color": "#f59e0b",
+      "linkStyle": "orthogonal",
+      "context": "root"
+    },
+    {
+      "id": "link-gen-to-s4",
+      "sourcePortId": "port-generator-out-2",
+      "targetPortId": "port-s4-in",
+      "name": "Поток: Решение",
+      "content": "Генерация секций 4–6: Решение, Состав работ, Сроки.",
+      "color": "#f59e0b",
+      "linkStyle": "orthogonal",
+      "context": "root"
+    },
+    {
+      "id": "link-gen-to-s7",
+      "sourcePortId": "port-generator-out-3",
+      "targetPortId": "port-s7-in",
+      "name": "Поток: Коммерция",
+      "content": "Генерация секций 7–9: Стоимость, От клиента, Итог.",
+      "color": "#f59e0b",
+      "linkStyle": "orthogonal",
+      "context": "root"
+    },
+    {
+      "id": "link-s1-to-s2",
+      "sourcePortId": "port-s1-out",
+      "targetPortId": "port-s2-in",
+      "name": "1 → 2",
+      "content": "Заголовок задаёт контекст для резюме задачи.",
+      "color": "#d97706",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-s2-to-s3",
+      "sourcePortId": "port-s2-out",
+      "targetPortId": "port-s3-in",
+      "name": "2 → 3",
+      "content": "Резюме раскрывается в детальное понимание запроса.",
+      "color": "#d97706",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-s4-to-s5",
+      "sourcePortId": "port-s4-out",
+      "targetPortId": "port-s5-in",
+      "name": "4 → 5",
+      "content": "Решение детализируется в конкретный состав работ.",
+      "color": "#d97706",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-s5-to-s6",
+      "sourcePortId": "port-s5-out",
+      "targetPortId": "port-s6-in",
+      "name": "5 → 6",
+      "content": "Состав работ определяет сроки выполнения.",
+      "color": "#d97706",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-s7-to-s8",
+      "sourcePortId": "port-s7-out",
+      "targetPortId": "port-s8-in",
+      "name": "7 → 8",
+      "content": "Стоимость дополняется списком того, что нужно от клиента.",
+      "color": "#d97706",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-s8-to-s9",
+      "sourcePortId": "port-s8-out",
+      "targetPortId": "port-s9-in",
+      "name": "8 → 9",
+      "content": "Требования от клиента завершаются итогом и следующим шагом.",
+      "color": "#d97706",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-s3-to-assembly",
+      "sourcePortId": "port-s3-out",
+      "targetPortId": "port-assembly-in-1",
+      "name": "Шапка → Сборка",
+      "content": "Секции 1–3 (Заголовок, Резюме, Понимание) готовы к сборке.",
+      "color": "#b45309",
+      "linkStyle": "orthogonal",
+      "context": "root"
+    },
+    {
+      "id": "link-s6-to-assembly",
+      "sourcePortId": "port-s6-out",
+      "targetPortId": "port-assembly-in-2",
+      "name": "Решение → Сборка",
+      "content": "Секции 4–6 (Решение, Работы, Сроки) готовы к сборке.",
+      "color": "#b45309",
+      "linkStyle": "orthogonal",
+      "context": "root"
+    },
+    {
+      "id": "link-s9-to-assembly",
+      "sourcePortId": "port-s9-out",
+      "targetPortId": "port-assembly-in-3",
+      "name": "Коммерция → Сборка",
+      "content": "Секции 7–9 (Стоимость, От клиента, Итог) готовы к сборке.",
+      "color": "#b45309",
+      "linkStyle": "orthogonal",
+      "context": "root"
+    },
+    {
+      "id": "link-assembly-to-quality",
+      "sourcePortId": "port-assembly-out",
+      "targetPortId": "port-quality-in",
+      "name": "На проверку",
+      "content": "Собранный документ передаётся на проверку правилами качества.",
+      "color": "#ef4444",
+      "linkStyle": "orthogonal",
+      "context": "root"
+    },
+    {
+      "id": "link-quality-to-style",
+      "sourcePortId": "port-quality-out",
+      "targetPortId": "port-style-in",
+      "name": "Качество → Стиль",
+      "content": "Проверенный контент форматируется по стилевым требованиям.",
+      "color": "#ef4444",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-style-to-final",
+      "sourcePortId": "port-style-out",
+      "targetPortId": "port-final-in",
+      "name": "Стиль → Финал",
+      "content": "Стилизованный документ становится финальным КП, готовым к отправке.",
+      "color": "#ef4444",
+      "linkStyle": "bezier",
+      "context": "root"
+    }
+  ],
+  "canvas": {
+    "offset": { "x": 600, "y": 200 },
+    "zoom": 0.35
+  }
+}

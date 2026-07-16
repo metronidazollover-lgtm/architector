@@ -1,0 +1,567 @@
+{
+  "layers": {
+    "layer-messenger": {
+      "id": "layer-messenger",
+      "name": "1. Интерфейс Мессенджера MAX",
+      "content": "Канал связи с пользователем: прием текстовых сообщений из 4 строк и отправка интерактивных селекторов запросов.",
+      "color": "#1d4ed8",
+      "position": {
+        "x": -2500,
+        "y": -400
+      },
+      "size": {
+        "w": 900,
+        "h": 950
+      },
+      "locked": false,
+      "parentId": "root",
+      "snapToGrid": true
+    },
+    "layer-logic": {
+      "id": "layer-logic",
+      "name": "2. AI-Логика и Обработка",
+      "content": "Парсинг четырехстрочных сообщений, определение параметров по умолчанию, классификация номеров деталей с помощью нейросети.",
+      "color": "#047857",
+      "position": {
+        "x": -1450,
+        "y": -400
+      },
+      "size": {
+        "w": 950,
+        "h": 950
+      },
+      "locked": false,
+      "parentId": "root",
+      "snapToGrid": true
+    },
+    "layer-db-services": {
+      "id": "layer-db-services",
+      "name": "3. Базы данных и Внешние API",
+      "content": "Интеграция со справочниками Тех.док (TecDoc) и коннектором к таблицам/документам Google Docs.",
+      "color": "#b45309",
+      "position": {
+        "x": -350,
+        "y": -400
+      },
+      "size": {
+        "w": 950,
+        "h": 950
+      },
+      "locked": false,
+      "parentId": "root",
+      "snapToGrid": true
+    },
+    "layer-storage": {
+      "id": "layer-storage",
+      "name": "4. Хранение данных",
+      "content": "Облачное хранилище логов поступлений и базы деталей.",
+      "color": "#7c3aed",
+      "position": {
+        "x": 750,
+        "y": -400
+      },
+      "size": {
+        "w": 650,
+        "h": 950
+      },
+      "locked": false,
+      "parentId": "root",
+      "snapToGrid": true
+    }
+  },
+  "nodes": {
+    "node-input-msg": {
+      "id": "node-input-msg",
+      "name": "📥 Входной текст (4 строки)",
+      "group": "1. Вход",
+      "content": "Формат сообщения:\n1. Состояние детали (Новая / Б/У)\n2. Тип детали (фара, бампер и т.д.)\n3. Номер или модель автомобиля\n4. Номер ячейки хранения (опционально)\n5. Добавление фото (опционально- при прикреплении фото к чату и сообщению- фото прикрепляется к соответствующей детали в таблице.",
+      "color": "#1e293b",
+      "position": {
+        "x": -2430,
+        "y": -300
+      },
+      "size": {
+        "w": 400,
+        "h": 240
+      },
+      "parentId": "layer-messenger",
+      "snapToGrid": true
+    },
+    "node-request-btn": {
+      "id": "node-request-btn",
+      "name": "🔘 Кнопка 'Запрос авто'",
+      "group": "1. Вход",
+      "content": "Интерактивная кнопка в мессенджере MAX, запускающая меню выбора параметров поиска информации об автомобиле.",
+      "color": "#1e293b",
+      "position": {
+        "x": -2440,
+        "y": -20
+      },
+      "size": {
+        "w": 400,
+        "h": 180
+      },
+      "parentId": "layer-messenger",
+      "snapToGrid": true
+    },
+    "node-selector": {
+      "id": "node-selector",
+      "name": "🎛️ Селектор выбора",
+      "group": "1. Вход",
+      "content": "Меню выбора из 3 опций:\n1. Номер детали\n2. Запрос по авто\n3. Запрос по типу детали",
+      "color": "#1e3a8a",
+      "position": {
+        "x": -1940,
+        "y": -20
+      },
+      "size": {
+        "w": 340,
+        "h": 220
+      },
+      "parentId": "layer-messenger",
+      "snapToGrid": true
+    },
+    "node-parser": {
+      "id": "node-parser",
+      "name": "⚙️ Разбор строк и Валидатор",
+      "group": "2. Логика",
+      "content": "Парсер сообщения:\n• Строка 1 -> Состояние\n• Строка 2 -> Тип\n• Строка 3 -> Номер / Модель\n• Строка 4 -> Ячейка (если пусто -> ставит '0')",
+      "color": "#15803d",
+      "position": {
+        "x": -1380,
+        "y": -300
+      },
+      "size": {
+        "w": 420,
+        "h": 260
+      },
+      "parentId": "layer-logic",
+      "snapToGrid": true
+    },
+    "node-neural-net": {
+      "id": "node-neural-net",
+      "name": "🧠 Нейросеть-Классификатор",
+      "group": "2. Логика",
+      "content": "Модель ИИ для анализа кодов запчастей.\nВход: номер детали.\nВыход: принадлежность к конкретному авто и категории деталей.",
+      "color": "#047857",
+      "position": {
+        "x": -910,
+        "y": -120
+      },
+      "size": {
+        "w": 360,
+        "h": 240
+      },
+      "parentId": "layer-logic",
+      "snapToGrid": true
+    },
+    "node-query-handler": {
+      "id": "node-query-handler",
+      "name": "🛠️ Контроллер поисковых запросов",
+      "group": "2. Логика",
+      "content": "Обрабатывает события выбора в селекторе:\n• Направляет номер детали в ИИ\n• Ищет авто и типы деталей в справочнике Тех.док",
+      "color": "#15803d",
+      "position": {
+        "x": -1390,
+        "y": -20
+      },
+      "size": {
+        "w": 420,
+        "h": 220
+      },
+      "parentId": "layer-logic",
+      "snapToGrid": true
+    },
+    "node-tecdoc": {
+      "id": "node-tecdoc",
+      "name": "🗄️ Справочник Тех.док (TecDoc)",
+      "group": "3. Внешние сервисы",
+      "content": "База данных автозапчастей:\n• Списки моделей автомобилей\n• Связи деталей с марками авто\n• Коды аналогов и типов деталей",
+      "color": "#92400e",
+      "position": {
+        "x": -240,
+        "y": 90
+      },
+      "size": {
+        "w": 400,
+        "h": 260
+      },
+      "parentId": "layer-db-services",
+      "snapToGrid": true
+    },
+    "node-gdocs-api": {
+      "id": "node-gdocs-api",
+      "name": "🔌 Google Docs API Коннектор",
+      "group": "3. Внешние сервисы",
+      "content": "Коннектор интеграции с Google Таблицами.\nПреобразует распарсенный массив в строку таблицы и передает на запись.",
+      "color": "#78350f",
+      "position": {
+        "x": 180,
+        "y": -300
+      },
+      "size": {
+        "w": 360,
+        "h": 220
+      },
+      "parentId": "layer-db-services",
+      "snapToGrid": true
+    },
+    "node-gdocs-storage": {
+      "id": "node-gdocs-storage",
+      "name": "📄 Google Таблица учета деталей",
+      "group": "4. Хранилище",
+      "content": "Финальный реестр хранения:\nКолонки: [Дата] | [Состояние] | [Тип] | [Номер/Модель] | [Ячейка хранилища]",
+      "color": "#5b21b6",
+      "position": {
+        "x": 810,
+        "y": -240
+      },
+      "size": {
+        "w": 400,
+        "h": 240
+      },
+      "parentId": "layer-storage",
+      "snapToGrid": true
+    },
+    "node-1781017696672606": {
+      "name": "Возврат данных",
+      "position": {
+        "x": -2347.2424607330277,
+        "y": 315.60442786936596
+      },
+      "size": {
+        "w": 200,
+        "h": 100
+      },
+      "color": "#b13e3e",
+      "shape": "rectangle",
+      "id": "node-1781017696672606",
+      "parentId": "root",
+      "content": "Отображение имеющихся данных"
+    }
+  },
+  "ports": {
+    "port-input-msg-out": {
+      "id": "port-input-msg-out",
+      "nodeId": "node-input-msg",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Сообщение",
+      "color": "#3b82f6"
+    },
+    "port-request-btn-out": {
+      "id": "port-request-btn-out",
+      "nodeId": "node-request-btn",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Клик",
+      "color": "#3b82f6"
+    },
+    "port-selector-in": {
+      "id": "port-selector-in",
+      "nodeId": "node-selector",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Вход",
+      "color": "#3b82f6"
+    },
+    "port-selector-out": {
+      "id": "port-selector-out",
+      "nodeId": "node-selector",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Выбор",
+      "color": "#f59e0b"
+    },
+    "port-parser-in": {
+      "id": "port-parser-in",
+      "nodeId": "node-parser",
+      "type": "input",
+      "edge": "left",
+      "position": 0.3,
+      "name": "Вход",
+      "color": "#3b82f6"
+    },
+    "port-parser-out-gdocs": {
+      "id": "port-parser-out-gdocs",
+      "nodeId": "node-parser",
+      "type": "output",
+      "edge": "right",
+      "position": 0.3,
+      "name": "Данные деталей",
+      "color": "#10b981"
+    },
+    "port-parser-out-nn": {
+      "id": "port-parser-out-nn",
+      "nodeId": "node-parser",
+      "type": "output",
+      "edge": "right",
+      "position": 0.7,
+      "name": "Код для ИИ",
+      "color": "#10b981"
+    },
+    "port-nn-in-parser": {
+      "id": "port-nn-in-parser",
+      "nodeId": "node-neural-net",
+      "type": "input",
+      "edge": "left",
+      "position": 0.3,
+      "name": "Код детали",
+      "color": "#10b981"
+    },
+    "port-nn-in-query": {
+      "id": "port-nn-in-query",
+      "nodeId": "node-neural-net",
+      "type": "input",
+      "edge": "left",
+      "position": 0.7,
+      "name": "Запрос",
+      "color": "#f59e0b"
+    },
+    "port-nn-out-db": {
+      "id": "port-nn-out-db",
+      "nodeId": "node-neural-net",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Распознано",
+      "color": "#8b5cf6"
+    },
+    "port-query-in": {
+      "id": "port-query-in",
+      "nodeId": "node-query-handler",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Выбор",
+      "color": "#f59e0b"
+    },
+    "port-query-out-nn": {
+      "id": "port-query-out-nn",
+      "nodeId": "node-query-handler",
+      "type": "output",
+      "edge": "right",
+      "position": 0.3,
+      "name": "Поиск по №",
+      "color": "#10b981"
+    },
+    "port-query-out-db": {
+      "id": "port-query-out-db",
+      "nodeId": "node-query-handler",
+      "type": "output",
+      "edge": "right",
+      "position": 0.7,
+      "name": "Поиск по авто",
+      "color": "#10b981"
+    },
+    "port-tecdoc-in-nn": {
+      "id": "port-tecdoc-in-nn",
+      "nodeId": "node-tecdoc",
+      "type": "input",
+      "edge": "left",
+      "position": 0.3,
+      "name": "Деталь",
+      "color": "#8b5cf6"
+    },
+    "port-tecdoc-in-query": {
+      "id": "port-tecdoc-in-query",
+      "nodeId": "node-tecdoc",
+      "type": "input",
+      "edge": "left",
+      "position": 0.7,
+      "name": "Параметры",
+      "color": "#10b981"
+    },
+    "port-tecdoc-out": {
+      "id": "port-tecdoc-out",
+      "nodeId": "node-tecdoc",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Результат",
+      "color": "#ec4899"
+    },
+    "port-gdocs-api-in": {
+      "id": "port-gdocs-api-in",
+      "nodeId": "node-gdocs-api",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Данные",
+      "color": "#10b981"
+    },
+    "port-gdocs-api-out": {
+      "id": "port-gdocs-api-out",
+      "nodeId": "node-gdocs-api",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Запись",
+      "color": "#8b5cf6"
+    },
+    "port-gdocs-storage-in": {
+      "id": "port-gdocs-storage-in",
+      "nodeId": "node-gdocs-storage",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Таблица",
+      "color": "#8b5cf6"
+    },
+    "port-1781017517421554": {
+      "id": "port-1781017517421554",
+      "nodeId": "node-gdocs-storage",
+      "type": "input",
+      "position": 0.745567686070069,
+      "edge": "left",
+      "name": "Запрос детали из списка имеющихся в таблице",
+      "color": "#f50559"
+    },
+    "port-1781017530831185": {
+      "id": "port-1781017530831185",
+      "nodeId": "node-neural-net",
+      "type": "output",
+      "position": 0.7165854673716574,
+      "edge": "right",
+      "name": "Вывод информации из справочника"
+    },
+    "port-1781017728366141": {
+      "id": "port-1781017728366141",
+      "nodeId": "node-1781017696672606",
+      "type": "input",
+      "edge": "right",
+      "position": 0.58,
+      "name": "Возврат"
+    }
+  },
+  "links": [
+    {
+      "id": "link-input-to-parser",
+      "sourcePortId": "port-input-msg-out",
+      "targetPortId": "port-parser-in",
+      "name": "Передача текста",
+      "content": "Входное 4-строчное сообщение передается в парсер для разбора.",
+      "color": "#3b82f6",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-parser-to-gdocs",
+      "sourcePortId": "port-parser-out-gdocs",
+      "targetPortId": "port-gdocs-api-in",
+      "name": "Парсинг → API",
+      "content": "Данные после разбора (с автозаменой ячейки на '0' при необходимости) передаются в Google Docs API.",
+      "color": "#10b981",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-parser-to-nn",
+      "sourcePortId": "port-parser-out-nn",
+      "targetPortId": "port-nn-in-parser",
+      "name": "№ детали → ИИ",
+      "content": "Если введен номер детали, он отправляется в нейросеть для распознавания принадлежности.",
+      "color": "#10b981",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-request-to-selector",
+      "sourcePortId": "port-request-btn-out",
+      "targetPortId": "port-selector-in",
+      "name": "Вызов селектора",
+      "content": "Запрос информации об авто активирует всплывающий селектор с 3 опциями.",
+      "color": "#3b82f6",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-selector-to-query",
+      "sourcePortId": "port-selector-out",
+      "targetPortId": "port-query-in",
+      "name": "Обработка выбора",
+      "content": "Выбранный тип запроса передается в контроллер поисковых запросов.",
+      "color": "#f59e0b",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-query-to-nn",
+      "sourcePortId": "port-query-out-nn",
+      "targetPortId": "port-nn-in-query",
+      "name": "Запрос к ИИ",
+      "content": "Поиск по номеру детали перенаправляется в нейросеть.",
+      "color": "#10b981",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-query-to-db",
+      "sourcePortId": "port-query-out-db",
+      "targetPortId": "port-tecdoc-in-query",
+      "name": "Запрос к БД",
+      "content": "Поиск по автомобилю или типу деталей идет в справочную базу Тех.док.",
+      "color": "#10b981",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-nn-to-db",
+      "sourcePortId": "port-nn-out-db",
+      "targetPortId": "port-tecdoc-in-nn",
+      "name": "Идентификация",
+      "content": "Нейросеть передает распознанную модель авто и категорию детали в БД для точного сопоставления.",
+      "color": "#8b5cf6",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-gdocs-api-to-storage",
+      "sourcePortId": "port-gdocs-api-out",
+      "targetPortId": "port-gdocs-storage-in",
+      "name": "Запись в реестр",
+      "content": "API производит добавление новой строки в Google Docs таблицу.",
+      "color": "#8b5cf6",
+      "linkStyle": "bezier",
+      "context": "root"
+    },
+    {
+      "id": "link-1781017537926287",
+      "name": "Связь 1781017537926287",
+      "context": "root",
+      "sourcePortId": "port-1781017530831185",
+      "targetPortId": "port-1781017517421554",
+      "linkStyle": "orthogonal",
+      "color": "#fb0909",
+      "content": "Поиск имеющихся в наличии запчастей\n"
+    },
+    {
+      "id": "link-1781017728368514",
+      "name": "Декодер",
+      "context": "root",
+      "sourcePortId": "port-1781017530831185",
+      "targetPortId": "port-1781017728366141",
+      "color": "#ed0c0c",
+      "linkStyle": "orthogonal",
+      "content": "Декодер"
+    }
+  ],
+  "canvas": {
+    "offset": {
+      "x": 1611.340376145592,
+      "y": 329.55731192783793
+    },
+    "zoom": 0.6000000000000002
+  },
+  "currentContext": "root",
+  "breadcrumbs": [
+    {
+      "id": "root",
+      "name": "Главный холст"
+    }
+  ]
+}
