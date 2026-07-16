@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Node (на случай появления зависимостей)
+node_modules/
+
+# Редакторы
+.vscode/
+.idea/
+
+# Временные файлы
+*.tmp
+test_state.json
