@@ -1,40 +1,5 @@
-// Геометрия портов, фигур и авторасстановки. Двойной экспорт: браузер + node:test.
+// Геометрия портов, элементов и авторасстановки. Двойной экспорт: браузер + node:test.
 const GeometryUtils = {
-    getPolygonPoints: (shape, w, h) => {
-        switch(shape) {
-            case 'triangle': return [[w/2,0], [0,h], [w,h]];
-            case 'pentagon': return [[w/2,0], [w,h*0.38], [w*0.82,h], [w*0.18,h], [0,h*0.38]];
-            case 'hexagon': return [[w*0.25,0], [w*0.75,0], [w,h/2], [w*0.75,h], [w*0.25,h], [0,h/2]];
-            case 'octagon': return [[w*0.3,0], [w*0.7,0], [w,h*0.3], [w,h*0.7], [w*0.7,h], [w*0.3,h], [0,h*0.7], [0,h*0.3]];
-            default: return [[0,0], [w,0], [w,h], [0,h]]; // rectangle
-        }
-    },
-    getClosestPointOnSegment: (p, a, b) => {
-        const atob = { x: b[0] - a[0], y: b[1] - a[1] };
-        const atop = { x: p.x - a[0], y: p.y - a[1] };
-        const len2 = atob.x * atob.x + atob.y * atob.y;
-        if (len2 === 0) return { x: a[0], y: a[1] };
-        let dot = atop.x * atob.x + atop.y * atob.y;
-        const t = Math.max(0, Math.min(1, dot / len2));
-        return { x: a[0] + atob.x * t, y: a[1] + atob.y * t };
-    },
-    getClosestPointOnPolygon: (shape, w, h, targetX, targetY) => {
-        if (shape === 'rectangle' || !shape) return { x: targetX, y: targetY };
-        const pts = GeometryUtils.getPolygonPoints(shape, w, h);
-        let minDist = Infinity;
-        let closest = { x: targetX, y: targetY };
-        for(let i=0; i<pts.length; i++) {
-            const a = pts[i];
-            const b = pts[(i+1)%pts.length];
-            const cp = GeometryUtils.getClosestPointOnSegment({x: targetX, y: targetY}, a, b);
-            const dist = Math.hypot(cp.x - targetX, cp.y - targetY);
-            if (dist < minDist) {
-                minDist = dist;
-                closest = cp;
-            }
-        }
-        return closest;
-    },
     getEdgePos: (edge, pos, w, h) => {
         if (edge === 'top') return { x: pos * w, y: 0 };
         if (edge === 'bottom') return { x: pos * w, y: h };
@@ -49,19 +14,15 @@ const GeometryUtils = {
      */
     getPortAbsolutePosition: (port, node, absNodePos) => {
         if (!node) return { x: 0, y: 0, edge: port?.edge || 'top' };
-        const shape = node.shape || 'rectangle';
         const { w, h } = node.size || { w: 200, h: 100 };
-        const target = GeometryUtils.getEdgePos(port.edge, port.position, w, h);
-        const cp = GeometryUtils.getClosestPointOnPolygon(shape, w, h, target.x, target.y);
+        const cp = GeometryUtils.getEdgePos(port.edge, port.position, w, h);
         const nx = absNodePos ? absNodePos.x : (node.position?.x || 0);
         const ny = absNodePos ? absNodePos.y : (node.position?.y || 0);
         return { x: nx + cp.x, y: ny + cp.y, edge: port.edge };
     },
     getPortRelativePosition: (port, node) => {
-        const shape = node.shape || 'rectangle';
         const { w, h } = node.size || { w: 200, h: 100 };
-        const target = GeometryUtils.getEdgePos(port.edge, port.position, w, h);
-        return GeometryUtils.getClosestPointOnPolygon(shape, w, h, target.x, target.y);
+        return GeometryUtils.getEdgePos(port.edge, port.position, w, h);
     },
     /**
      * Авторасстановка узлов внутри слоя без перекрытий.

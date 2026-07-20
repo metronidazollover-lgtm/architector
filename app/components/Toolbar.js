@@ -257,7 +257,7 @@ function Toolbar() {
                     size: { w: 220, h: 100 },
                     parentId: "layer-1-ui",
                     snapToGrid: true,
-                    shape: "hexagon"
+                    shape: "rectangle"
                 },
                 "node-1-propertypanel": {
                     id: "node-1-propertypanel",
@@ -294,7 +294,7 @@ function Toolbar() {
                     size: { w: 220, h: 100 },
                     parentId: "layer-1-state",
                     snapToGrid: true,
-                    shape: "circle"
+                    shape: "rectangle"
                 },
                 "node-1-reducer": {
                     id: "node-1-reducer",
@@ -318,7 +318,7 @@ function Toolbar() {
                     size: { w: 210, h: 100 },
                     parentId: "layer-1-state",
                     snapToGrid: true,
-                    shape: "octagon"
+                    shape: "rectangle"
                 },
                 // Geometry Layer Nodes
                 "node-1-collision": {
@@ -380,7 +380,7 @@ function Toolbar() {
                     size: { w: 220, h: 100 },
                     parentId: "layer-1-storage",
                     snapToGrid: true,
-                    shape: "triangle"
+                    shape: "rectangle"
                 },
                 // API / AI Layer Nodes
                 "node-1-ai-client": {
@@ -508,7 +508,7 @@ function Toolbar() {
                     size: { w: 200, h: 100 },
                     parentId: "layer-2-dragdrop",
                     snapToGrid: true,
-                    shape: "hexagon"
+                    shape: "rectangle"
                 },
                 "node-2-layer-push": {
                     id: "node-2-layer-push",
@@ -545,7 +545,7 @@ function Toolbar() {
                     size: { w: 200, h: 100 },
                     parentId: "layer-2-svg-links",
                     snapToGrid: true,
-                    shape: "triangle"
+                    shape: "rectangle"
                 },
                 "node-2-orthogonal": {
                     id: "node-2-orthogonal",
@@ -582,7 +582,7 @@ function Toolbar() {
                     size: { w: 200, h: 100 },
                     parentId: "layer-2-zoom",
                     snapToGrid: true,
-                    shape: "octagon"
+                    shape: "rectangle"
                 },
                 "node-2-wheel-handler": {
                     id: "node-2-wheel-handler",
@@ -643,7 +643,7 @@ function Toolbar() {
                     size: { w: 200, h: 100 },
                     parentId: "layer-2-xray",
                     snapToGrid: true,
-                    shape: "circle"
+                    shape: "rectangle"
                 },
                 "node-2-selection-sync": {
                     id: "node-2-selection-sync",
