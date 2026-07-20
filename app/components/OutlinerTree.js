@@ -3,7 +3,7 @@
 // drag-and-drop строки на строку — перевложение (REPARENT_ENTITY, цикл отклоняется).
 // TreeRow вынесен на уровень файла: объявление внутри компонента заставляло React
 // перемонтировать все строки при каждом setState, что рвёт живой drag-and-drop.
-function OutlinerTreeRow({ entity, depth, ctx }) {
+function OutlinerTreeRow({ entity, depth, ctx, visited = new Set() }) {
     const { state, dispatch, collapsedIds, setCollapsedIds, dropTargetId, setDropTargetId, canDropOn, handleDrop, childrenOf, onSelect } = ctx;
 
     const isLayer = !!(state.layers && state.layers[entity.id]);
@@ -12,6 +12,9 @@ function OutlinerTreeRow({ entity, depth, ctx }) {
     const isSelected = state.selectedIds.includes(entity.id);
     const isCurrentCtx = state.currentContext === entity.id;
     const isDropTarget = dropTargetId === entity.id;
+
+    const newVisited = new Set(visited);
+    newVisited.add(entity.id);
 
     return (
         <div>
@@ -59,9 +62,12 @@ function OutlinerTreeRow({ entity, depth, ctx }) {
                 <span className="truncate flex-1">{entity.name}</span>
                 {kids.length > 0 && <span className="text-[10px] text-gray-500 shrink-0">{kids.length}</span>}
             </div>
-            {!isCollapsed && kids.map(child => (
-                <OutlinerTreeRow key={child.id} entity={child} depth={depth + 1} ctx={ctx} />
-            ))}
+            {!isCollapsed && kids.map(child => {
+                if (newVisited.has(child.id)) return null;
+                return (
+                    <OutlinerTreeRow key={child.id} entity={child} depth={depth + 1} ctx={ctx} visited={newVisited} />
+                );
+            })}
         </div>
     );
 }

@@ -368,13 +368,15 @@ function PropertyPanel() {
     const handleChange = (field, value) => {
         if (field === 'parentId') {
             if (value !== 'root' && layers[value]) {
-                // Телепорт в слой: позиция относительна слою (v10)
+                // Авторасстановка при назначении на слой: позиция без перекрытий + подстройка слоя
+                const targetLayer = layers[value];
+                const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(
+                    [selectedNode], targetLayer, nodes
+                );
+                dispatch({ type: 'UPDATE_LAYER', payload: { id: value, updates: { size: newLayerSize } } });
                 dispatch({ type: 'UPDATE_NODE', payload: {
                     id: selectedNode.id,
-                    updates: {
-                        parentId: value,
-                        position: { x: 40, y: 90 }
-                    }
+                    updates: updatesById[selectedNode.id] || { parentId: value, position: { x: 40, y: 90 } }
                 }});
             } else {
                 // Перевложение с сохранением абсолютной позиции
@@ -436,6 +438,27 @@ function PropertyPanel() {
                     <label className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Медиа URL (Картинка)</label>
                     <input type="text" className="input-field" placeholder="https://..." value={selectedNode.mediaUrl || ''} onChange={(e) => handleChange('mediaUrl', e.target.value)} />
                 </div>
+                {selectedNode.mediaUrl && (
+                    <div className="flex flex-col gap-1.5">
+                        <label className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Высота картинки (px)</label>
+                        <div className="flex gap-2 items-center">
+                            <input 
+                                type="range" 
+                                min="50" 
+                                max="1000" 
+                                value={selectedNode.mediaHeight || 150} 
+                                onChange={(e) => handleChange('mediaHeight', parseInt(e.target.value))} 
+                                className="flex-1 accent-[var(--accent-blue)]"
+                            />
+                            <input 
+                                type="number" 
+                                className="input-field w-20 text-center" 
+                                value={selectedNode.mediaHeight || 150} 
+                                onChange={(e) => handleChange('mediaHeight', Math.max(50, parseInt(e.target.value) || 50))} 
+                            />
+                        </div>
+                    </div>
+                )}
                 <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Цвет фона</label>
                     <div className="flex gap-2">

@@ -194,64 +194,6 @@ function Canvas() {
                 cameraRef.current = { zoom: newZoom, offset: { x: newOffsetX, y: newOffsetY } };
 
                 dispatch({ type: 'SET_CANVAS', payload: { zoom: newZoom, offset: { x: newOffsetX, y: newOffsetY } } });
-
-                autoDiveCheck(newZoom, { x: newOffsetX, y: newOffsetY }, mouseX, mouseY, delta > 0);
-            }
-        };
-
-        // Zoom-to-dive (этап 6.2): зум внутрь узла с детьми, занявшего почти весь экран, — авто-вход;
-        // отдаление, когда узел-контекст сжался, — авто-выход. Камера не трогается (keepCamera),
-        // поэтому переход бесшовный. Гистерезис порогов: при живом жесте узел уплывает от точки
-        // зума, и покрытие выше ~0.8 почти недостижимо — вход при 72% экрана, выход при 55%.
-        const AUTO_DIVE_IN_COVERAGE = 0.72;
-        const AUTO_DIVE_OUT_COVERAGE = 0.55;
-        const AUTO_NAV_COOLDOWN_MS = 400;
-
-        const screenCoverage = (entity, cam) => {
-            const H = window.HierarchyUtils;
-            const st = stateRef.current;
-            const abs = H.getAbsolutePosition(entity.id, st.nodes, st.layers);
-            const sx = abs.x * cam.zoom + cam.offset.x;
-            const sy = abs.y * cam.zoom + cam.offset.y;
-            const sw = (entity.size?.w || 200) * cam.zoom;
-            const sh = (entity.size?.h || 100) * cam.zoom;
-            const ix = Math.max(0, Math.min(sx + sw, window.innerWidth) - Math.max(sx, 0));
-            const iy = Math.max(0, Math.min(sy + sh, window.innerHeight) - Math.max(sy, 0));
-            return (ix * iy) / (window.innerWidth * window.innerHeight);
-        };
-
-        const autoDiveCheck = (newZoom, newOffset, mouseX, mouseY, zoomingIn) => {
-            const st = stateRef.current;
-            if (st.ui.autoDive === false) return;
-            const now = Date.now();
-            if (now - lastAutoNavRef.current < AUTO_NAV_COOLDOWN_MS) return;
-            const H = window.HierarchyUtils;
-            const cam = { zoom: newZoom, offset: newOffset };
-
-            if (zoomingIn) {
-                const wx = (mouseX - newOffset.x) / newZoom;
-                const wy = (mouseY - newOffset.y) / newZoom;
-                const target = Object.values(st.nodes).find(n => {
-                    if (!n || n.hidden || n.id === st.currentContext) return false;
-                    const pid = n.parentId || 'root';
-                    const inCtx = pid === st.currentContext ||
-                        !!(st.layers && st.layers[pid] && (st.layers[pid].parentId || 'root') === st.currentContext);
-                    if (!inCtx) return false;
-                    const abs = H.getAbsolutePosition(n.id, st.nodes, st.layers);
-                    if (wx < abs.x || wx > abs.x + (n.size?.w || 200) || wy < abs.y || wy > abs.y + (n.size?.h || 100)) return false;
-                    return H.getChildrenStats(st.nodes, st.layers, st.ports, st.links, n.id).total > 0;
-                });
-                if (target && screenCoverage(target, cam) >= AUTO_DIVE_IN_COVERAGE) {
-                    lastAutoNavRef.current = now;
-                    dispatch({ type: 'DIVE_INTO', payload: { id: target.id, name: target.name, keepCamera: true } });
-                }
-            } else {
-                const ctxNode = st.nodes[st.currentContext];
-                if (!ctxNode || st.breadcrumbs.length < 2) return;
-                if (screenCoverage(ctxNode, cam) < AUTO_DIVE_OUT_COVERAGE) {
-                    lastAutoNavRef.current = now;
-                    dispatch({ type: 'NAVIGATE_TO', payload: { index: st.breadcrumbs.length - 2, keepCamera: true } });
-                }
             }
         };
 
@@ -415,6 +357,34 @@ function Canvas() {
             />
             
             <div className={`absolute top-4 transition-all duration-300 ${state.ui.libraryOpen ? 'left-[384px]' : 'left-20'} glass-panel rounded-lg px-4 py-2 flex items-center gap-2 z-40 text-sm border-[#444]`}>
+                {/* Кнопки навигации по истории */}
+                <button
+                    className={`p-1 rounded transition-colors ${
+                        (state.navHistory?.past?.length || 0) === 0
+                            ? 'text-gray-700 cursor-not-allowed'
+                            : 'text-gray-400 hover:text-white hover:bg-white/10'
+                    }`}
+                    onClick={(e) => { e.stopPropagation(); dispatch({ type: 'NAV_BACK' }); }}
+                    disabled={!(state.navHistory?.past?.length)}
+                    title="Назад (Ctrl+[)"
+                >
+                    <div className="icon-arrow-left text-xs"></div>
+                </button>
+                <button
+                    className={`p-1 rounded transition-colors ${
+                        (state.navHistory?.future?.length || 0) === 0
+                            ? 'text-gray-700 cursor-not-allowed'
+                            : 'text-gray-400 hover:text-white hover:bg-white/10'
+                    }`}
+                    onClick={(e) => { e.stopPropagation(); dispatch({ type: 'NAV_FORWARD' }); }}
+                    disabled={!(state.navHistory?.future?.length)}
+                    title="Вперёд (Ctrl+])"
+                >
+                    <div className="icon-arrow-right text-xs"></div>
+                </button>
+                <span className="w-px h-4 bg-[#444]"></span>
+
+                {/* Активные крошки */}
                 {state.breadcrumbs.map((crumb, index) => {
                     const isCurrent = index === state.breadcrumbs.length - 1;
                     
@@ -452,42 +422,26 @@ function Canvas() {
                         </React.Fragment>
                     );
                 })}
+                {/* Индикатор пустого контекста прямо в панели крошек */}
+                {(() => {
+                    const contextNode = state.nodes[state.currentContext];
+                    if (!contextNode) return null;
+                    const hasChildren =
+                        Object.values(state.nodes).some(n => n && n.parentId === state.currentContext) ||
+                        (state.layers && Object.values(state.layers).some(l => l && l.parentId === state.currentContext));
+                    if (hasChildren) return null;
+                    return (
+                        <span className="text-[10px] text-gray-400 bg-white/5 border border-white/10 rounded-full px-2 py-0.5 ml-1 animate-pulse">
+                            Пусто (Esc — наверх)
+                        </span>
+                    );
+                })()}
             </div>
 
-            {/* Empty state: мы внутри узла, а в нём пусто */}
-            {(() => {
-                const contextNode = state.nodes[state.currentContext];
-                if (!contextNode) return null;
-                const hasChildren =
-                    Object.values(state.nodes).some(n => n && n.parentId === state.currentContext) ||
-                    (state.layers && Object.values(state.layers).some(l => l && l.parentId === state.currentContext));
-                if (hasChildren) return null;
-                return (
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
-                        <div className="glass-panel rounded-xl px-8 py-6 text-center pointer-events-auto max-w-md shadow-2xl">
-                            <div className="text-base text-white font-medium mb-2">Вы внутри узла «{contextNode.name}»</div>
-                            <div className="text-sm text-gray-400 mb-4">Здесь пока пусто. Добавьте элементы или вернитесь на уровень выше.</div>
-                            <div className="flex gap-2 justify-center">
-                                <button className="btn" onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'objects' })}>
-                                    Открыть библиотеку
-                                </button>
-                                <button className="btn" onClick={() => dispatch({ type: 'NAVIGATE_TO', payload: state.breadcrumbs.length - 2 })}>
-                                    Наверх (Esc)
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                );
-            })()}
-
-            {/* Профиль глубины + миникарта (этап 4): правый нижний угол, под PropertyPanel */}
+            {/* Миникарта (этап 4): правый нижний угол, под PropertyPanel */}
             <div className="absolute right-4 bottom-4 z-40 flex flex-col gap-2 items-end">
-                <DepthProfile />
                 <MiniMap />
             </div>
-
-            {/* Туннельные метки (этап 5.3a): связи через границу текущего контекста */}
-            <TunnelLabels />
 
             {/* Context specific backgrounds */}
             {state.links && state.links.find(l => l && l.id === state.currentContext) && (
@@ -661,43 +615,34 @@ function Canvas() {
                     if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild && !isTransitionChild) return null;
                     if (node.hidden) return null;
                     
-                    // Проверяем, выделен ли хотя бы один из истинных детей этого узла
-                    const hasSelectedChild = state.selectedIds.some(sid => (state.nodes[sid] || state.layers?.[sid]) && getTrueParentNodeId(sid) === node.id);
-                    
-                    // Проверяем, является ли узел "братом" выделенного (на том же уровне внутри того же родительского узла)
+                    // Проверяем, выделен ли хотя бы один из истинных детей этого узла (только среди узлов, исключая слои)
+                    const hasSelectedChild = state.selectedIds.some(sid => state.nodes[sid] && getTrueParentNodeId(sid) === node.id);
+
                     const isSelected = state.selectedIds.includes(node.id);
-                    let isSiblingOfSelected = false;
-                    if (!isSelected && state.selectedIds.length > 0) {
-                        const myParent = getTrueParentNodeId(node.id);
-                        if (myParent !== 'root') {
-                            isSiblingOfSelected = state.selectedIds.some(sid => (state.nodes[sid] || state.layers?.[sid]) && getTrueParentNodeId(sid) === myParent);
-                        }
-                    }
 
                     // Если узел имеет выделенных детей, он не должен затухать
                     const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isExplicitlyVisible && !hasSelectedChild;
-                    const isHighlightedContext = isTheContextItself || isLinkSourceOrTarget || hasSelectedChild;
-                    
-                    // Узел пульсирует только если выделены его дочерние элементы
-                    const isPulsing = hasSelectedChild;
-                    
+                    const isHighlightedContext = isTheContextItself || isLinkSourceOrTarget;
+                    const depth = getContextDepth(effectiveContextId);
+                    const nodeZIndex = (depth * 10) + (isPeekChild ? 30 : 0) + (isSelected ? 25 : 0) + (isCurrentChild ? 2 : 0) + (hasSelectedChild ? 1 : 0);
+
                     return (
                         <div 
                             key={node.id || `node-${idx}`} 
                             className={`
                                 ${isDimmed && !isBreadcrumbAncestor ? 'opacity-20 pointer-events-none grayscale blur-[2px]' : ''}
-                                ${isHighlightedContext && !isPulsing ? 'shadow-[0_0_100px_rgba(0,122,255,0.15)] ring-4 ring-[var(--accent-blue)]/50 rounded-lg opacity-100 pointer-events-auto' : ''}
+                                ${isHighlightedContext ? 'shadow-[0_0_100px_rgba(0,122,255,0.15)] ring-4 ring-[var(--accent-blue)]/30 rounded-lg opacity-100 pointer-events-auto' : ''}
                                 ${isExplicitlyVisible && !isCurrentChild && !hasSelectedChild ? 'opacity-100 pointer-events-auto shadow-md' : ''}
-                                ${isBreadcrumbAncestor && !isPulsing && !isHighlightedContext ? 'opacity-50 pointer-events-none ring-4 ring-[var(--accent-blue)] ring-opacity-50 rounded-lg' : ''}
-                                ${isPulsing ? 'ring-4 ring-[var(--accent-blue)] ring-opacity-80 rounded-lg animate-[pulse_2s_cubic-bezier(0.4,0,0.6,1)_infinite] opacity-100 pointer-events-auto shadow-xl' : ''}
+                                ${isBreadcrumbAncestor && !isHighlightedContext && !isExplicitlyVisible ? 'opacity-50 pointer-events-none ring-4 ring-[var(--accent-blue)] ring-opacity-50 rounded-lg' : ''}
+                                ${isBreadcrumbAncestor && !isHighlightedContext && isExplicitlyVisible ? 'opacity-50 pointer-events-auto ring-4 ring-[var(--accent-blue)] ring-opacity-50 rounded-lg' : ''}
                                 ${isPeekChild ? 'opacity-100 pointer-events-none shadow-xl' : ''}
                                 ${isPeekDimmed ? 'opacity-25 grayscale' : ''}
                                 ${isPeekSource ? 'ring-4 ring-[var(--accent-blue)]/60 rounded-lg' : ''}
                                 ${isTransitionChild && !isCurrentChild ? 'opacity-50 pointer-events-none' : ''}
                             `}
-                            style={{ zIndex: isPeekChild ? 30 : (isPulsing ? 20 : (isCurrentChild ? 10 : (hasSelectedChild ? 15 : (isExplicitlyVisible ? 5 : (isHighlightedContext ? 2 : (isBreadcrumbAncestor ? 1 : 1)))))) }}
+                            style={{ zIndex: nodeZIndex }}
                         >
-                            <Node data={node} isContextNode={isHighlightedContext || isBreadcrumbAncestor || isPulsing} isSiblingOfSelected={isSiblingOfSelected} />
+                            <Node data={node} isContextNode={isHighlightedContext || isBreadcrumbAncestor} isParentOfSelected={hasSelectedChild} />
                         </div>
                     );
                 })}

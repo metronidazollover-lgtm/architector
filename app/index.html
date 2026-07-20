@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Architector - Visual Logic Node Editor</title>
 
-    <script src="https://resource.trickle.so/vendor_lib/unpkg/react@18/umd/react.production.min.js"></script>
-    <script src="https://resource.trickle.so/vendor_lib/unpkg/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://resource.trickle.so/vendor_lib/unpkg/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://resource.trickle.so/vendor_lib/unpkg/lucide-static@0.516.0/font/lucide.css" rel="stylesheet">
+    <link href="https://unpkg.com/lucide-static@0.516.0/font/lucide.css" rel="stylesheet">
 
     <style type="text/tailwindcss">
     @layer theme {
@@ -82,6 +82,24 @@
         scrollbar-width: none;
     }
     </style>
+
+    <style>
+    @keyframes parent-glow-pulse {
+        0%, 100% {
+            box-shadow: 0 0 15px color-mix(in srgb, var(--parent-pulse-color, #007AFF) 20%, transparent) !important;
+            border-color: color-mix(in srgb, var(--parent-pulse-color, #007AFF) 40%, transparent) !important;
+        }
+        50% {
+            box-shadow: 0 0 35px color-mix(in srgb, var(--parent-pulse-color, #007AFF) 70%, transparent) !important;
+            border-color: var(--parent-pulse-color, #007AFF) !important;
+        }
+    }
+    .animate-parent-pulse {
+        animation: parent-glow-pulse 2s infinite ease-in-out !important;
+        outline: 2px solid color-mix(in srgb, var(--parent-pulse-color, #007AFF) 50%, transparent) !important;
+        outline-offset: 4px !important;
+    }
+    </style>
 </head>
 <body>
     <div id="root"></div>
@@ -93,10 +111,8 @@
     <script type="text/babel" src="components/Link.js"></script>
     <script type="text/babel" src="components/Port.js"></script>
     <script type="text/babel" src="components/NodePreview.js"></script>
-    <script type="text/babel" src="components/DepthProfile.js"></script>
     <script type="text/babel" src="components/MiniMap.js"></script>
     <script type="text/babel" src="components/OutlinerTree.js"></script>
-    <script type="text/babel" src="components/TunnelLabels.js"></script>
     <script type="text/babel" src="components/Node.js"></script>
     <script type="text/babel" src="components/Canvas.js"></script>
     <script type="text/babel" src="components/PropertyPanel.js"></script>

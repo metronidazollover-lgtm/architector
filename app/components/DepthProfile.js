@@ -7,13 +7,16 @@ function DepthProfile() {
     const [expandedLevels, setExpandedLevels] = React.useState({});
     const MAX_VISIBLE = 10;
 
-    const rows = React.useMemo(() => state.breadcrumbs.map((crumb, level) => {
-        const siblings = [
-            ...Object.values(state.layers || {}).filter(l => l && l.parentId === crumb.id),
-            ...Object.values(state.nodes).filter(n => n && n.parentId === crumb.id && !n.hidden)
-        ];
-        return { crumb, level, siblings, pathChildId: state.breadcrumbs[level + 1]?.id };
-    }), [state.breadcrumbs, state.nodes, state.layers]);
+    const rows = React.useMemo(() => {
+        const allCrumbs = state.breadcrumbs || [];
+        return allCrumbs.map((crumb, level) => {
+            const siblings = [
+                ...Object.values(state.layers || {}).filter(l => l && l.parentId === crumb.id),
+                ...Object.values(state.nodes).filter(n => n && n.parentId === crumb.id && !n.hidden)
+            ];
+            return { crumb, level, siblings, pathChildId: allCrumbs[level + 1]?.id, isTail: false };
+        });
+    }, [state.breadcrumbs, state.nodes, state.layers]);
 
     const isOpen = state.ui.depthProfileOpen !== false;
 
@@ -64,15 +67,15 @@ function DepthProfile() {
 
             <div className="overflow-y-auto no-scrollbar px-3 py-2 flex flex-col gap-2.5">
                 {rows.map((row) => {
-                    const isCurrent = row.level === rows.length - 1;
+                    const isCurrent = !row.isTail && row.level === state.breadcrumbs.length - 1;
                     const expanded = expandedLevels[row.level];
                     const visible = expanded ? row.siblings : row.siblings.slice(0, MAX_VISIBLE);
                     const hiddenCount = row.siblings.length - visible.length;
 
                     return (
                         <div key={row.crumb.id}>
-                            <div className={`text-[10px] mb-1 truncate ${isCurrent ? 'text-[var(--accent-blue)]' : 'text-gray-500'}`}>
-                                Уровень {row.level} · {row.crumb.name}{isCurrent ? ' · вы здесь' : ''}
+                            <div className={`text-[10px] mb-1 truncate ${isCurrent ? 'text-[var(--accent-blue)]' : row.isTail ? 'text-gray-700 italic' : 'text-gray-500'}`}>
+                                Уровень {row.level} · {row.crumb.name}{isCurrent ? ' · вы здесь' : ''}{row.isTail ? ' · (был здесь)' : ''}
                             </div>
                             {row.siblings.length === 0 ? (
                                 <div className="text-[10px] text-gray-600 italic">пусто</div>

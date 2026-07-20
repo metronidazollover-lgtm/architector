@@ -3,9 +3,6 @@ function Layer({ data }) {
     const isSelected = state.selectedIds.includes(data.id);
     const { zoom } = state.canvas;
 
-    // Drag-to-nest: этот слой — цель вложения перетаскиваемого элемента
-    const isNestTarget = state.ui.nestTargetId === data.id;
-
     // v10: position относительна родителю, на экран идут мировые координаты
     const absPos = window.HierarchyUtils.getAbsolutePosition(data.id, state.nodes, state.layers);
 
@@ -80,13 +77,37 @@ function Layer({ data }) {
                 dx = snappedX - initialPositions[data.id].x;
                 dy = snappedY - initialPositions[data.id].y;
             }
+
+            // Коллизия слоёв: корректируем позицию, чтобы не перекрывать соседей
+            const rawX = initialPositions[data.id].x + dx;
+            const rawY = initialPositions[data.id].y + dy;
+            const resolved = window.GeometryUtils.resolveLayerCollision(
+                data.id, rawX, rawY, lw, lh, state.layers
+            );
+            const resolvedDx = resolved.x - initialPositions[data.id].x;
+            const resolvedDy = resolved.y - initialPositions[data.id].y;
             
+            const selectedSet = new Set(allIdsToMove);
+            const hasSelectedAncestor = (id) => {
+                let current = state.nodes[id] || (state.layers && state.layers[id]);
+                const visited = new Set();
+                while (current && current.parentId && current.parentId !== 'root' && !visited.has(current.parentId)) {
+                    if (selectedSet.has(current.parentId)) return true;
+                    visited.add(current.parentId);
+                    current = state.nodes[current.parentId] || (state.layers && state.layers[current.parentId]) || null;
+                }
+                return false;
+            };
+
             allIdsToMove.forEach(id => {
                 if (initialPositions[id]) {
+                    if (hasSelectedAncestor(id)) return;
+                    const effectiveDx = resolvedDx;
+                    const effectiveDy = resolvedDy;
                     if (state.nodes[id]) {
-                        dispatch({ type: 'UPDATE_NODE', payload: { id, updates: { position: { x: initialPositions[id].x + dx, y: initialPositions[id].y + dy } }, skipHistory: true } });
+                        dispatch({ type: 'UPDATE_NODE', payload: { id, updates: { position: { x: initialPositions[id].x + effectiveDx, y: initialPositions[id].y + effectiveDy } }, skipHistory: true } });
                     } else if (state.layers[id]) {
-                        dispatch({ type: 'UPDATE_LAYER', payload: { id, updates: { position: { x: initialPositions[id].x + dx, y: initialPositions[id].y + dy } }, skipHistory: true } });
+                        dispatch({ type: 'UPDATE_LAYER', payload: { id, updates: { position: { x: initialPositions[id].x + effectiveDx, y: initialPositions[id].y + effectiveDy } }, skipHistory: true } });
                     }
                 }
             });
@@ -178,7 +199,6 @@ function Layer({ data }) {
         <div
             className={`absolute flex flex-col transition-all duration-200 border-2 rounded-xl pointer-events-auto
                 ${isSelected ? 'z-0 shadow-lg' : '-z-10 shadow-sm'}
-                ${isNestTarget ? 'ring-4 ring-green-500/80' : ''}
             `}
             style={{
                 left: absPos.x,
