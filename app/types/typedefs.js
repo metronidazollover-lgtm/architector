@@ -17,7 +17,7 @@
  */
 
 /**
- * @typedef {'rectangle'|'triangle'|'pentagon'|'hexagon'|'octagon'} NodeShape
+ * @typedef {'rectangle'} NodeShape
  */
 
 /**
