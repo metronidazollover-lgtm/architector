@@ -5,7 +5,7 @@
 ## Слои кода
 
 ```
-app/utils/geometry.js    чистая геометрия: фигуры, порты, авторасстановка
+app/utils/geometry.js    чистая геометрия: порты, авторасстановка, коллизии
 app/utils/hierarchy.js   иерархия: абсолютные координаты, статистика вложенности, циклы
 app/store/reducer.js     defaultState, редьюсер, миграции, загрузка localStorage (без JSX)
 app/store/Store.js       React-провайдер поверх редьюсера, персистенция
