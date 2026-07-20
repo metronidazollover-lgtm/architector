@@ -63,9 +63,86 @@ const migrateToV10 = (data) => {
 const getScreenSize = () =>
     (typeof window !== 'undefined') ? { w: window.innerWidth, h: window.innerHeight } : { w: 1280, h: 720 };
 
+const estimateWrappedLines = (text, charsPerLine) => {
+    if (!text) return 0;
+    const paragraphs = text.split('\n');
+    let totalLines = 0;
+    paragraphs.forEach(p => {
+        const words = p.split(/\s+/).filter(Boolean);
+        if (words.length === 0) {
+            totalLines += 1;
+            return;
+        }
+        let currentLineLen = 0;
+        let pLines = 1;
+        words.forEach(word => {
+            const wordLen = word.length;
+            if (wordLen > charsPerLine) {
+                pLines += Math.ceil(wordLen / charsPerLine) - 1;
+                currentLineLen = wordLen % charsPerLine;
+            } else {
+                if (currentLineLen + (currentLineLen > 0 ? 1 : 0) + wordLen > charsPerLine) {
+                    pLines += 1;
+                    currentLineLen = wordLen;
+                } else {
+                    currentLineLen += (currentLineLen > 0 ? 1 : 0) + wordLen;
+                }
+            }
+        });
+        totalLines += pLines;
+    });
+    return totalLines;
+};
+
+const calculateNodeSize = (name, content, mediaUrl, mediaHeight) => {
+    const safeName = name || '';
+    const safeContent = content || '';
+    const textLength = safeName.length + safeContent.length;
+
+    // Base dimensions for empty node
+    const baseW = 200;
+    const baseH = 100;
+
+    // Width scales with text length from 200 up to A4 width (794px)
+    const maxA4Width = 794;
+    let w = baseW + textLength * 0.5;
+    if (w > maxA4Width) w = maxA4Width;
+
+    // If there is an image, make sure width is at least 300px
+    if (mediaUrl && w < 300) {
+        w = 300;
+    }
+
+    // Calculate height needed to fit text vertically at this width `w`
+    // Padding-X is 10px on each side (total 20px). Using 8.5px average character width.
+    const charsPerLine = Math.max(12, Math.floor((w - 20) / 8.5));
+    const estimatedLines = estimateWrappedLines(safeContent, charsPerLine);
+    const textMinH = estimatedLines * 20;
+
+    let h = 33 + 20; // Header (33px: py-2*2 + font-14px + border-1px + 1px запас) + Padding-Y (20px total: 10px top + 10px bottom)
+    if (mediaUrl) {
+        h += (mediaHeight || 150);
+    }
+    if (safeContent) {
+        h += textMinH;
+    }
+    if (mediaUrl && safeContent) {
+        h += 10; // Gap (10px)
+    }
+
+    // Apply minimum height constraint
+    if (h < baseH) h = baseH;
+
+    return {
+        w: Math.round(w),
+        h: Math.round(h)
+    };
+};
+
 const defaultState = {
     currentContext: 'root',
     breadcrumbs: [{ id: 'root', name: 'Главный холст' }],
+
     layers: {},
     nodes: {},
     ports: {},
@@ -87,8 +164,6 @@ const defaultState = {
             visibleContexts: [],
             hiddenContexts: [],
             peekNodeId: null,
-            depthProfileOpen: true,
-            nestTargetId: null,
             autoDive: true,
             transitionFromContext: null,
         aiAgentSettings: {
@@ -199,16 +274,84 @@ const reducer = (state, action) => {
         case 'LOAD_STATE': {
             const payload = migrateToV10(action.payload) || {};
             const historyState = saveHistory(state, `Загружен проект из файла`);
+            
+            // Recalculate sizes of all nodes on LOAD_STATE to ensure they match their content, and force snapToGrid
+            const nodes = { ...payload.nodes };
+            Object.keys(nodes).forEach(id => {
+                const node = nodes[id];
+                if (node) {
+                    const size = node.type !== 'ai-agent'
+                        ? calculateNodeSize(node.name, node.content, node.mediaUrl, node.mediaHeight)
+                        : node.size;
+                    nodes[id] = {
+                        ...node,
+                        snapToGrid: true, // ВСЕГДА ВКЛЮЧЕНО ПРИ ИМПОРТЕ
+                        size
+                    };
+                }
+            });
+
+            // Автовыравнивание нод на слоях при загрузке
+            let layers = { ...payload.layers };
+            // Принудительно включаем привязку к сетке для всех слоев при импорте
+            Object.keys(layers).forEach(layerId => {
+                if (layers[layerId]) {
+                    layers[layerId] = {
+                        ...layers[layerId],
+                        snapToGrid: true // ВСЕГДА ВКЛЮЧЕНО ПРИ ИМПОРТЕ
+                    };
+                }
+            });
+            const geom = getGeometry();
+            if (geom && geom.getSmartPlacement) {
+                Object.keys(layers).forEach(layerId => {
+                    const layer = layers[layerId];
+                    const layerNodes = Object.values(nodes).filter(n => n.parentId === layerId);
+                    if (layerNodes.length > 0) {
+                        // Размещаем ноды слоя с чистого листа
+                        const { updatesById, newLayerSize } = geom.getSmartPlacement(layerNodes, layer, {});
+                        
+                        // Применяем новые позиции к нодам
+                        Object.keys(updatesById).forEach(nodeId => {
+                            if (nodes[nodeId]) {
+                                nodes[nodeId] = {
+                                    ...nodes[nodeId],
+                                    position: updatesById[nodeId].position
+                                };
+                            }
+                        });
+                        
+                        // Обновляем размер слоя
+                        layers[layerId] = {
+                            ...layer,
+                            size: newLayerSize
+                        };
+                    }
+                });
+            }
+
+            // Мягкое расталкивание слоев (предотвращение наложения при импорте, зазор 30px)
+            if (geom && geom.resolveLayerCollisionsOnLoad) {
+                layers = geom.resolveLayerCollisionsOnLoad(layers, 30);
+            }
+
+            // Выталкивание отдельных нод, перекрывающих слои или другие ноды (зазор 30px)
+            let finalNodes = nodes;
+            if (geom && geom.resolveContextCollisions) {
+                finalNodes = geom.resolveContextCollisions(nodes, layers);
+            }
+
             return {
                 ...state,
                 ...historyState,
-                layers: payload.layers || {},
-                nodes: payload.nodes || {},
+                layers: layers,
+                nodes: finalNodes,
                 ports: payload.ports || {},
                 links: payload.links || [],
                 canvas: payload.canvas || { offset: { x: 0, y: 0 }, zoom: 1 },
                 currentContext: payload.currentContext || 'root',
                 breadcrumbs: payload.breadcrumbs || [{ id: 'root', name: 'Главный холст' }],
+
                 cameraByContext: payload.cameraByContext || {},
                 navHistory: { past: [], future: [] },
                 selectedIds: [],
@@ -224,7 +367,7 @@ const reducer = (state, action) => {
             return {
                 ...state,
                 ...historyState,
-                layers: { ...state.layers, [id]: { ...action.payload, id, parentId } },
+                layers: { ...state.layers, [id]: { ...action.payload, id, parentId, snapToGrid: true } },
                 selectedIds: [id]
             };
         }
@@ -270,28 +413,79 @@ const reducer = (state, action) => {
                 selectedIds: state.selectedIds.filter(id => id !== idToRemove)
             };
         }
+        case 'ALIGN_LAYERS': {
+            const { contextId } = action.payload;
+            const geom = getGeometry();
+            if (!geom || !geom.alignLayers) return state;
+
+            const historyState = saveHistory(state, 'Выравнивание слоев');
+            const alignedLayers = geom.alignLayers(state.layers, state.nodes, contextId, 90);
+
+            return {
+                ...state,
+                ...historyState,
+                layers: {
+                    ...state.layers,
+                    ...alignedLayers
+                }
+            };
+        }
         case 'ADD_NODE': {
             // Используем переданный ID или генерируем новый с рандомизатором для предотвращения коллизий
             const id = action.payload.id || 'node-' + Date.now() + Math.floor(Math.random() * 1000);
             const historyState = saveHistory(state, `Добавлен узел: ${action.payload.name}`);
             const parentId = action.payload.parentId !== undefined ? action.payload.parentId : state.currentContext;
+            
+            const nodeData = { ...action.payload, id, parentId, snapToGrid: true };
+            if (nodeData.type !== 'ai-agent') {
+                nodeData.size = calculateNodeSize(nodeData.name, nodeData.content, nodeData.mediaUrl, nodeData.mediaHeight);
+            }
+            
             return {
                 ...state,
                 ...historyState,
                 // Сначала разворачиваем payload, затем жестко перезаписываем id, чтобы ключ и внутренний id всегда совпадали
-                nodes: { ...state.nodes, [id]: { ...action.payload, id, parentId } },
+                nodes: { ...state.nodes, [id]: nodeData },
                 selectedIds: [id]
             };
         }
         case 'UPDATE_NODE': {
             const { id, updates, skipHistory } = action.payload;
             const historyState = skipHistory ? {} : saveHistory(state, `Изменен узел: ${state.nodes[id].name}`);
+            
+            const oldNode = state.nodes[id];
+            const updatedNode = { ...oldNode, ...updates };
+            
+            // Контентные поля, при изменении которых size пересчитывается заново (userResized сбрасывается)
+            const isContentChange = 'content' in updates || 'mediaUrl' in updates || 'mediaHeight' in updates;
+            // Косметические поля (name, color и т.д.) — не сбрасывают userResized
+            const isSizeRelevant = isContentChange || 'name' in updates;
+            
+            if (updatedNode.type !== 'ai-agent' && isSizeRelevant) {
+                const autoSize = calculateNodeSize(updatedNode.name, updatedNode.content, updatedNode.mediaUrl, updatedNode.mediaHeight);
+                
+                if (isContentChange) {
+                    // Контент изменился — полный пересчёт, сброс ручного размера
+                    updatedNode.size = autoSize;
+                    updatedNode.userResized = false;
+                } else if (updatedNode.userResized) {
+                    // Косметическая правка (имя) + пользователь вручную ресайзил — авто-size как нижняя граница
+                    updatedNode.size = {
+                        w: Math.max(updatedNode.size?.w || 200, autoSize.w),
+                        h: Math.max(updatedNode.size?.h || 100, autoSize.h)
+                    };
+                } else {
+                    // Обычная правка имени без ручного ресайза — полный пересчёт
+                    updatedNode.size = autoSize;
+                }
+            }
+            
             return {
                 ...state,
                 ...historyState,
                 nodes: {
                     ...state.nodes,
-                    [id]: { ...state.nodes[id], ...updates }
+                    [id]: updatedNode
                 }
             };
         }
@@ -387,7 +581,7 @@ const reducer = (state, action) => {
 
                 const scaleX = (screenW - padding * 2) / totalW;
                 const scaleY = (screenH - padding * 2) / totalH;
-                targetZoom = Math.min(scaleX, scaleY, 5);
+                targetZoom = Math.min(scaleX, scaleY, 1.2);
                 targetOffsetX = (screenW / 2) - centerX * targetZoom;
                 targetOffsetY = (screenH / 2) - centerY * targetZoom;
             } else if (state.ports[id]) {
@@ -420,10 +614,17 @@ const reducer = (state, action) => {
                 }
             }
 
+            // Проверяем, есть ли у целевого узла дети
+            const hasChildren = state.nodes[id]
+                ? Object.values(state.nodes).some(n => n && n.parentId === id) ||
+                  Object.values(state.layers || {}).some(l => l && l.parentId === id)
+                : false;
+
             // Если уровень уже посещали, возвращаем его сохранённую камеру вместо расчётной.
             // keepCamera (zoom-to-dive, этап 6.2): камера не трогается — переход бесшовный.
+            // Для пустых узлов (без детей) — не меняем камеру (нет смысла зумить в пустоту).
             const savedCamera = (state.cameraByContext || {})[id];
-            const newCanvas = action.payload.keepCamera
+            const newCanvas = (action.payload.keepCamera || !hasChildren)
                 ? state.canvas
                 : (savedCamera || { offset: { x: targetOffsetX, y: targetOffsetY }, zoom: targetZoom });
 
@@ -508,12 +709,32 @@ const reducer = (state, action) => {
             const breadcrumbs = [{ id: 'root', name: 'Главный холст' }];
             if (targetId !== 'root') {
                 const path = [];
-                let curr = state.nodes[targetId];
+                // Поддержка nodes и layers как цели
+                let curr = state.nodes[targetId]
+                    || (state.layers && state.layers[targetId])
+                    || null;
+                // Порт → поднимаемся от его узла-владельца
+                if (!curr && state.ports[targetId]) {
+                    const port = state.ports[targetId];
+                    curr = state.nodes[port.nodeId];
+                    path.unshift({ id: targetId, name: port.name || 'Порт' });
+                }
+                // Связь → поднимаемся от source-узла
+                if (!curr) {
+                    const link = state.links.find(l => l && l.id === targetId);
+                    if (link) {
+                        const sp = state.ports[link.sourcePortId];
+                        curr = sp ? state.nodes[sp.nodeId] : null;
+                        path.unshift({ id: targetId, name: link.name || 'Связь' });
+                    }
+                }
                 const visited = new Set();
                 while (curr && curr.id !== 'root' && !visited.has(curr.id)) {
                     visited.add(curr.id);
                     path.unshift({ id: curr.id, name: curr.name });
-                    curr = state.nodes[curr.parentId];
+                    curr = state.nodes[curr.parentId]
+                        || (state.layers && state.layers[curr.parentId])
+                        || null;
                 }
                 breadcrumbs.push(...path);
             }

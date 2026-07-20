@@ -56,8 +56,11 @@ function Library() {
         let level = 1;
         let currentId = nodes[entityId]?.parentId || (layers && layers[entityId] ? layers[entityId].parentId : null);
         let parentNode = null;
+        const visited = new Set();
+        if (entityId) visited.add(entityId);
         
-        while (currentId && currentId !== 'root') {
+        while (currentId && currentId !== 'root' && !visited.has(currentId)) {
+            visited.add(currentId);
             if (layers && layers[currentId]) {
                 currentId = layers[currentId].parentId;
             } else if (nodes[currentId]) {
@@ -209,6 +212,13 @@ function Library() {
                         >
                             Связи ({links ? links.length : 0})
                         </button>
+                        <button 
+                            className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'levels' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
+                            onClick={() => setObjectTab('levels')}
+                            title="Уровни вложенности: все узлы-контейнеры с цепочками родитель→дитя"
+                        >
+                            Уровни
+                        </button>
                     </div>
                     <div className="flex flex-col overflow-y-auto no-scrollbar pb-2 flex-1">
                         {objectTab === 'tree' && <OutlinerTree onSelect={handleSelect} />}
@@ -320,6 +330,133 @@ function Library() {
                                 })}
                             </div>
                         )}
+
+                        {objectTab === 'levels' && (() => {
+                            // Вспомогательная: цепочка имён предков (Root → A → B)
+                            const buildParentChain = (id) => {
+                                const chain = [];
+                                let cur = nodes[id];
+                                const visited = new Set();
+                                while (cur && cur.parentId && cur.parentId !== 'root' && !visited.has(cur.parentId)) {
+                                    visited.add(cur.parentId);
+                                    const parent = nodes[cur.parentId];
+                                    if (parent) {
+                                        chain.unshift(parent.name);
+                                        cur = parent;
+                                    } else {
+                                        // Пропускаем слои (layers — визуальные фреймы)
+                                        const layerParent = layers && layers[cur.parentId];
+                                        if (layerParent) {
+                                            cur = { parentId: layerParent.parentId };
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                                return chain;
+                            };
+
+                            // Вспомогательная: максимальная глубина от узла вниз
+                            const getMaxDepthBelow = (rootId, visited) => {
+                                if (!visited) visited = new Set();
+                                if (visited.has(rootId)) return 0;
+                                visited.add(rootId);
+                                let maxD = 0;
+                                Object.values(nodes).forEach(n => {
+                                    if (n && n.parentId === rootId) {
+                                        maxD = Math.max(maxD, 1 + getMaxDepthBelow(n.id, visited));
+                                    }
+                                });
+                                return maxD;
+                            };
+
+                            // Собираем все узлы-контейнеры (имеющие детей)
+                            const containers = Object.values(nodes).filter(n => {
+                                if (!n) return false;
+                                return Object.values(nodes).some(child => child && child.parentId === n.id)
+                                    || Object.values(layers || {}).some(l => l && l.parentId === n.id);
+                            });
+
+                            if (containers.length === 0) {
+                                return <div className="text-gray-600 italic px-4 py-3 text-sm">Нет узлов с вложенным содержимым</div>;
+                            }
+
+                            // Вычисляем глубину каждого контейнера
+                            const withMeta = containers.map(n => {
+                                const info = getNodeHierarchyInfo(n.id);
+                                const depth = info.level - 1; // 0-based
+                                const stats = window.HierarchyUtils.getChildrenStats(nodes, layers, ports, links, n.id);
+                                const chain = buildParentChain(n.id);
+                                const depthBelow = getMaxDepthBelow(n.id);
+                                return { node: n, depth, stats, chain, depthBelow };
+                            });
+
+                            // Группируем по глубине
+                            const byDepth = {};
+                            withMeta.forEach(item => {
+                                const d = item.depth;
+                                if (!byDepth[d]) byDepth[d] = [];
+                                byDepth[d].push(item);
+                            });
+
+                            return (
+                                <div className="flex flex-col">
+                                    {Object.entries(byDepth)
+                                        .sort(([a], [b]) => Number(a) - Number(b))
+                                        .map(([depth, items]) => (
+                                            <div key={depth}>
+                                                <div className="px-3 py-1.5 bg-[#1a1a1a] text-[10px] uppercase text-gray-500 font-semibold border-b border-[#333]/50 sticky top-0 backdrop-blur-md z-10">
+                                                    Уровень {depth} {Number(depth) === 0 ? '(Главный холст)' : ''}
+                                                </div>
+                                                {items.map(item => {
+                                                    const isSelected = state.selectedIds && state.selectedIds.includes(item.node.id);
+                                                    const isCurrent = state.currentContext === item.node.id;
+                                                    return (
+                                                        <div
+                                                            key={item.node.id}
+                                                            className={`group flex items-center gap-2 px-3 py-2 cursor-pointer border-b border-[#333]/50 transition-colors
+                                                                ${isSelected ? 'bg-[var(--accent-blue)]/10 border-[var(--accent-blue)]/30' : 'hover:bg-white/5'}
+                                                                ${isCurrent ? 'border-l-2 border-l-[var(--accent-blue)]' : ''}
+                                                            `}
+                                                            onClick={() => handleSelect(item.node.id)}
+                                                            onDoubleClick={(e) => {
+                                                                e.stopPropagation();
+                                                                dispatch({ type: 'GO_TO_CONTEXT', payload: item.node.id });
+                                                            }}
+                                                            title={`${item.chain.length > 0 ? item.chain.join(' → ') + ' → ' : ''}${item.node.name} — ${item.stats.total} прямых детей, глубина вложенности: ${item.depthBelow}. Двойной клик — войти`}
+                                                        >
+                                                            <div
+                                                                className="w-3 h-3 rounded-[3px] shrink-0 border border-white/10"
+                                                                style={{ backgroundColor: item.node.color || '#333' }}
+                                                            ></div>
+                                                            <div className="flex flex-col overflow-hidden flex-1">
+                                                                <div className="flex items-center gap-1 overflow-hidden">
+                                                                    {item.chain.length > 0 && (
+                                                                        <span className="text-[10px] text-gray-600 truncate shrink-0">
+                                                                            {item.chain.join(' → ')} →
+                                                                        </span>
+                                                                    )}
+                                                                    <span className={`text-sm truncate ${isSelected ? 'text-[var(--accent-blue)] font-medium' : 'text-gray-200'}`}>
+                                                                        {item.node.name}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                                                                    <span>{item.stats.total} {item.stats.total === 1 ? 'дитя' : 'детей'}</span>
+                                                                    {item.stats.linkCount > 0 && <span>· {item.stats.linkCount} связей</span>}
+                                                                    {item.depthBelow > 0 && (
+                                                                        <span className="text-[var(--accent-blue)] opacity-70">· глубина {item.depthBelow}</span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                            <div className="icon-chevron-right text-gray-600 text-xs opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        ))}
+                                </div>
+                            );
+                        })()}
                     </div>
                 </div>
             ) : (
