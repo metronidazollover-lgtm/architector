@@ -164,7 +164,6 @@ const defaultState = {
             visibleContexts: [],
             hiddenContexts: [],
             peekNodeId: null,
-            autoDive: true,
             transitionFromContext: null,
         aiAgentSettings: {
             apiKey: '',
