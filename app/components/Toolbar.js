@@ -35,7 +35,7 @@ function Toolbar() {
     const handleImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        
+
         const reader = new FileReader();
         reader.onload = (event) => {
             try {
@@ -62,665 +62,291 @@ function Toolbar() {
                 // ================= LEVEL 1 LAYERS (Parent: root) =================
                 "layer-1-ui": {
                     id: "layer-1-ui",
-                    name: "Слой 1. Пользовательский интерфейс (UI)",
-                    content: "Рендеринг элементов управления, панелей свойств и библиотек узлов",
+                    name: "1. Пользовательский интерфейс (UI & Viewport)",
+                    content: "Интерактивный холст, боковые панели, библиотека и визуальные эффекты",
                     color: "#0284c7",
-                    position: { x: -350, y: -200 },
-                    size: { w: 600, h: 500 },
+                    position: { x: -400, y: -250 },
+                    size: { w: 620, h: 520 },
                     locked: false,
                     parentId: "root",
                     snapToGrid: true
                 },
                 "layer-1-state": {
                     id: "layer-1-state",
-                    name: "Слой 2. Управление состоянием (Redux)",
-                    content: "Центральное хранилище данных, история Undo/Redo и бизнес-логика",
+                    name: "2. Движок состояния (Store & Reducer)",
+                    content: "Центральное хранилище данных, история действий (Undo/Redo) и мутации",
                     color: "#0d9488",
-                    position: { x: -350, y: -200 }, // Пересекается для тестирования LOAD_STATE
-                    size: { w: 550, h: 400 },
+                    position: { x: 300, y: -250 },
+                    size: { w: 600, h: 520 },
                     locked: false,
                     parentId: "root",
                     snapToGrid: true
                 },
                 "layer-1-geom": {
                     id: "layer-1-geom",
-                    name: "Слой 3. Геометрия и разметка (Geometry)",
-                    content: "Калькуляторы физических размеров, авторазметки и коллизий на холсте",
+                    name: "3. Математика & Геометрия (Geometry)",
+                    content: "Расчет абсолютных координат, коллизий слоев, портов и авторазметки",
                     color: "#b45309",
-                    position: { x: -350, y: -200 }, // Пересекается для тестирования LOAD_STATE
-                    size: { w: 550, h: 420 },
+                    position: { x: -400, y: 350 },
+                    size: { w: 620, h: 500 },
                     locked: false,
                     parentId: "root",
                     snapToGrid: true
                 },
                 "layer-1-storage": {
                     id: "layer-1-storage",
-                    name: "Слой 4. Локальное хранилище (Storage)",
-                    content: "Синхронизация с LocalStorage, импорт/экспорт проектов и миграции версий",
+                    name: "4. Персистенция & Хранение (Storage)",
+                    content: "Синхронизация с LocalStorage, импорт/экспорт JSON и конвертация v9->v10",
                     color: "#4f46e5",
-                    position: { x: -350, y: -200 }, // Пересекается для тестирования LOAD_STATE
-                    size: { w: 550, h: 320 },
+                    position: { x: 300, y: 350 },
+                    size: { w: 600, h: 500 },
                     locked: false,
                     parentId: "root",
                     snapToGrid: true
                 },
-                "layer-1-api": {
-                    id: "layer-1-api",
-                    name: "Слой 5. ИИ Ассистент и API (AI Chat)",
-                    content: "Связующее звено с языковыми моделями, генерация графов и шторка чата",
+                "layer-1-ai": {
+                    id: "layer-1-ai",
+                    name: "5. ИИ-Ассистент & Копилот (AI & API)",
+                    content: "Автоматическое проектирование архитектур, чат-ассистент и исполнение JSON-команд",
                     color: "#7c3aed",
-                    position: { x: -350, y: -200 }, // Пересекается для тестирования LOAD_STATE
-                    size: { w: 550, h: 320 },
+                    position: { x: 950, y: 50 },
+                    size: { w: 620, h: 650 },
                     locked: false,
                     parentId: "root",
                     snapToGrid: true
                 },
 
-                // ================= LEVEL 2 LAYERS (Parent: node-1-viewport) =================
-                "layer-2-canvas": {
-                    id: "layer-2-canvas",
-                    name: "Слой 1. Фоновый Холст",
-                    content: "Координатная сетка, параллакс-эффекты и трансляция мыши в мировые координаты",
+                // ================= LEVEL 2 LAYERS (Inside node-ui-canvas) =================
+                "layer-2-canvas-render": {
+                    id: "layer-2-canvas-render",
+                    name: "Слой 2.1. Рендеринг граф-элементов",
+                    content: "Отрисовка SVG-связей, маркеров, портов и Z-Index подсветок",
                     color: "#0369a1",
-                    position: { x: 50, y: 80 },
-                    size: { w: 600, h: 450 },
+                    position: { x: 30, y: 70 },
+                    size: { w: 540, h: 360 },
                     locked: false,
-                    parentId: "node-1-viewport",
-                    snapToGrid: true
-                },
-                "layer-2-dragdrop": {
-                    id: "layer-2-dragdrop",
-                    name: "Слой 2. Drag & Drop Логика",
-                    content: "Захват событий перемещения, лимиты перетаскивания и шаги сетки",
-                    color: "#0f766e",
-                    position: { x: 50, y: 80 },
-                    size: { w: 550, h: 400 },
-                    locked: false,
-                    parentId: "node-1-viewport",
-                    snapToGrid: true
-                },
-                "layer-2-svg-links": {
-                    id: "layer-2-svg-links",
-                    name: "Слой 3. Отрисовка Связей",
-                    content: "Построение кривых Безье и ортогональных линий, SVG стрелки и маркеры",
-                    color: "#9a3412",
-                    position: { x: 50, y: 80 },
-                    size: { w: 550, h: 400 },
-                    locked: false,
-                    parentId: "node-1-viewport",
-                    snapToGrid: true
-                },
-                "layer-2-zoom": {
-                    id: "layer-2-zoom",
-                    name: "Слой 4. Масштабирование",
-                    content: "Расчет коэффициентов зума, фокус на курсоре и погружение в узлы (auto-dive)",
-                    color: "#312e81",
-                    position: { x: 50, y: 80 },
-                    size: { w: 550, h: 320 },
-                    locked: false,
-                    parentId: "node-1-viewport",
-                    snapToGrid: true
-                },
-                "layer-2-xray": {
-                    id: "layer-2-xray",
-                    name: "Слой 5. X-Ray & Фокус",
-                    content: "Z-index наложения, подсветка родительских контейнеров при выборе дочерних",
-                    color: "#581c87",
-                    position: { x: 50, y: 80 },
-                    size: { w: 550, h: 420 },
-                    locked: false,
-                    parentId: "node-1-viewport",
-                    snapToGrid: true
-                },
-
-                // ================= LEVEL 3 LAYERS (Parent: node-2-coord-trans) =================
-                "layer-3-transforms": {
-                    id: "layer-3-transforms",
-                    name: "Слой 1. Матрицы проекций",
-                    content: "Перемножение матриц масштаба и сдвига, оптимизация сложных траекторий",
-                    color: "#0284c7",
-                    position: { x: 50, y: 80 },
-                    size: { w: 500, h: 400 },
-                    locked: false,
-                    parentId: "node-2-coord-trans",
-                    snapToGrid: true
-                },
-                "layer-3-screen-space": {
-                    id: "layer-3-screen-space",
-                    name: "Слой 2. Экранное Окружение",
-                    content: "DOM координаты, devicePixelRatio калибровка и DPI рендеринг",
-                    color: "#0d9488",
-                    position: { x: 50, y: 80 },
-                    size: { w: 500, h: 400 },
-                    locked: false,
-                    parentId: "node-2-coord-trans",
-                    snapToGrid: true
-                },
-                "layer-3-canvas-space": {
-                    id: "layer-3-canvas-space",
-                    name: "Слой 3. Мировые Координаты",
-                    content: "Расчет позиций объектов внутри холста с учетом локальных смещений",
-                    color: "#b45309",
-                    position: { x: 50, y: 80 },
-                    size: { w: 500, h: 400 },
-                    locked: false,
-                    parentId: "node-2-coord-trans",
-                    snapToGrid: true
-                },
-                "layer-3-zoom-math": {
-                    id: "layer-3-zoom-math",
-                    name: "Слой 4. Математика Зума",
-                    content: "Плавное логарифмическое масштабирование и расчет точки привязки (Pivot)",
-                    color: "#4f46e5",
-                    position: { x: 50, y: 80 },
-                    size: { w: 500, h: 400 },
-                    locked: false,
-                    parentId: "node-2-coord-trans",
-                    snapToGrid: true
-                },
-                "layer-3-offsets": {
-                    id: "layer-3-offsets",
-                    name: "Слой 5. Смещения Камеры",
-                    content: "Хранение смещений viewport, инерционная прокрутка холста и возврат камеры",
-                    color: "#7c3aed",
-                    position: { x: 50, y: 80 },
-                    size: { w: 500, h: 450 },
-                    locked: false,
-                    parentId: "node-2-coord-trans",
+                    parentId: "node-ui-canvas",
                     snapToGrid: true
                 }
             },
             nodes: {
-                // ================= LEVEL 1 NODES (Parent: layers on root) =================
+                // ================= LEVEL 1 NODES (Parent: Layers) =================
                 // UI Layer Nodes
-                "node-1-viewport": {
-                    id: "node-1-viewport",
-                    name: "Рендерер Холста (Viewport)",
+                "node-ui-canvas": {
+                    id: "node-ui-canvas",
+                    name: "🔍 Интерактивный Холст (Canvas)",
                     group: "Интерфейс",
-                    content: "Интерактивная область визуализации, отрисовка узлов, портов и связей",
-                    color: "#1e293b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 280, h: 140 },
+                    content: "Главная область визуализации. Двойной клик — войти внутрь ноды (Dive In)!",
+                    color: "#0f172a",
+                    position: { x: 30, y: 80 },
+                    size: { w: 260, h: 160 },
                     parentId: "layer-1-ui",
                     snapToGrid: true,
                     shape: "rectangle",
                     mediaUrl: "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=200&auto=format&fit=crop&q=60",
-                    mediaHeight: 80
+                    mediaHeight: 70
                 },
-                "node-1-toolbar": {
-                    id: "node-1-toolbar",
+                "node-ui-toolbar": {
+                    id: "node-ui-toolbar",
                     name: "Панель Инструментов (Toolbar)",
                     group: "Интерфейс",
-                    content: "Быстрый доступ к добавлению узлов, слоев, экспорту и выравниванию",
+                    content: "Быстрый доступ к добавлению нод/слоев, автовыравниванию и экспорту",
                     color: "#1e293b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 220, h: 100 },
+                    position: { x: 320, y: 80 },
+                    size: { w: 250, h: 120 },
                     parentId: "layer-1-ui",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
-                "node-1-propertypanel": {
-                    id: "node-1-propertypanel",
-                    name: "Инспектор Свойств (PropertyPanel)",
+                "node-ui-library": {
+                    id: "node-ui-library",
+                    name: "Обозреватель Проекта (Library)",
                     group: "Интерфейс",
-                    content: "Форма изменения названий, цветов, форм и переключения привязки к сетке",
+                    content: "Дерево иерархии объектов, вкладка Уровни и Лог Истории (ширина 350px)",
                     color: "#1e293b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 240, h: 100 },
+                    position: { x: 30, y: 280 },
+                    size: { w: 260, h: 120 },
                     parentId: "layer-1-ui",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
-                "node-1-library": {
-                    id: "node-1-library",
-                    name: "Дерево и Библиотека",
+                "node-ui-property": {
+                    id: "node-ui-property",
+                    name: "Панель Свойств (PropertyPanel)",
                     group: "Интерфейс",
-                    content: "Обозреватель проекта с возможностью перетаскивания иерархии (Drag & Drop)",
+                    content: "Инспектор одиночного и массового редактирования названий, цветов и ID",
                     color: "#1e293b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 230, h: 100 },
+                    position: { x: 320, y: 280 },
+                    size: { w: 250, h: 120 },
                     parentId: "layer-1-ui",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
+
                 // State Layer Nodes
-                "node-1-store": {
-                    id: "node-1-store",
-                    name: "React Context Store",
+                "node-state-store": {
+                    id: "node-state-store",
+                    name: "React Context Provider",
                     group: "Состояние",
-                    content: "Хранилище единого источника правды (Single Source of Truth) для всего графа",
+                    content: "Единый источник правды (Single Source of Truth) графа диаграммы",
                     color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 220, h: 100 },
+                    position: { x: 30, y: 80 },
+                    size: { w: 240, h: 120 },
                     parentId: "layer-1-state",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
-                "node-1-reducer": {
-                    id: "node-1-reducer",
-                    name: "Диспетчер Редьюсера (Reducer)",
+                "node-state-reducer": {
+                    id: "node-state-reducer",
+                    name: "Чистый Редьюсер (Reducer)",
                     group: "Состояние",
-                    content: "Маршрутизация экшенов: ADD_NODE, ALIGN_LAYERS, LOAD_STATE и др.",
+                    content: "Чистая функция обработки экшенов: ADD_NODE, MOVE_SELECTED, DIVE_INTO",
                     color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 240, h: 100 },
+                    position: { x: 310, y: 80 },
+                    size: { w: 250, h: 120 },
                     parentId: "layer-1-state",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
-                "node-1-history": {
-                    id: "node-1-history",
-                    name: "Менеджер Истории",
+                "node-state-history": {
+                    id: "node-state-history",
+                    name: "Менеджер Истории (Undo/Redo)",
                     group: "Состояние",
-                    content: "Стеки past и future для Undo/Redo операций и логирования изменений",
+                    content: "Стеки past/future до 20 шагов с возможностью автопрыжка в контекст правки",
                     color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 210, h: 100 },
+                    position: { x: 30, y: 280 },
+                    size: { w: 240, h: 120 },
                     parentId: "layer-1-state",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
+                "node-state-nav": {
+                    id: "node-state-nav",
+                    name: "Навигатор Контекстов (NavHistory)",
+                    group: "Состояние",
+                    content: "Запоминание позиций камер каждого посещенного уровня (cameraByContext)",
+                    color: "#0f172a",
+                    position: { x: 310, y: 280 },
+                    size: { w: 250, h: 120 },
+                    parentId: "layer-1-state",
+                    snapToGrid: true,
+                    shape: "rectangle"
+                },
+
                 // Geometry Layer Nodes
-                "node-1-collision": {
-                    id: "node-1-collision",
-                    name: "Модуль Коллизий",
+                "node-geom-abs": {
+                    id: "node-geom-abs",
+                    name: "HierarchyUtils ( getAbsolutePosition )",
                     group: "Геометрия",
-                    content: "Выталкивание нод (gap=30px), слайдинг слоев (gap=10px) и расталкивание при LOAD_STATE",
+                    content: "Расчет мировых координат из относительных с защитой от циклов parentId",
                     color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 240, h: 100 },
+                    position: { x: 30, y: 80 },
+                    size: { w: 260, h: 120 },
                     parentId: "layer-1-geom",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
-                "node-1-layout": {
-                    id: "node-1-layout",
-                    name: "Умное Размещение (Layout)",
+                "node-geom-placement": {
+                    id: "node-geom-placement",
+                    name: "Умный Раскладчик (getSmartPlacement)",
                     group: "Геометрия",
-                    content: "Алгоритм getSmartPlacement для бесконфликтной укладки элементов в слои",
+                    content: "Авторазмещение нод внутри слоев без перекрытий с ужиманием под контент",
                     color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 240, h: 100 },
+                    position: { x: 320, y: 80 },
+                    size: { w: 260, h: 120 },
                     parentId: "layer-1-geom",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
-                "node-1-bbox": {
-                    id: "node-1-bbox",
-                    name: "Калькулятор Границ (BBox)",
+                "node-geom-collision": {
+                    id: "node-geom-collision",
+                    name: "Слайдер Коллизий (resolveCollision)",
                     group: "Геометрия",
-                    content: "Расчет bounding box для автоматического подбора размеров слоев (fit-to-content)",
+                    content: "Скольжение слоев стык-в-стык (10px) и расталкивание свободных нод (30px)",
                     color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 240, h: 100 },
+                    position: { x: 30, y: 280 },
+                    size: { w: 260, h: 120 },
                     parentId: "layer-1-geom",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
+                "node-geom-align": {
+                    id: "node-geom-align",
+                    name: "Выравниватель Слоев (alignLayers)",
+                    group: "Геометрия",
+                    content: "Вертикальная автосортировка слоев с естественными зазорами в 90px и 100px",
+                    color: "#1c1917",
+                    position: { x: 320, y: 280 },
+                    size: { w: 260, h: 120 },
+                    parentId: "layer-1-geom",
+                    snapToGrid: true,
+                    shape: "rectangle"
+                },
+
                 // Storage Layer Nodes
-                "node-1-localstorage": {
-                    id: "node-1-localstorage",
+                "node-storage-engine": {
+                    id: "node-storage-engine",
                     name: "LocalStorage Engine",
-                    group: "Хранение",
-                    content: "Сериализация стейта, автосохранение изменений при каждой транзакции",
+                    group: "Хранилище",
+                    content: "Персистенция стейта под ключом architector_state_v10 с защитой от квоты",
                     color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 220, h: 100 },
+                    position: { x: 30, y: 80 },
+                    size: { w: 240, h: 120 },
                     parentId: "layer-1-storage",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
-                "node-1-migration": {
-                    id: "node-1-migration",
-                    name: "Конвертер Версий (Migration)",
-                    group: "Хранение",
-                    content: "Самолечение структуры данных, миграция с legacy v9 на v10",
+                "node-storage-migration": {
+                    id: "node-storage-migration",
+                    name: "Конвертер Версий (migrateToV10)",
+                    group: "Хранилище",
+                    content: "Автоматическая бесшовная миграция старых файлов v9 в формат v10 на лету",
                     color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 220, h: 100 },
+                    position: { x: 300, y: 80 },
+                    size: { w: 250, h: 120 },
                     parentId: "layer-1-storage",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
-                // API / AI Layer Nodes
-                "node-1-ai-client": {
-                    id: "node-1-ai-client",
-                    name: "💬 AI Assistant (Copilot)",
+                "node-storage-export": {
+                    id: "node-storage-export",
+                    name: "JSON Экспортер / Импортер",
+                    group: "Хранилище",
+                    content: "Сохранение и загрузка JSON файлов архитектур в 1 клик",
+                    color: "#1e1b4b",
+                    position: { x: 30, y: 280 },
+                    size: { w: 240, h: 120 },
+                    parentId: "layer-1-storage",
+                    snapToGrid: true,
+                    shape: "rectangle"
+                },
+                "node-storage-demo": {
+                    id: "node-storage-demo",
+                    name: "Загрузчик Демо-Архитектур",
+                    group: "Хранилище",
+                    content: "Генерация богатых учебных графов со всеми видами связей и погружений",
+                    color: "#1e1b4b",
+                    position: { x: 300, y: 280 },
+                    size: { w: 250, h: 120 },
+                    parentId: "layer-1-storage",
+                    snapToGrid: true,
+                    shape: "rectangle"
+                },
+
+                // AI Layer Nodes
+                "node-ai-agent": {
+                    id: "node-ai-agent",
+                    name: "💬 AI Copilot Assistant",
                     group: "ИИ",
-                    content: "Автоматический разбор инцидентов и построение архитектур по текстовым промптам",
+                    content: "Интерактивный ИИ-инженер. Умеет строить графы и генерировать схемы!",
                     color: "#3b0764",
-                    position: { x: 50, y: 80 },
-                    size: { w: 280, h: 120 },
-                    parentId: "layer-1-api",
+                    position: { x: 30, y: 80 },
+                    size: { w: 280, h: 160 },
+                    parentId: "layer-1-ai",
                     snapToGrid: true,
                     shape: "rectangle",
                     type: "ai-agent"
                 },
-                "node-1-ai-chat": {
-                    id: "node-1-ai-chat",
-                    name: "Интерфейс AI-чата",
-                    group: "ИИ",
-                    content: "Интерактивная боковая панель с выводом сообщений от ИИ-помощника",
-                    color: "#3b0764",
-                    position: { x: 50, y: 80 },
-                    size: { w: 220, h: 100 },
-                    parentId: "layer-1-api",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-1-exporter": {
-                    id: "node-1-exporter",
-                    name: "JSON Exporter",
-                    group: "Хранение",
-                    content: "Формирование готовых JSON файлов проекта для скачивания",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 220, h: 100 },
-                    parentId: "layer-1-api",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-
-                // ================= LEVEL 2 NODES (Parent: node-1-viewport) =================
-                // Canvas layer
-                "node-2-grid-render": {
-                    id: "node-2-grid-render",
-                    name: "Отрисовщик Сетки",
-                    group: "Рендеринг",
-                    content: "Динамическая отрисовка линий сетки с шагом 20px с учетом масштаба",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-canvas",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-coord-trans": {
-                    id: "node-2-coord-trans",
-                    name: "Преобразователь Координат",
-                    group: "Рендеринг",
-                    content: "Конвертер экранных кликов в мировые координаты холста",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 260, h: 120 },
-                    parentId: "layer-2-canvas",
-                    snapToGrid: true,
-                    shape: "rectangle",
-                    mediaUrl: "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=200&auto=format&fit=crop&q=60",
-                    mediaHeight: 70
-                },
-                "node-2-canvas-container": {
-                    id: "node-2-canvas-container",
-                    name: "SVG Контейнер",
-                    group: "Рендеринг",
-                    content: "Контейнер SVG элементов, управляющий общим сдвигом холста",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-canvas",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-viewport-bounds": {
-                    id: "node-2-viewport-bounds",
-                    name: "Границы Видимости",
-                    group: "Рендеринг",
-                    content: "Отсечение невидимых элементов вне экрана для повышения производительности",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-canvas",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                // DragDrop layer
-                "node-2-mouse-events": {
-                    id: "node-2-mouse-events",
-                    name: "Слушатель Событий Мыши",
-                    group: "Взаимодействие",
-                    content: "Перехватчик мыши: mousedown, mousemove, mouseup",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-dragdrop",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-drag-state": {
-                    id: "node-2-drag-state",
-                    name: "Стейт Перетаскивания",
-                    group: "Взаимодействие",
-                    content: "Временное хранилище смещения текущего перетаскиваемого объекта",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-dragdrop",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-snap-align": {
-                    id: "node-2-snap-align",
-                    name: "Выравнивание по Сетке",
-                    group: "Взаимодействие",
-                    content: "Округление перемещаемых координат под шаг 20px (при snapToGrid: true)",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-dragdrop",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-layer-push": {
-                    id: "node-2-layer-push",
-                    name: "Слайдер Слоев (Push)",
-                    group: "Взаимодействие",
-                    content: "Сдвиг мешающих слоев по краям с зазором 10px при ручном перетаскивании",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-dragdrop",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                // SVG Links layer
-                "node-2-path-calc": {
-                    id: "node-2-path-calc",
-                    name: "Калькулятор Пути Связей",
-                    group: "Отрисовка связей",
-                    content: "Вычисление точек излома и траекторий для соединительных линий",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-svg-links",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-arrowheads": {
-                    id: "node-2-arrowheads",
-                    name: "Маркеры-Стрелки",
-                    group: "Отрисовка связей",
-                    content: "Генерация наконечников связей в виде SVG path треугольников",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-svg-links",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-orthogonal": {
-                    id: "node-2-orthogonal",
-                    name: "Ортогональные Линии",
-                    group: "Отрисовка связей",
-                    content: "Отрисовка соединений под прямыми углами 90 градусов",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-svg-links",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-bezier": {
-                    id: "node-2-bezier",
-                    name: "Связи Безье",
-                    group: "Отрисовка связей",
-                    content: "Интерполяция кривых Безье третьего порядка для красивых соединений",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-svg-links",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                // Zoom layer
-                "node-2-scale": {
-                    id: "node-2-scale",
-                    name: "Zoom Factor",
-                    group: "Масштаб",
-                    content: "Текущий масштаб отображения холста (от 0.1 до 3.0)",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-zoom",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-wheel-handler": {
-                    id: "node-2-wheel-handler",
-                    name: "Обработчик Колеса Мыши",
-                    group: "Масштаб",
-                    content: "Перехват скролла мыши и тачпада для плавного зумирования",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-zoom",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-autodive-check": {
-                    id: "node-2-autodive-check",
-                    name: "Авто-Погружение (Auto-Dive)",
-                    group: "Масштаб",
-                    content: "Проверка порогового масштаба для проваливания внутрь нод (если включено в UI)",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-zoom",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                // X-Ray & Focus layer
-                "node-2-depth-calc": {
-                    id: "node-2-depth-calc",
-                    name: "Глубина Иерархии",
-                    group: "Интеграция",
-                    content: "Вычисление depth для правильной расстановки CSS z-index (depth * 10)",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-xray",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-xray-pointer": {
-                    id: "node-2-xray-pointer",
-                    name: "X-Ray Pointer Events",
-                    group: "Интеграция",
-                    content: "Проброс кликов сквозь полупрозрачные родительские ноды (pointer-events-auto)",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-xray",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-parent-pulse": {
-                    id: "node-2-parent-pulse",
-                    name: "Аниматор Пульсации",
-                    group: "Интеграция",
-                    content: "Плавная CSS-подсветка контуров родительской ноды при выборе дочернего элемента",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-xray",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-selection-sync": {
-                    id: "node-2-selection-sync",
-                    name: "Синхронизатор выбора",
-                    group: "Интеграция",
-                    content: "Выделение и подсветка ноды в боковом обозревателе проекта",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-xray",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-2-focus-element": {
-                    id: "node-2-focus-element",
-                    name: "Центратор Камеры",
-                    group: "Интеграция",
-                    content: "Сдвиг и центрирование камеры viewport на выбранном элементе",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 200, h: 100 },
-                    parentId: "layer-2-xray",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-
-                // ================= LEVEL 3 NODES (Parent: node-2-coord-trans) =================
-                // Transforms Layer Nodes
-                "node-3-matrix-mult": {
-                    id: "node-3-matrix-mult",
-                    name: "Матричное Перемножение",
-                    group: "Трансформации",
-                    content: "Расчет итоговой 2D аффинной матрицы трансформаций",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-transforms",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-inverse-matrix": {
-                    id: "node-3-inverse-matrix",
-                    name: "Инверсия Матрицы",
-                    group: "Трансформации",
-                    content: "Калькулятор обратного преобразования для определения кликов по холсту",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-transforms",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-scale-factor": {
-                    id: "node-3-scale-factor",
-                    name: "Масштабирующий Вектор",
-                    group: "Трансформации",
-                    content: "Применение масштабирования по осям X и Y",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-transforms",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-affine-transform": {
-                    id: "node-3-affine-transform",
-                    name: "Аффинные Сдвиги",
-                    group: "Трансформации",
-                    content: "Применение сдвигов без искажения параллельности линий",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-transforms",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-transform-cache": {
                     id: "node-3-transform-cache",
                     name: "Кэш Матриц",
                     group: "Трансформации",
@@ -1296,7 +922,7 @@ function Toolbar() {
 
     return (
         <div className={`absolute top-1/2 -translate-y-1/2 glass-panel rounded-xl shadow-2xl p-2 flex flex-col gap-2 z-40 border-[#444] transition-all duration-300 ${state.ui.libraryOpen ? 'left-[382px]' : 'left-4'}`} data-file="components/Toolbar.js">
-            <button 
+            <button
                 className={`btn w-10 h-10 p-0 rounded-md ${state.ui.libraryOpen ? 'bg-[var(--accent-blue)] text-white border-[var(--accent-blue)]' : 'text-gray-400 hover:text-white'}`}
                 onClick={() => dispatch({ type: 'TOGGLE_UI', payload: 'libraryOpen' })}
                 title="Обозреватель проекта (Библиотека)"
@@ -1306,7 +932,7 @@ function Toolbar() {
 
             <div className="w-full h-px bg-[#333] my-1"></div>
 
-            <button 
+            <button
                 className="btn btn-primary w-10 h-10 p-0 rounded-md"
                 onClick={addNode}
                 title="Быстрый пустой узел"
@@ -1314,7 +940,7 @@ function Toolbar() {
                 <div className="icon-square-plus text-xl"></div>
             </button>
 
-            <button 
+            <button
                 className="btn w-10 h-10 p-0 rounded-md text-orange-400 hover:text-orange-300 hover:bg-white/5 border border-transparent"
                 onClick={() => {
                     const centerX = (-state.canvas.offset.x + window.innerWidth / 2) / state.canvas.zoom;
@@ -1335,7 +961,7 @@ function Toolbar() {
             </button>
 
             {Object.values(state.layers).filter(l => (l.parentId || 'root') === state.currentContext).length >= 2 && (
-                <button 
+                <button
                     className="btn w-10 h-10 p-0 rounded-md text-cyan-400 hover:text-cyan-300 hover:bg-white/5 border border-transparent"
                     onClick={() => {
                         dispatch({
@@ -1354,7 +980,7 @@ function Toolbar() {
                 </button>
             )}
 
-            <button 
+            <button
                 className={`btn w-10 h-10 p-0 rounded-md ${state.interactionMode === 'add-port' ? 'btn-primary' : 'text-gray-400 hover:text-white'}`}
                 title="Добавить порт (Кликните по краю узла)"
                 onClick={() => dispatch({ type: 'SET_MODE', payload: state.interactionMode === 'add-port' ? 'default' : 'add-port' })}
@@ -1364,7 +990,7 @@ function Toolbar() {
 
             <div className="w-full h-px bg-[#333] my-1"></div>
 
-            <button 
+            <button
                 className={`btn w-10 h-10 p-0 rounded-md transition-colors ${state.isolatedIds.length > 0 ? 'bg-orange-500 text-white hover:bg-orange-600' : 'text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed'}`}
                 title={state.isolatedIds.length > 0 ? "Отключить изоляцию" : "Изолировать выделенные элементы"}
                 disabled={state.selectedIds.length === 0 && state.isolatedIds.length === 0}
@@ -1382,7 +1008,7 @@ function Toolbar() {
 
             <div className="w-full h-px bg-[#333] my-1"></div>
 
-            <button 
+            <button
                 className={`btn w-10 h-10 p-0 rounded-md ${state.selectedIds && state.selectedIds.length > 0 && state.nodes[state.selectedIds[0]]?.type === 'ai-agent' ? 'bg-purple-600 text-white border-purple-500 shadow-[0_0_15px_rgba(147,51,234,0.5)]' : 'text-purple-400 hover:text-purple-300'}`}
                 title="Ассистент"
                 onClick={() => {
@@ -1403,22 +1029,22 @@ function Toolbar() {
 
             <div className="w-full h-px bg-[#333] my-1"></div>
 
-            <button 
+            <button
                 className="btn w-10 h-10 p-0 rounded-md text-gray-400 hover:text-white"
                 title="Импорт проекта"
                 onClick={() => fileInputRef.current?.click()}
             >
                 <div className="icon-upload text-xl"></div>
             </button>
-            <input 
-                type="file" 
-                ref={fileInputRef} 
-                className="hidden" 
+            <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
                 accept=".json"
                 onChange={handleImport}
             />
 
-            <button 
+            <button
                 className="btn w-10 h-10 p-0 rounded-md text-gray-400 hover:text-white"
                 title="Экспорт проекта"
                 onClick={handleExport}
@@ -1426,7 +1052,7 @@ function Toolbar() {
                 <div className="icon-download text-xl"></div>
             </button>
 
-            <button 
+            <button
                 className="btn w-10 h-10 p-0 rounded-md text-green-500/80 hover:text-green-400 hover:bg-green-500/10"
                 title="Загрузить тестовый проект (Тест)"
                 onClick={handleLoadDemo}
@@ -1434,7 +1060,7 @@ function Toolbar() {
                 <div className="icon-boxes text-xl"></div>
             </button>
 
-            <button 
+            <button
                 className="btn w-10 h-10 p-0 rounded-md text-red-500/80 hover:text-red-400 hover:bg-red-500/10"
                 title="Очистить проект (Удалить все сохранения)"
                 onClick={() => {
