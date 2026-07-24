@@ -141,13 +141,19 @@ function Library() {
     }, {});
 
     return (
-        <div className="absolute left-20 top-4 w-72 glass-panel rounded-xl flex flex-col max-h-[calc(100vh-2rem)] z-40 shadow-2xl overflow-hidden border-[#444]" data-file="components/Library.js">
+        <div className="absolute left-4 top-4 w-[350px] glass-panel rounded-xl flex flex-col max-h-[calc(100vh-2rem)] z-40 shadow-2xl overflow-hidden border-[#444] transition-all duration-300" data-file="components/Library.js">
             <div className="p-3 border-b border-[#333] flex items-center gap-4 bg-[#1f1f1f]">
                 <button 
                     className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'objects' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
                     onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'objects' })}
                 >
                     Объекты
+                </button>
+                <button 
+                    className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'levels' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
+                    onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'levels' })}
+                >
+                    Уровни
                 </button>
                 <button 
                     className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'history' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
@@ -180,44 +186,37 @@ function Library() {
             
             {activeTab === 'objects' ? (
                 <div className="flex flex-col flex-1 overflow-hidden">
-                    <div className="flex px-3 py-2 gap-2 border-b border-[#333]/50 bg-[#1a1a1a]/50 shrink-0 overflow-x-auto no-scrollbar">
+                    <div className="flex px-2 py-1.5 gap-1 border-b border-[#333]/50 bg-[#1a1a1a]/50 shrink-0 overflow-x-auto no-scrollbar">
                         <button
-                            className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'tree' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
+                            className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'tree' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
                             onClick={() => setObjectTab('tree')}
                             title="Иерархия всего проекта: клик — показать, двойной клик — войти, drag-and-drop — перевложить"
                         >
                             Дерево
                         </button>
                         <button
-                            className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'layers' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
+                            className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'layers' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
                             onClick={() => setObjectTab('layers')}
                         >
                             Слои ({(layers && Object.keys(layers).length) || 0})
                         </button>
                         <button 
-                            className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'nodes' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
+                            className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'nodes' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
                             onClick={() => setObjectTab('nodes')}
                         >
                             Узлы ({Object.keys(nodes).length})
                         </button>
                         <button 
-                            className={`flex-1 py-1.5 text-xs font-semibold rounded transition-colors ${objectTab === 'ports' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
+                            className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'ports' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
                             onClick={() => setObjectTab('ports')}
                         >
                             Порты ({Object.keys(ports).length})
                         </button>
                         <button 
-                            className={`flex-1 py-1.5 text-xs font-semibold rounded transition-colors ${objectTab === 'links' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
+                            className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'links' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
                             onClick={() => setObjectTab('links')}
                         >
                             Связи ({links ? links.length : 0})
-                        </button>
-                        <button 
-                            className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'levels' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
-                            onClick={() => setObjectTab('levels')}
-                            title="Уровни вложенности: все узлы-контейнеры с цепочками родитель→дитя"
-                        >
-                            Уровни
                         </button>
                     </div>
                     <div className="flex flex-col overflow-y-auto no-scrollbar pb-2 flex-1">
@@ -330,8 +329,12 @@ function Library() {
                                 })}
                             </div>
                         )}
-
-                        {objectTab === 'levels' && (() => {
+                    </div>
+                </div>
+            ) : activeTab === 'levels' ? (
+                <div className="flex flex-col flex-1 overflow-hidden">
+                    <div className="flex flex-col overflow-y-auto no-scrollbar pb-2 flex-1">
+                        {(() => {
                             // Вспомогательная: цепочка имён предков (Root → A → B)
                             const buildParentChain = (id) => {
                                 const chain = [];
