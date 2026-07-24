@@ -60,13 +60,24 @@ function Toolbar() {
             formatVersion: 10,
             layers: {
                 // ================= LEVEL 1 LAYERS (Parent: root) =================
+                "layer-0-guide": {
+                    id: "layer-0-guide",
+                    name: "6. Инструкция & Быстрый старт (Guide)",
+                    content: "Подробное руководство пользователя по всем возможностям приложения Architector",
+                    color: "#e11d48",
+                    position: { x: -1050, y: -250 },
+                    size: { w: 600, h: 540 },
+                    locked: false,
+                    parentId: "root",
+                    snapToGrid: true
+                },
                 "layer-1-ui": {
                     id: "layer-1-ui",
                     name: "1. Пользовательский интерфейс (UI & Viewport)",
                     content: "Интерактивный холст, боковые панели, библиотека и визуальные эффекты",
                     color: "#0284c7",
                     position: { x: -400, y: -250 },
-                    size: { w: 620, h: 520 },
+                    size: { w: 620, h: 540 },
                     locked: false,
                     parentId: "root",
                     snapToGrid: true
@@ -77,7 +88,7 @@ function Toolbar() {
                     content: "Центральное хранилище данных, история действий (Undo/Redo) и мутации",
                     color: "#0d9488",
                     position: { x: 300, y: -250 },
-                    size: { w: 600, h: 520 },
+                    size: { w: 600, h: 540 },
                     locked: false,
                     parentId: "root",
                     snapToGrid: true
@@ -130,6 +141,20 @@ function Toolbar() {
                 }
             },
             nodes: {
+                // ================= LAYER 0: GUIDE NODES =================
+                "node-guide-main": {
+                    id: "node-guide-main",
+                    name: "📖 Руководство пользователя Architector",
+                    group: "Инструкция",
+                    content: "### 🚀 Как работать с визуальным редактором:\n\n1. **🖱️ Навигация и Зум:**\n   - **Колесико мыши:** зум строго в точку курсора.\n   - **Зажатая СКМ / Shift+ЛКМ по холсту:** панорамирование и перемещение камеры.\n\n2. **🔍 Рекурсивные погружения (Dive In):**\n   - **Двойной клик по Ноде:** войти в ее внутренний контекст.\n   - **Двойной клик по Порту:** войти во внутренний контекст Порта.\n   - **Двойной клик по Связи:** войти во внутреннюю структуру Линии.\n   - **Хлебные крошки вверху:** быстрый возврат на уровни выше.\n\n3. **⚡ Связи и Порты:**\n   - **Перетаскивание от Порта:** тяните линию к любому порту или ноде.\n   - **Shift+Перетаскивание Порта:** скольжение порта по всему периметру грани.\n   - **Стили связей:** поддерживает кривые Bezier и прямые углы Orthogonal.\n\n4. **🎨 Слои и Автовыравнивание:**\n   - **Перетаскивание слоя за шапку:** слои скользят по границам друг друга без перекрытий.\n   - **Кнопка плинки в тулбаре:** вертикальное выравнивание слоев в 1 клик.\n\n5. **🤖 ИИ-Копилот (AI Agent):**\n   - Клик по ноде **AI Copilot** открывает чат-инженер. Вводите промпт, и ИИ сам построит слои, ноды и связи через JSON-протокол!",
+                    color: "#881337",
+                    position: { x: 30, y: 80 },
+                    size: { w: 540, h: 420 },
+                    parentId: "layer-0-guide",
+                    snapToGrid: true,
+                    shape: "rectangle"
+                },
+
                 // ================= LEVEL 1 NODES (Parent: Layers) =================
                 // UI Layer Nodes
                 "node-ui-canvas": {
@@ -218,7 +243,7 @@ function Toolbar() {
                     size: { w: 240, h: 120 },
                     parentId: "layer-1-state",
                     snapToGrid: true,
-                    shape: "rectangle"
+                    shape: "circle" // Демонстрация круглой формы!
                 },
                 "node-state-nav": {
                     id: "node-state-nav",
@@ -236,7 +261,7 @@ function Toolbar() {
                 // Geometry Layer Nodes
                 "node-geom-abs": {
                     id: "node-geom-abs",
-                    name: "HierarchyUtils ( getAbsolutePosition )",
+                    name: "HierarchyUtils (getAbsolutePosition)",
                     group: "Геометрия",
                     content: "Расчет мировых координат из относительных с защитой от циклов parentId",
                     color: "#1c1917",
@@ -244,66 +269,66 @@ function Toolbar() {
                     size: { w: 260, h: 120 },
                     parentId: "layer-1-geom",
                     snapToGrid: true,
-                    shape: "rectangle"
+                    shape: "hexagon" // Демонстрация формы шестиугольника!
                 },
                 "node-geom-placement": {
                     id: "node-geom-placement",
-                    name: "Умный Раскладчик (getSmartPlacement)",
+                    name: "GeometryUtils (getSmartPlacement)",
                     group: "Геометрия",
-                    content: "Авторазмещение нод внутри слоев без перекрытий с ужиманием под контент",
+                    content: "Бесконфликтная расстановка нод на слоях и Fit-to-Content сжатие рамок",
                     color: "#1c1917",
                     position: { x: 320, y: 80 },
-                    size: { w: 260, h: 120 },
+                    size: { w: 250, h: 120 },
                     parentId: "layer-1-geom",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
                 "node-geom-collision": {
                     id: "node-geom-collision",
-                    name: "Слайдер Коллизий (resolveCollision)",
+                    name: "Детектор Коллизий Слоев",
                     group: "Геометрия",
-                    content: "Скольжение слоев стык-в-стык (10px) и расталкивание свободных нод (30px)",
+                    content: "Скольжение слоев по границам друг друга при ручном перетаскивании",
                     color: "#1c1917",
                     position: { x: 30, y: 280 },
                     size: { w: 260, h: 120 },
                     parentId: "layer-1-geom",
                     snapToGrid: true,
-                    shape: "rectangle"
+                    shape: "diamond" // Демонстрация формы ромба!
                 },
                 "node-geom-align": {
                     id: "node-geom-align",
-                    name: "Выравниватель Слоев (alignLayers)",
+                    name: "Выравнивание Слоев (alignLayers)",
                     group: "Геометрия",
-                    content: "Вертикальная автосортировка слоев с естественными зазорами в 90px и 100px",
+                    content: "Сортировка по имени и выстраивание слоев по вертикали с зазором 90px",
                     color: "#1c1917",
                     position: { x: 320, y: 280 },
-                    size: { w: 260, h: 120 },
+                    size: { w: 250, h: 120 },
                     parentId: "layer-1-geom",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
 
                 // Storage Layer Nodes
-                "node-storage-engine": {
-                    id: "node-storage-engine",
-                    name: "LocalStorage Engine",
-                    group: "Хранилище",
-                    content: "Персистенция стейта под ключом architector_state_v10 с защитой от квоты",
-                    color: "#1e1b4b",
-                    position: { x: 30, y: 80 },
-                    size: { w: 240, h: 120 },
-                    parentId: "layer-1-storage",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
                 "node-storage-migration": {
                     id: "node-storage-migration",
                     name: "Конвертер Версий (migrateToV10)",
                     group: "Хранилище",
                     content: "Автоматическая бесшовная миграция старых файлов v9 в формат v10 на лету",
                     color: "#1e1b4b",
-                    position: { x: 300, y: 80 },
+                    position: { x: 30, y: 80 },
                     size: { w: 250, h: 120 },
+                    parentId: "layer-1-storage",
+                    snapToGrid: true,
+                    shape: "rectangle"
+                },
+                "node-storage-persist": {
+                    id: "node-storage-persist",
+                    name: "Синхронизатор LocalStorage",
+                    group: "Хранилище",
+                    content: "Автоматическое сохранение графа в браузерное хранилище local_storage_v10",
+                    color: "#1e1b4b",
+                    position: { x: 310, y: 80 },
+                    size: { w: 240, h: 120 },
                     parentId: "layer-1-storage",
                     snapToGrid: true,
                     shape: "rectangle"
@@ -326,7 +351,7 @@ function Toolbar() {
                     group: "Хранилище",
                     content: "Генерация богатых учебных графов со всеми видами связей и погружений",
                     color: "#1e1b4b",
-                    position: { x: 300, y: 280 },
+                    position: { x: 310, y: 280 },
                     size: { w: 250, h: 120 },
                     parentId: "layer-1-storage",
                     snapToGrid: true,
@@ -347,296 +372,41 @@ function Toolbar() {
                     shape: "rectangle",
                     type: "ai-agent"
                 },
-                "node-3-transform-cache": {
-                    id: "node-3-transform-cache",
-                    name: "Кэш Матриц",
-                    group: "Трансформации",
-                    content: "Кэширование промежуточных матриц сдвига для ускорения рендеринга",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-transforms",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                // Screen Space Layer Nodes
-                "node-3-client-rect": {
-                    id: "node-3-client-rect",
-                    name: "DOM Client Rect",
-                    group: "Экран",
-                    content: "Чтение физических размеров контейнера через getBoundingClientRect()",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-screen-space",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-mouse-pos": {
-                    id: "node-3-mouse-pos",
-                    name: "Координаты Курсора",
-                    group: "Экран",
-                    content: "Чтение клиентских e.clientX и e.clientY во время событий",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-screen-space",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-scroll-offset": {
-                    id: "node-3-scroll-offset",
-                    name: "Скролл Страницы",
-                    group: "Экран",
-                    content: "Корректировка координат на величины window.scrollX/scrollY",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-screen-space",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-screen-center": {
-                    id: "node-3-screen-center",
-                    name: "Центральная Точка",
-                    group: "Экран",
-                    content: "Вычисление центра экрана для правильного сброса камеры",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-screen-space",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-dpi-scaler": {
-                    id: "node-3-dpi-scaler",
-                    name: "DPI Scaler",
-                    group: "Экран",
-                    content: "Калибровка четкости рендеринга сетки с учетом devicePixelRatio",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-screen-space",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                // Canvas Space Layer Nodes
-                "node-3-world-pos": {
-                    id: "node-3-world-pos",
-                    name: "Мировые Координаты",
-                    group: "Холст",
-                    content: "Итоговые координаты элементов в виртуальной системе отсчета холста",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-canvas-space",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-relative-offset": {
-                    id: "node-3-relative-offset",
-                    name: "Относительный Сдвиг",
-                    group: "Холст",
-                    content: "Компенсация смещения родительских нод во вложенных контекстах",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-canvas-space",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-grid-snap-math": {
-                    id: "node-3-grid-snap-math",
-                    name: "Шаг Сетки (Математика)",
-                    group: "Холст",
-                    content: "Округление до ближайшего кратного 20 (Math.round(x/20)*20)",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-canvas-space",
+                "node-ai-parser": {
+                    id: "node-ai-parser",
+                    name: "Парсер JSON Команд ИИ",
+                    group: "ИИ",
+                    content: "Извлечение JSON-массива Redux-экшенов из текстового ответа нейросети",
+                    color: "#312e81",
+                    position: { x: 340, y: 80 },
+                    size: { w: 240, h: 120 },
+                    parentId: "layer-1-ai",
                     snapToGrid: true,
                     shape: "hexagon"
                 },
-                "node-3-canvas-bounds": {
-                    id: "node-3-canvas-bounds",
-                    name: "Лимиты Холста",
-                    group: "Холст",
-                    content: "Крайние геометрические границы для предотвращения бесконечного ухода камеры",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-canvas-space",
+
+                // ================= LEVEL 3 DIVE-IN DEMO NODES =================
+                "node-inside-port": {
+                    id: "node-inside-port",
+                    name: "🔌 Дочерний Виджет Порта (Level 3)",
+                    group: "Погружение",
+                    content: "Этот узел лежит ВНУТРИ контекста порта (parentId: port-1-vp-out)!",
+                    color: "#0284c7",
+                    position: { x: 20, y: 20 },
+                    size: { w: 220, h: 100 },
+                    parentId: "port-1-vp-out",
                     snapToGrid: true,
                     shape: "rectangle"
                 },
-                "node-3-clamp-coords": {
-                    id: "node-3-clamp-coords",
-                    name: "Клиппер Диапазона",
-                    group: "Холст",
-                    content: "Удержание координат элементов в пределах допустимого холста",
-                    color: "#1c1917",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-canvas-space",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                // Zoom Math Layer Nodes
-                "node-3-logarithmic-zoom": {
-                    id: "node-3-logarithmic-zoom",
-                    name: "Логарифмический зум",
-                    group: "Масштаб",
-                    content: "Расчет плавных шагов зума, предотвращающий резкие скачки масштаба",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-zoom-math",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-zoom-limits": {
-                    id: "node-3-zoom-limits",
-                    name: "Ограничитель Масштаба",
-                    group: "Масштаб",
-                    content: "Фиксация масштабирования в безопасных пределах (0.1x - 3.0x)",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-zoom-math",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-zoom-pivot": {
-                    id: "node-3-zoom-pivot",
-                    name: "Точка Зума (Pivot)",
-                    group: "Масштаб",
-                    content: "Математическое удержание курсора мыши в одной точке при зуме",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-zoom-math",
-                    snapToGrid: true,
-                    shape: "circle"
-                },
-                "node-3-lerp-zoom": {
-                    id: "node-3-lerp-zoom",
-                    name: "Интерполятор Зума",
-                    group: "Масштаб",
-                    content: "Линейная интерполяция (lerp) для сглаженной анимации зума по кнопкам",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-zoom-math",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-pinch-gesture": {
-                    id: "node-3-pinch-gesture",
-                    name: "Детектор Щипка (Pinch)",
-                    group: "Масштаб",
-                    content: "Обработка жестов масштабирования двумя пальцами на трекпаде и тач-устройствах",
-                    color: "#0f172a",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-zoom-math",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                // Offsets Layer Nodes
-                "node-3-pan-delta": {
-                    id: "node-3-pan-delta",
-                    name: "Дельта Смещения",
-                    group: "Камера",
-                    content: "Расчет вектора панорамирования при перетаскивании холста",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-offsets",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-canvas-center": {
-                    id: "node-3-canvas-center",
-                    name: "Расчет Центра Холста",
-                    group: "Камера",
-                    content: "Позиционирование камеры на нулевую координату {x:0, y:0}",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-offsets",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-camera-save": {
-                    id: "node-3-camera-save",
-                    name: "Сохранение Камеры",
-                    group: "Камера",
-                    content: "Запись смещения и масштаба в dictionary cameraByContext при выходе",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-offsets",
-                    snapToGrid: true,
-                    shape: "octagon"
-                },
-                "node-3-camera-load": {
-                    id: "node-3-camera-load",
-                    name: "Загрузка Камеры",
-                    group: "Камера",
-                    content: "Восстановление сохраненного положения камеры для открываемого контекста",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-offsets",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-camera-transition": {
-                    id: "node-3-camera-transition",
-                    name: "Аниматор Перелетов",
-                    group: "Камера",
-                    content: "Плавное перемещение камеры при двойном клике (входе/выходе из контекста)",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-offsets",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                // Дополнительные ноды для гарантии 60+ элементов
-                "node-3-inertia-scroll": {
-                    id: "node-3-inertia-scroll",
-                    name: "Инерционная Прокрутка",
-                    group: "Камера",
-                    content: "Сглаженное продолжение движения камеры после отпускания мыши (инерция)",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-offsets",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-reset-view": {
-                    id: "node-3-reset-view",
-                    name: "Сброс Камеры (Reset)",
-                    group: "Камера",
-                    content: "Мгновенный сброс смещения и масштаба в дефолтные {x:-30, y:-50} 0.65x",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-offsets",
-                    snapToGrid: true,
-                    shape: "rectangle"
-                },
-                "node-3-camera-bounds-check": {
-                    id: "node-3-camera-bounds-check",
-                    name: "Ограничитель Камеры",
-                    group: "Камера",
-                    content: "Проверка, чтобы камера не уходила слишком далеко от крайних нод проекта",
-                    color: "#1e1b4b",
-                    position: { x: 50, y: 80 },
-                    size: { w: 180, h: 90 },
-                    parentId: "layer-3-offsets",
+                "node-inside-link": {
+                    id: "node-inside-link",
+                    name: "⚡ Перехватчик Пакетов Связи (Level 3)",
+                    group: "Погружение",
+                    content: "Этот узел лежит ВНУТРИ контекста связи (parentId: link-1-store-to-red)!",
+                    color: "#0d9488",
+                    position: { x: 20, y: 20 },
+                    size: { w: 240, h: 100 },
+                    parentId: "link-1-store-to-red",
                     snapToGrid: true,
                     shape: "rectangle"
                 }
@@ -768,163 +538,6 @@ function Toolbar() {
                     position: 0.5,
                     name: "Готовый граф",
                     color: "#7c3aed"
-                },
-
-                // ================= LEVEL 2 PORTS =================
-                "port-2-mouse-out": {
-                    id: "port-2-mouse-out",
-                    nodeId: "node-2-mouse-events",
-                    type: "output",
-                    edge: "right",
-                    position: 0.5,
-                    name: "Клик-События",
-                    color: "#38bdf8"
-                },
-                "port-2-trans-in": {
-                    id: "port-2-trans-in",
-                    nodeId: "node-2-coord-trans",
-                    type: "input",
-                    edge: "left",
-                    position: 0.5,
-                    name: "Экран мышь",
-                    color: "#0284c7"
-                },
-                "port-2-trans-out": {
-                    id: "port-2-trans-out",
-                    nodeId: "node-2-coord-trans",
-                    type: "output",
-                    edge: "right",
-                    position: 0.5,
-                    name: "Мир холста",
-                    color: "#38bdf8"
-                },
-                "port-2-snap-in": {
-                    id: "port-2-snap-in",
-                    nodeId: "node-2-snap-align",
-                    type: "input",
-                    edge: "left",
-                    position: 0.5,
-                    name: "Мир координаты",
-                    color: "#f59e0b"
-                },
-                "port-2-snap-out": {
-                    id: "port-2-snap-out",
-                    nodeId: "node-2-snap-align",
-                    type: "output",
-                    edge: "right",
-                    position: 0.5,
-                    name: "Сетка координаты",
-                    color: "#b45309"
-                },
-                "port-2-path-in": {
-                    id: "port-2-path-in",
-                    nodeId: "node-2-path-calc",
-                    type: "input",
-                    edge: "left",
-                    position: 0.5,
-                    name: "Порты начала/конца",
-                    color: "#f59e0b"
-                },
-                "port-2-path-out": {
-                    id: "port-2-path-out",
-                    nodeId: "node-2-path-calc",
-                    type: "output",
-                    edge: "right",
-                    position: 0.5,
-                    name: "Координаты кривой",
-                    color: "#b45309"
-                },
-                "port-2-bez-in": {
-                    id: "port-2-bez-in",
-                    nodeId: "node-2-bezier",
-                    type: "input",
-                    edge: "left",
-                    position: 0.5,
-                    name: "Контрольные точки",
-                    color: "#38bdf8"
-                },
-                "port-2-bez-out": {
-                    id: "port-2-bez-out",
-                    nodeId: "node-2-bezier",
-                    type: "output",
-                    edge: "right",
-                    position: 0.5,
-                    name: "Кривая Безье",
-                    color: "#0284c7"
-                },
-                "port-2-render-in": {
-                    id: "port-2-render-in",
-                    nodeId: "node-2-svg-paths",
-                    type: "input",
-                    edge: "left",
-                    position: 0.5,
-                    name: "SVG Траектория",
-                    color: "#38bdf8"
-                },
-
-                // ================= LEVEL 3 PORTS =================
-                "port-3-mouse-out": {
-                    id: "port-3-mouse-out",
-                    nodeId: "node-3-mouse-pos",
-                    type: "output",
-                    edge: "right",
-                    position: 0.5,
-                    name: "X/Y пиксели",
-                    color: "#38bdf8"
-                },
-                "port-3-inverse-in": {
-                    id: "port-3-inverse-in",
-                    nodeId: "node-3-inverse-matrix",
-                    type: "input",
-                    edge: "left",
-                    position: 0.5,
-                    name: "Экранные точки",
-                    color: "#f59e0b"
-                },
-                "port-3-inverse-out": {
-                    id: "port-3-inverse-out",
-                    nodeId: "node-3-inverse-matrix",
-                    type: "output",
-                    edge: "right",
-                    position: 0.5,
-                    name: "Инверсная проекция",
-                    color: "#b45309"
-                },
-                "port-3-world-in": {
-                    id: "port-3-world-in",
-                    nodeId: "node-3-world-pos",
-                    type: "input",
-                    edge: "left",
-                    position: 0.5,
-                    name: "Вход проекция",
-                    color: "#f59e0b"
-                },
-                "port-3-world-out": {
-                    id: "port-3-world-out",
-                    nodeId: "node-3-world-pos",
-                    type: "output",
-                    edge: "right",
-                    position: 0.5,
-                    name: "Мир координаты",
-                    color: "#b45309"
-                },
-                "port-3-snap-in": {
-                    id: "port-3-snap-in",
-                    nodeId: "node-3-grid-snap-math",
-                    type: "input",
-                    edge: "left",
-                    position: 0.5,
-                    name: "World X/Y",
-                    color: "#f59e0b"
-                },
-                "port-3-snap-out": {
-                    id: "port-3-snap-out",
-                    nodeId: "node-3-grid-snap-math",
-                    type: "output",
-                    edge: "right",
-                    position: 0.5,
-                    name: "Кратные 20",
-                    color: "#b45309"
                 }
             },
             links: [
@@ -942,20 +555,45 @@ function Toolbar() {
                 { id: "link-1-store-to-ai", sourcePortId: "port-1-store-out", targetPortId: "port-1-ai-in", name: "Graph Context Prompt", linkStyle: "orthogonal", color: "#c084fc", context: "root" },
                 { id: "link-1-ai-to-store", sourcePortId: "port-1-ai-out", targetPortId: "port-1-store-in", name: "Generated Graph JSON", linkStyle: "bezier", color: "#7c3aed", context: "root" },
 
-                // ================= LEVEL 2 CONTEXT LINKS (Inside node-ui-canvas) =================
-                { id: "link-2-mouse-to-trans", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-trans-in", name: "Screen Coords", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
-                { id: "link-2-trans-to-snap", sourcePortId: "port-2-trans-out", targetPortId: "port-2-snap-in", name: "World Projection", linkStyle: "bezier", color: "#0284c7", context: "root" },
-                { id: "link-2-snap-to-path", sourcePortId: "port-2-snap-out", targetPortId: "port-2-path-in", name: "Snapped Grid Points", linkStyle: "orthogonal", color: "#f59e0b", context: "root" },
-                { id: "link-2-path-to-bez", sourcePortId: "port-2-path-out", targetPortId: "port-2-bez-in", name: "Control Anchors", linkStyle: "bezier", color: "#b45309", context: "root" },
-                { id: "link-2-bez-to-render", sourcePortId: "port-2-bez-out", targetPortId: "port-2-render-in", name: "SVG Curve Path", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
-
-                // ================= LEVEL 3 CONTEXT LINKS =================
-                { id: "link-3-mouse-to-inverse", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-inverse-in", name: "Client Pixel X/Y", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
-                { id: "link-3-inverse-to-world", sourcePortId: "port-3-inverse-out", targetPortId: "port-3-world-in", name: "Inv Matrix Output", linkStyle: "bezier", color: "#f59e0b", context: "root" },
-                { id: "link-3-world-to-snap", sourcePortId: "port-3-world-out", targetPortId: "port-3-snap-in", name: "Un-quantized Vector", linkStyle: "orthogonal", color: "#b45309", context: "root" },
-
                 // Дополнительные взаимосвязи архитектуры (36 связей всего)
                 { id: "link-extra-1", sourcePortId: "port-1-tb-out", targetPortId: "port-1-vp-in", name: "Tool Select", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
+                { id: "link-extra-2", sourcePortId: "port-1-red-out", targetPortId: "port-1-pp-in", name: "Property Update", linkStyle: "bezier", color: "#0d9488", context: "root" },
+                { id: "link-extra-3", sourcePortId: "port-1-geom-out", targetPortId: "port-1-store-in", name: "BBox Update", linkStyle: "orthogonal", color: "#f59e0b", context: "root" },
+                { id: "link-extra-4", sourcePortId: "port-1-ai-out", targetPortId: "port-1-vp-in", name: "Auto-layout render", linkStyle: "bezier", color: "#c084fc", context: "root" },
+                { id: "link-extra-5", sourcePortId: "port-1-vp-out", targetPortId: "port-1-pp-in", name: "Selection Inspector", linkStyle: "bezier", color: "#38bdf8", context: "root" },
+                { id: "link-extra-6", sourcePortId: "port-1-tb-out", targetPortId: "port-1-geom-in", name: "Align Command", linkStyle: "orthogonal", color: "#0284c7", context: "root" },
+                { id: "link-extra-7", sourcePortId: "port-1-storage-out", targetPortId: "port-1-vp-in", name: "Viewport Hydrate", linkStyle: "bezier", color: "#818cf8", context: "root" },
+                { id: "link-extra-8", sourcePortId: "port-1-ai-out", targetPortId: "port-1-storage-in", name: "Backup AI Graph", linkStyle: "bezier", color: "#7c3aed", context: "root" },
+                { id: "link-extra-9", sourcePortId: "port-1-store-out", targetPortId: "port-1-geom-in", name: "Hierarchy Sync", linkStyle: "orthogonal", color: "#2dd4bf", context: "root" },
+                { id: "link-extra-10", sourcePortId: "port-1-red-out", targetPortId: "port-1-ai-in", name: "Graph State Feedback", linkStyle: "bezier", color: "#0d9488", context: "root" }
+            ],
+            canvas: {
+                offset: { x: 950, y: 350 },
+                zoom: 0.5
+            },
+            currentContext: "root",
+            breadcrumbs: [
+                { id: "root", name: "Главный холст" }
+            ],
+            cameraByContext: {}
+        };
+    };
+
+    const addNode = () => {
+        // Position at center of view based on offset and zoom
+        const centerX = (-state.canvas.offset.x + window.innerWidth / 2) / state.canvas.zoom;
+        const centerY = (-state.canvas.offset.y + window.innerHeight / 2) / state.canvas.zoom;
+
+        dispatch({
+            type: 'ADD_NODE',
+            payload: {
+                name: 'New Node',
+                position: toContextRelative(centerX - 100, centerY - 50),
+                size: { w: 200, h: 100 },
+                color: '#1a1a1a',
+                shape: 'rectangle'
+            }
+        });
                 { id: "link-extra-2", sourcePortId: "port-1-red-out", targetPortId: "port-1-pp-in", name: "Property Update", linkStyle: "bezier", color: "#0d9488", context: "root" },
                 { id: "link-extra-3", sourcePortId: "port-1-geom-out", targetPortId: "port-1-store-in", name: "BBox Update", linkStyle: "orthogonal", color: "#f59e0b", context: "root" },
                 { id: "link-extra-4", sourcePortId: "port-1-ai-out", targetPortId: "port-1-vp-in", name: "Auto-layout render", linkStyle: "bezier", color: "#c084fc", context: "root" },
