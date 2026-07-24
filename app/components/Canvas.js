@@ -459,7 +459,7 @@ function Canvas() {
                 className="absolute origin-top-left"
                 style={{
                     transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
-                    transition: (isPanning || isInteracting) ? 'none' : 'transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1)'
+                    transition: (isPanning || isInteracting || !!state.pendingConnection) ? 'none' : 'transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1)'
                 }}
             >
                 {/* Render ALL Layers */}

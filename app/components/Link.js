@@ -202,20 +202,35 @@ function PendingLink() {
     const sourceAbs = window.HierarchyUtils.getAbsolutePosition(sourceNode.id, state.nodes, state.layers);
     const p1 = window.GeometryUtils.getPortAbsolutePosition(sourcePort, sourceNode, sourceAbs);
 
-    // Convert screen endPos to canvas absolute
-    const p2x = (endPos.x - offset.x) / zoom;
-    const p2y = (endPos.y - offset.y) / zoom;
+    // Convert screen endPos to canvas absolute with container rect offset check
+    const container = typeof document !== 'undefined' ? document.getElementById('canvas-container') : null;
+    const rect = container ? container.getBoundingClientRect() : { left: 0, top: 0 };
 
-    const dx = Math.max(Math.abs(p2x - p1.x) / 2, 50);
-    const dy = Math.max(Math.abs(p2y - p1.y) / 2, 50);
+    const p2x = (endPos.x - rect.left - offset.x) / zoom;
+    const p2y = (endPos.y - rect.top - offset.y) / zoom;
 
-    let cp1x = p1.x; let cp1y = p1.y;
-    if (p1.edge === 'left') cp1x -= dx;
-    if (p1.edge === 'right') cp1x += dx;
-    if (p1.edge === 'top') cp1y -= dy;
-    if (p1.edge === 'bottom') cp1y += dy;
+    const dx = p2x - p1.x;
+    const dy = p2y - p1.y;
 
-    const pathD = `M ${p1.x} ${p1.y} C ${cp1x} ${cp1y}, ${p2x} ${p2y}, ${p2x} ${p2y}`;
+    let cp1x = p1.x;
+    let cp1y = p1.y;
+
+    // Плавный вылет добавляется ТОЛЬКО если курсор тянется в естественную сторону грани порта.
+    // Если мышь тянется в любом другом направлении, линия идет напрямую ровно к курсору.
+    if (p1.edge === 'left' || p1.edge === 'right') {
+        const factor = p1.edge === 'right' ? 1 : -1;
+        const outDist = (dx * factor > 0) ? Math.min(dx * factor * 0.4, 80) : 0;
+        cp1x += factor * outDist;
+    } else {
+        const factor = p1.edge === 'bottom' ? 1 : -1;
+        const outDist = (dy * factor > 0) ? Math.min(dy * factor * 0.4, 80) : 0;
+        cp1y += factor * outDist;
+    }
+
+    const cp2x = p2x - (cp1x - p1.x);
+    const cp2y = p2y - (cp1y - p1.y);
+
+    const pathD = `M ${p1.x} ${p1.y} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2x} ${p2y}`;
 
     return (
         <svg className="absolute top-0 left-0 pointer-events-none z-50" style={{ width: '1px', height: '1px', overflow: 'visible' }}>
@@ -229,3 +244,5 @@ function PendingLink() {
         </svg>
     );
 }
+
+
