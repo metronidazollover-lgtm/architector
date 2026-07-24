@@ -43,6 +43,19 @@ test('DIVE_INTO: сохраняет камеру покидаемого конт
     assert.deepEqual(s1.selectedIds, []);
 });
 
+test('DIVE_INTO: порт поддерживает погружение и создание дочерних структур', () => {
+    const s0 = makeState();
+    const s1 = reducer(s0, { type: 'DIVE_INTO', payload: { id: 'portB', name: 'Порт: output' } });
+    assert.equal(s1.currentContext, 'portB');
+    assert.deepEqual(s1.breadcrumbs.map(b => b.id), ['root', 'portB']);
+
+    const s2 = reducer(s1, { type: 'ADD_NODE', payload: { id: 'nodeInPort', name: 'ChildInPort', position: { x: 10, y: 20 } } });
+    assert.equal(s2.nodes.nodeInPort.parentId, 'portB');
+    const childStats = HierarchyUtils.getChildrenStats(s2.nodes, s2.layers, s2.ports, s2.links, 'portB');
+    assert.equal(childStats.nodeCount, 1);
+});
+
+
 test('DIVE_INTO: повторный вход восстанавливает сохранённую камеру уровня', () => {
     const s0 = makeState();
     s0.cameraByContext = { nodeA: { offset: { x: -5, y: -7 }, zoom: 2.5 } };

@@ -613,11 +613,12 @@ const reducer = (state, action) => {
                 }
             }
 
-            // Проверяем, есть ли у целевого узла дети
-            const hasChildren = state.nodes[id]
-                ? Object.values(state.nodes).some(n => n && n.parentId === id) ||
-                  Object.values(state.layers || {}).some(l => l && l.parentId === id)
-                : false;
+            // Проверяем, есть ли у целевого контекста (узла/порта/связи) дети или присоединенные сущности
+            const hasChildren = Object.values(state.nodes).some(n => n && n.parentId === id) ||
+                                Object.values(state.layers || {}).some(l => l && l.parentId === id) ||
+                                !!state.ports[id] ||
+                                !!(state.links && state.links.some(l => l && l.id === id));
+
 
             // Если уровень уже посещали, возвращаем его сохранённую камеру вместо расчётной.
             // keepCamera (zoom-to-dive, этап 6.2): камера не трогается — переход бесшовный.

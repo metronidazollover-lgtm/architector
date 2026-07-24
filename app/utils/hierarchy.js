@@ -13,9 +13,11 @@ const HierarchyUtils = {
      * @param {string} id
      * @param {Object<string, NodeEntity>} nodes
      * @param {?Object<string, LayerEntity>} layers
+     * @param {?Object<string, PortEntity>} [ports]
      * @returns {Point}
      */
-    getAbsolutePosition: (id, nodes, layers) => {
+    getAbsolutePosition: (id, nodes, layers, ports = null) => {
+
         let generation = _absCache && _absCache.get(nodes);
         if (generation && generation.layersRef === layers) {
             const hit = generation.map.get(id);
@@ -34,7 +36,30 @@ const HierarchyUtils = {
             y += current.position?.y || 0;
             const parentId = current.parentId;
             if (!parentId || parentId === 'root') break;
-            current = nodes[parentId] || (layers && layers[parentId]) || null;
+            if (nodes[parentId]) {
+                current = nodes[parentId];
+            } else if (layers && layers[parentId]) {
+                current = layers[parentId];
+            } else if (ports && ports[parentId]) {
+                const port = ports[parentId];
+                const ownerNode = nodes[port.nodeId];
+                if (ownerNode) {
+                    const geom = typeof window !== 'undefined' ? window.GeometryUtils : null;
+                    if (geom && geom.getPortAbsolutePosition) {
+                        const ownerAbs = HierarchyUtils.getAbsolutePosition(ownerNode.id, nodes, layers, ports);
+                        const portAbs = geom.getPortAbsolutePosition(port, ownerNode, ownerAbs);
+                        x += portAbs.x;
+                        y += portAbs.y;
+                    } else {
+                        const ownerAbs = HierarchyUtils.getAbsolutePosition(ownerNode.id, nodes, layers, ports);
+                        x += ownerAbs.x;
+                        y += ownerAbs.y;
+                    }
+                }
+                break;
+            } else {
+                break;
+            }
         }
 
         const result = { x, y };
@@ -42,19 +67,22 @@ const HierarchyUtils = {
         return result;
     },
 
+
     /**
      * Пересчёт абсолютной позиции в систему координат нового родителя.
      * @param {Point} absPos
      * @param {string} newParentId
      * @param {Object<string, NodeEntity>} nodes
      * @param {?Object<string, LayerEntity>} layers
+     * @param {?Object<string, PortEntity>} [ports]
      * @returns {Point}
      */
-    toRelativePosition: (absPos, newParentId, nodes, layers) => {
+    toRelativePosition: (absPos, newParentId, nodes, layers, ports = null) => {
         if (!newParentId || newParentId === 'root') return { x: absPos.x, y: absPos.y };
-        const parentAbs = HierarchyUtils.getAbsolutePosition(newParentId, nodes, layers);
+        const parentAbs = HierarchyUtils.getAbsolutePosition(newParentId, nodes, layers, ports);
         return { x: absPos.x - parentAbs.x, y: absPos.y - parentAbs.y };
     },
+
 
     /**
      * Ограничивающий прямоугольник прямых детей узла (узлы и слои)

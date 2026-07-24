@@ -29,8 +29,11 @@ function OutlinerTreeRow({ entity, depth, ctx, visited = new Set() }) {
                 onClick={() => onSelect(entity.id)}
                 onDoubleClick={(e) => {
                     e.stopPropagation();
-                    if (state.nodes[entity.id]) dispatch({ type: 'GO_TO_CONTEXT', payload: entity.id });
+                    if (state.nodes[entity.id] || (state.ports && state.ports[entity.id]) || (state.layers && state.layers[entity.id])) {
+                        dispatch({ type: 'GO_TO_CONTEXT', payload: entity.id });
+                    }
                 }}
+
                 onDragStart={(e) => {
                     ctx.dragIdRef.current = entity.id;
                     e.dataTransfer.effectAllowed = 'move';
@@ -80,10 +83,23 @@ function OutlinerTree({ onSelect }) {
 
     const H = window.HierarchyUtils;
 
-    const childrenOf = (parentId) => [
-        ...Object.values(state.layers || {}).filter(l => l && l.parentId === parentId),
-        ...Object.values(state.nodes).filter(n => n && n.parentId === parentId)
-    ];
+    const childrenOf = (parentId) => {
+        const isPort = !!(state.ports && state.ports[parentId]);
+        if (isPort) {
+            return [
+                ...Object.values(state.layers || {}).filter(l => l && l.parentId === parentId),
+                ...Object.values(state.nodes).filter(n => n && n.parentId === parentId)
+            ];
+        }
+        const isNode = !!(state.nodes && state.nodes[parentId]);
+        const nodePorts = isNode ? Object.values(state.ports || {}).filter(p => p && p.nodeId === parentId) : [];
+        return [
+            ...Object.values(state.layers || {}).filter(l => l && l.parentId === parentId),
+            ...Object.values(state.nodes).filter(n => n && n.parentId === parentId),
+            ...nodePorts
+        ];
+    };
+
 
     const canDropOn = (targetId) => {
         const dragId = dragIdRef.current;
