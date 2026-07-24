@@ -1,7 +1,10 @@
 function Layer({ data }) {
     const { state, dispatch } = useStore();
-    const isSelected = state.selectedIds.includes(data.id);
+    const isExplicitlySelected = state.selectedIds.includes(data.id);
+    const isSelected = isExplicitlySelected;
     const { zoom } = state.canvas;
+
+
 
     // v10: position относительна родителю, на экран идут мировые координаты
     const absPos = window.HierarchyUtils.getAbsolutePosition(data.id, state.nodes, state.layers);
@@ -21,9 +24,10 @@ function Layer({ data }) {
         e.stopPropagation();
         if (e.button !== 0) return; // Only left click
 
-        if (!isSelected) {
+        if (!isExplicitlySelected) {
             dispatch({ type: 'SET_SELECTED', payload: data.id });
         }
+
 
         const startX = e.clientX;
         const startY = e.clientY;

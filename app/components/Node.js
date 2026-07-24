@@ -25,8 +25,10 @@ function Node({ data, isContextNode, isParentOfSelected }) {
         });
     }, [state.links, state.selectedIds, state.ports, data.id]);
 
-    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedLink || isConnectedToSelectedPort;
+    const isExplicitlySelected = state.selectedIds.includes(data.id);
+    const isSelected = isExplicitlySelected || isConnectedToSelectedLink || isConnectedToSelectedPort;
     const { zoom } = state.canvas;
+
 
 
 
@@ -69,17 +71,18 @@ function Node({ data, isContextNode, isParentOfSelected }) {
             return; // Не перетаскиваем при Shift-клике
         } else {
             if (isContextNode) {
-                if (!isSelected) {
+                if (!isExplicitlySelected) {
                     const childrenIds = [
                         ...Object.values(state.nodes).filter(n => n && n.parentId === data.id).map(n => n.id),
                         ...Object.values(state.layers).filter(l => l && l.parentId === data.id).map(l => l.id)
                     ];
                     dispatch({ type: 'SET_MULTI_SELECTED', payload: childrenIds });
                 }
-            } else if (!isSelected) {
+            } else if (!isExplicitlySelected) {
                 dispatch({ type: 'SET_SELECTED', payload: data.id });
             }
         }
+
 
         const startX = e.clientX;
         const startY = e.clientY;

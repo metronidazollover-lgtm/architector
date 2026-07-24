@@ -216,7 +216,9 @@ function Port({ data, nodeData }) {
         if (l.targetPortId === data.id && state.selectedIds.includes(l.sourcePortId)) return true;
         return false;
     });
-    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedLink || isConnectedToSelectedPort;
+    const isExplicitlySelected = state.selectedIds.includes(data.id);
+    const isSelected = isExplicitlySelected || isConnectedToSelectedLink || isConnectedToSelectedPort;
+
 
     const portColor = data.color || '#374151'; // default gray-700 equivalent
 
