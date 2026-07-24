@@ -1,7 +1,19 @@
 function Node({ data, isContextNode, isParentOfSelected }) {
     const { state, dispatch } = useStore();
-    const isSelected = state.selectedIds.includes(data.id);
+
+    const isConnectedToSelectedLink = React.useMemo(() => {
+        return state.links.some(l => {
+            if (!l || !state.selectedIds.includes(l.id)) return false;
+            const sPort = state.ports[l.sourcePortId];
+            const tPort = state.ports[l.targetPortId];
+            return (sPort && sPort.nodeId === data.id) || (tPort && tPort.nodeId === data.id);
+        });
+    }, [state.links, state.selectedIds, state.ports, data.id]);
+
+    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedLink;
     const { zoom } = state.canvas;
+
+
 
     const childrenStats = React.useMemo(
         () => window.HierarchyUtils.getChildrenStats(state.nodes, state.layers, state.ports, state.links, data.id),
