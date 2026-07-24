@@ -347,6 +347,7 @@ function Toolbar() {
                     shape: "rectangle",
                     type: "ai-agent"
                 },
+                "node-3-transform-cache": {
                     id: "node-3-transform-cache",
                     name: "Кэш Матриц",
                     group: "Трансформации",
