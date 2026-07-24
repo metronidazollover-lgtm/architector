@@ -1295,10 +1295,10 @@ function Toolbar() {
     };
 
     return (
-        <div className="absolute left-4 top-1/2 -translate-y-1/2 glass-panel rounded-xl shadow-2xl p-2 flex flex-col gap-2 z-40 border-[#444]" data-file="components/Toolbar.js">
+        <div className={`absolute top-1/2 -translate-y-1/2 glass-panel rounded-xl shadow-2xl p-2 flex flex-col gap-2 z-40 border-[#444] transition-all duration-300 ${state.ui.libraryOpen ? 'left-[382px]' : 'left-4'}`} data-file="components/Toolbar.js">
             <button 
-                className={`btn w-10 h-10 p-0 rounded-md ${state.ui.libraryOpen && state.ui.libraryTab === 'objects' ? 'bg-[var(--accent-blue)] text-white border-[var(--accent-blue)]' : 'text-gray-400 hover:text-white'}`}
-                onClick={() => state.ui.libraryOpen && state.ui.libraryTab === 'objects' ? dispatch({ type: 'TOGGLE_UI', payload: 'libraryOpen' }) : dispatch({ type: 'SET_LIBRARY_TAB', payload: 'objects' })}
+                className={`btn w-10 h-10 p-0 rounded-md ${state.ui.libraryOpen ? 'bg-[var(--accent-blue)] text-white border-[var(--accent-blue)]' : 'text-gray-400 hover:text-white'}`}
+                onClick={() => dispatch({ type: 'TOGGLE_UI', payload: 'libraryOpen' })}
                 title="Обозреватель проекта (Библиотека)"
             >
                 <div className="icon-list text-xl"></div>

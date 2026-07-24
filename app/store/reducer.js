@@ -158,7 +158,7 @@ const defaultState = {
     cameraByContext: {},
     navHistory: { past: [], future: [] },
         ui: {
-            libraryOpen: true,
+            libraryOpen: false,
             libraryTab: 'objects',
             aiAgentOpen: false,
             visibleContexts: [],
