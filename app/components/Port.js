@@ -25,8 +25,10 @@ function Port({ data, nodeData }) {
                 if (!hasMoved) return;
 
                 // Calculate absolute coordinates inside the canvas
-                const mouseX = (moveEvent.clientX - state.canvas.offset.x) / zoom;
-                const mouseY = (moveEvent.clientY - state.canvas.offset.y) / zoom;
+                const container = document.getElementById('canvas-container');
+                const rect = container ? container.getBoundingClientRect() : { left: 0, top: 0 };
+                const mouseX = (moveEvent.clientX - rect.left - state.canvas.offset.x) / zoom;
+                const mouseY = (moveEvent.clientY - rect.top - state.canvas.offset.y) / zoom;
                 
                 // Get relative position to the node's top-left corner (v10: мировая позиция узла)
                 const nodeAbs = window.HierarchyUtils.getAbsolutePosition(nodeData.id, state.nodes, state.layers);
@@ -111,8 +113,11 @@ function Port({ data, nodeData }) {
                 return;
             }
 
-            const p2x = (upEvent.clientX - state.canvas.offset.x) / zoom;
-            const p2y = (upEvent.clientY - state.canvas.offset.y) / zoom;
+            const container = document.getElementById('canvas-container');
+            const rect = container ? container.getBoundingClientRect() : { left: 0, top: 0 };
+            const p2x = (upEvent.clientX - rect.left - state.canvas.offset.x) / zoom;
+            const p2y = (upEvent.clientY - rect.top - state.canvas.offset.y) / zoom;
+
 
             let targetPortId = null;
             let minDist = 30 / zoom; // Snapping distance 30px
