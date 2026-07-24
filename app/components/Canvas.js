@@ -554,17 +554,19 @@ function Canvas() {
                     }
 
                     const isPortConnectedLink = !!(state.ports[state.currentContext] && (link.sourcePortId === state.currentContext || link.targetPortId === state.currentContext));
+                    const isNodeConnectedLink = !!(state.nodes[state.currentContext] && (state.ports[link.sourcePortId]?.nodeId === state.currentContext || state.ports[link.targetPortId]?.nodeId === state.currentContext));
+                    const isConnectedContextLink = isPortConnectedLink || isNodeConnectedLink;
                     const isPeekChildLink = !!state.ui.peekNodeId && effectiveContextId === state.ui.peekNodeId;
                     const isTransitionChildLink = !!state.ui.transitionFromContext && effectiveContextId === state.ui.transitionFromContext;
 
-                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChildLink && !isTransitionChildLink && !isPortConnectedLink) return null;
+                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChildLink && !isTransitionChildLink && !isConnectedContextLink) return null;
 
 
-                    const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isExplicitlyVisible && !isPeekChildLink && !isPortConnectedLink;
-                    const linkZIndex = isPeekChildLink ? 30 : (isCurrentChild || isPortConnectedLink ? 10 : (isExplicitlyVisible ? 5 : 0));
+                    const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isExplicitlyVisible && !isPeekChildLink && !isConnectedContextLink;
+                    const linkZIndex = isPeekChildLink ? 30 : (isCurrentChild || isConnectedContextLink ? 10 : (isExplicitlyVisible ? 5 : 0));
 
                     return (
-                        <div key={link.id || `link-${idx}`} className={`${isDimmed ? 'opacity-30 pointer-events-none grayscale' : ''} ${(isExplicitlyVisible || isPortConnectedLink) && !isCurrentChild ? 'pointer-events-auto opacity-100' : ''} ${isPeekChildLink ? 'opacity-100 pointer-events-none' : ''}`} style={{ zIndex: linkZIndex }}>
+                        <div key={link.id || `link-${idx}`} className={`${isDimmed ? 'opacity-30 pointer-events-none grayscale' : ''} ${(isExplicitlyVisible || isConnectedContextLink) && !isCurrentChild ? 'pointer-events-auto opacity-100' : ''} ${isPeekChildLink ? 'opacity-100 pointer-events-none' : ''}`} style={{ zIndex: linkZIndex }}>
                             <Link data={link} />
                         </div>
                     );
@@ -605,6 +607,17 @@ function Canvas() {
                         }
                     }
 
+                    // Show connected opposite nodes if we dive into a node
+                    let isConnectedToCurrentNodeContext = false;
+                    if (state.nodes[state.currentContext]) {
+                        const activeNodeId = state.currentContext;
+                        if (activeNodeId !== node.id) {
+                            isConnectedToCurrentNodeContext = state.links.some(l => 
+                                l && ((state.ports[l.sourcePortId]?.nodeId === activeNodeId && state.ports[l.targetPortId]?.nodeId === node.id) ||
+                                      (state.ports[l.targetPortId]?.nodeId === activeNodeId && state.ports[l.sourcePortId]?.nodeId === node.id))
+                            );
+                        }
+                    }
 
                     // Show source and target nodes if we dive into a link
                     let isLinkSourceOrTarget = false;
@@ -624,7 +637,7 @@ function Canvas() {
                     const isPeekDimmed = !!peekId && !isPeekChild && !isPeekSource && isCurrentChild;
                     const isTransitionChild = !!state.ui.transitionFromContext && effectiveContextId === state.ui.transitionFromContext;
 
-                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild && !isTransitionChild) return null;
+                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isConnectedToCurrentNodeContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild && !isTransitionChild) return null;
                     if (node.hidden) return null;
                     
                     // Проверяем, выделен ли хотя бы один из истинных детей этого узла (только среди узлов, исключая слои)
@@ -636,7 +649,8 @@ function Canvas() {
 
 
                     // Если узел имеет выделенных детей, он не должен затухать
-                    const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isExplicitlyVisible && !hasSelectedChild;
+                    const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isConnectedToCurrentNodeContext && !isExplicitlyVisible && !hasSelectedChild;
+
                     const isHighlightedContext = isTheContextItself || isLinkSourceOrTarget;
                     const depth = getContextDepth(effectiveContextId);
                     const nodeZIndex = (depth * 10) + (isPeekChild ? 30 : 0) + (isSelected ? 25 : 0) + (isCurrentChild ? 2 : 0) + (hasSelectedChild ? 1 : 0);

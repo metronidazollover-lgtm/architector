@@ -4,7 +4,11 @@ function Link({ data }) {
     const isConnectedToSelectedPort = state.selectedIds.some(sid => 
         state.ports[sid] && (data.sourcePortId === sid || data.targetPortId === sid)
     );
-    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedPort;
+    const isConnectedToSelectedNode = state.selectedIds.some(sid => 
+        state.nodes[sid] && ((state.ports[data.sourcePortId]?.nodeId === sid) || (state.ports[data.targetPortId]?.nodeId === sid))
+    );
+    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedPort || isConnectedToSelectedNode;
+
 
 
 
