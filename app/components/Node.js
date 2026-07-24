@@ -10,8 +10,24 @@ function Node({ data, isContextNode, isParentOfSelected }) {
         });
     }, [state.links, state.selectedIds, state.ports, data.id]);
 
-    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedLink;
+    const isConnectedToSelectedPort = React.useMemo(() => {
+        const ownsSelectedPort = state.selectedIds.some(sid => state.ports[sid] && state.ports[sid].nodeId === data.id);
+        if (ownsSelectedPort) return true;
+
+        return state.links.some(l => {
+            if (!l) return false;
+            const sPort = state.ports[l.sourcePortId];
+            const tPort = state.ports[l.targetPortId];
+            if (!sPort || !tPort) return false;
+            if (state.selectedIds.includes(sPort.id) && tPort.nodeId === data.id) return true;
+            if (state.selectedIds.includes(tPort.id) && sPort.nodeId === data.id) return true;
+            return false;
+        });
+    }, [state.links, state.selectedIds, state.ports, data.id]);
+
+    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedLink || isConnectedToSelectedPort;
     const { zoom } = state.canvas;
+
 
 
 
