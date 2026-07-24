@@ -594,54 +594,6 @@ function Toolbar() {
                 shape: 'rectangle'
             }
         });
-                { id: "link-extra-2", sourcePortId: "port-1-red-out", targetPortId: "port-1-pp-in", name: "Property Update", linkStyle: "bezier", color: "#0d9488", context: "root" },
-                { id: "link-extra-3", sourcePortId: "port-1-geom-out", targetPortId: "port-1-store-in", name: "BBox Update", linkStyle: "orthogonal", color: "#f59e0b", context: "root" },
-                { id: "link-extra-4", sourcePortId: "port-1-ai-out", targetPortId: "port-1-vp-in", name: "Auto-layout render", linkStyle: "bezier", color: "#c084fc", context: "root" },
-                { id: "link-extra-5", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-snap-in", name: "Direct Snap", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
-                { id: "link-extra-6", sourcePortId: "port-2-trans-out", targetPortId: "port-2-path-in", name: "Direct Pathing", linkStyle: "bezier", color: "#0284c7", context: "root" },
-                { id: "link-extra-7", sourcePortId: "port-2-snap-out", targetPortId: "port-2-render-in", name: "Direct Grid Render", linkStyle: "orthogonal", color: "#b45309", context: "root" },
-                { id: "link-extra-8", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-world-in", name: "Direct Projection", linkStyle: "bezier", color: "#38bdf8", context: "root" },
-                { id: "link-extra-9", sourcePortId: "port-3-inverse-out", targetPortId: "port-3-snap-in", name: "Inverse Snap", linkStyle: "orthogonal", color: "#f59e0b", context: "root" },
-                { id: "link-extra-10", sourcePortId: "port-1-vp-out", targetPortId: "port-1-pp-in", name: "Selection Inspector", linkStyle: "bezier", color: "#38bdf8", context: "root" },
-                { id: "link-extra-11", sourcePortId: "port-1-tb-out", targetPortId: "port-1-geom-in", name: "Align Command", linkStyle: "orthogonal", color: "#0284c7", context: "root" },
-                { id: "link-extra-12", sourcePortId: "port-1-storage-out", targetPortId: "port-1-vp-in", name: "Viewport Hydrate", linkStyle: "bezier", color: "#818cf8", context: "root" },
-                { id: "link-extra-13", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-bez-in", name: "Quick Line", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
-                { id: "link-extra-14", sourcePortId: "port-2-trans-out", targetPortId: "port-2-render-in", name: "Transform Render", linkStyle: "bezier", color: "#0284c7", context: "root" },
-                { id: "link-extra-15", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-snap-in", name: "Pixel Snap", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
-                { id: "link-extra-16", sourcePortId: "port-1-ai-out", targetPortId: "port-1-storage-in", name: "Backup AI Graph", linkStyle: "bezier", color: "#7c3aed", context: "root" },
-                { id: "link-extra-17", sourcePortId: "port-1-store-out", targetPortId: "port-1-geom-in", name: "Hierarchy Sync", linkStyle: "orthogonal", color: "#2dd4bf", context: "root" },
-                { id: "link-extra-18", sourcePortId: "port-1-red-out", targetPortId: "port-1-ai-in", name: "Graph State Feedback", linkStyle: "bezier", color: "#0d9488", context: "root" },
-                { id: "link-extra-19", sourcePortId: "port-3-world-out", targetPortId: "port-3-inverse-in", name: "Loopback Matrix", linkStyle: "orthogonal", color: "#b45309", context: "root" }
-            ],
-            canvas: {
-                offset: { x: 950, y: 350 },
-                zoom: 0.5
-            },
-            currentContext: "root",
-            breadcrumbs: [
-                { id: "root", name: "Главный холст" }
-            ],
-            cameraByContext: {}
-        };
-
-        dispatch({ type: 'LOAD_STATE', payload: demoState });
-    };
-
-    const addNode = () => {
-        // Position at center of view based on offset and zoom
-        const centerX = (-state.canvas.offset.x + window.innerWidth / 2) / state.canvas.zoom;
-        const centerY = (-state.canvas.offset.y + window.innerHeight / 2) / state.canvas.zoom;
-
-        dispatch({
-            type: 'ADD_NODE',
-            payload: {
-                name: 'New Node',
-                position: toContextRelative(centerX - 100, centerY - 50),
-                size: { w: 200, h: 100 },
-                color: '#1a1a1a',
-                shape: 'rectangle'
-            }
-        });
     };
 
     const clearCanvas = () => {
