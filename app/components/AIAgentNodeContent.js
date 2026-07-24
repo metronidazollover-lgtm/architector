@@ -106,31 +106,32 @@ ${JSON.stringify(nodesSummary)}
 `;
 
             if (aiAgentSettings.mode === 'agent') {
-                systemPrompt += `ВЫ РАБОТАЕТЕ В РЕЖИМЕ АГЕНТА И МОЖЕТЕ НАПРЯМУЮ РЕДАКТИРОВАТЬ ХОЛСТ!
+                systemPrompt += `ВЫ РАБОТАЕТЕ В РЕЖИМЕ АГЕНТА И МОЖЕТЕ НАПРЯМУЮ РЕДАКТИРОВАТЬ И СТРОИТЬ ХОЛСТ!
 
-ИНСТРУКЦИЯ ПО УПРАВЛЕНИЮ ХОЛСТОМ:
-Если пользователь просит СОЗДАТЬ, ИЗМЕНИТЬ или УДАЛИТЬ узлы, порты или связи (например, "создай группу узлов внутри Tasks"), вы ОБЯЗАНЫ выполнить это действие, добавив в конец своего ответа блок кода в формате JSON.
-Блок JSON должен содержать массив действий для Redux-подобного стора.
+ПОЛНАЯ ИНСТРУКЦИЯ И ПОДДЕРЖИВАЕМЫЕ JSON-ЭКШЕНЫ:
+Если пользователь просит СОЗДАТЬ, ИЗМЕНИТЬ или УДАЛИТЬ структуры (слои, узлы, медиа-карточки, порты или связи), вы ОБЯЗАНЫ приложить в самом конце своего ответа один блок кода в формате JSON с массивом экшенов:
 
-ФОРМАТ JSON БЛОКА:
 \`\`\`json
 [
-  { "type": "ADD_NODE", "payload": { "id": "node-unique-1", "name": "Имя", "position": {"x": 100, "y": 100}, "size": {"w": 200, "h": 100}, "color": "#HEX", "parentId": "id-узла-родителя (или 'root')" } },
-  { "type": "ADD_PORT", "payload": { "id": "port-unique-1", "nodeId": "node-unique-1", "type": "input|output", "edge": "left|right|top|bottom", "position": 0.5, "name": "Имя порта", "color": "#HEX" } },
-  { "type": "ADD_LINK", "payload": { "id": "link-unique-1", "sourcePortId": "port-unique-1", "targetPortId": "port-unique-2", "color": "#HEX", "context": "root" } },
-  { "type": "UPDATE_NODE", "payload": { "id": "existing-node-id", "updates": { "color": "#HEX", "name": "Новое имя", "content": "Новый текст" } } }
+  { "type": "ADD_LAYER", "payload": { "id": "layer-1-ui", "name": "1. UI Layer", "content": "Описание слоя", "color": "#0284c7", "position": {"x": -400, "y": -250}, "size": {"w": 600, "h": 400}, "parentId": "root" } },
+  { "type": "ADD_NODE", "payload": { "id": "node-1", "name": "Имя узла", "content": "Текст", "color": "#0f172a", "position": {"x": 30, "y": 80}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle|circle|hexagon|diamond", "type": "default|ai-agent", "mediaUrl": "https://...", "mediaHeight": 80 } },
+  { "type": "ADD_PORT", "payload": { "id": "port-1", "nodeId": "node-1", "type": "input|output", "edge": "left|right|top|bottom", "position": 0.5, "name": "Имя порта", "color": "#38bdf8" } },
+  { "type": "ADD_LINK", "payload": { "id": "link-1", "sourcePortId": "port-1", "targetPortId": "port-2", "name": "Название линии", "linkStyle": "orthogonal|bezier", "color": "#0284c7", "context": "root" } },
+  { "type": "UPDATE_NODE", "payload": { "id": "existing-node-id", "updates": { "color": "#HEX", "name": "Новое имя", "content": "Новый текст" } } },
+  { "type": "REPARENT_ENTITY", "payload": { "id": "node-1", "newParentId": "layer-1-ui" } },
+  { "type": "DELETE_SELECTED", "payload": { "ids": ["node-1", "port-1"] } }
 ]
 \`\`\`
 
-Важные правила:
-1. Вы должны сами придумывать уникальные ID для новых элементов.
-2. Чтобы поместить узел внутрь другого узла (например, внутрь Tasks), укажите "parentId": "ID-узла-Tasks". Узнайте ID из сводки узлов.
-3. Позиции (position x, y) указывайте относительно родительского холста (обычно от 0 до 800). Располагайте новые узлы так, чтобы они не перекрывали друг друга.
-4. Выдайте короткий текстовый ответ, а в самом конце — ТОЛЬКО один блок \`\`\`json ... \`\`\`.`;
+ВАЖНЫЕ ПРАВИЛА КООРДИНАТ И ИЕРАРХИИ (v10):
+1. Всегда придумывайте логичные уникальные текстовые ID (например \`layer-ui\`, \`node-canvas\`, \`port-out\`).
+2. Вложенность (parentId): родителем может выступать "root", ID слоя, ID узла, ID порта или ID связи.
+3. Координаты (position {x, y}): если parentId === 'root', позиция задается в мировой системе (например x: -400, y: -250). Если parentId !== 'root', позиция ОБЯЗАТЕЛЬНО считается локально от левого верхнего угла родителя (0, 0) (безопасные координаты x: 30..300, y: 70..250).
+4. Выдайте короткий вежливый пояснительный текстовый ответ, а в самом конце — ТОЛЬКО один блок \`\`\`json ... \`\`\`.`;
             } else {
                 systemPrompt += `ВЫ РАБОТАЕТЕ В РЕЖИМЕ CHAT-ONLY (Только чтение).
 Вы просто умный ИИ-помощник. Отвечайте на вопросы пользователя, анализируя предоставленный контекст холста.
-ВАМ СТРОГО ЗАПРЕЩЕНО генерировать JSON-команды для изменения графа. Вы не можете модифицировать узлы, порты или связи. Только консультации, советы и ответы на вопросы.`;
+ВАМ СТРОГО ЗАПРЕЩЕНО генерировать JSON-команды для изменения графа. Только консультации, советы и ответы на вопросы.`;
             }
 
             if (aiAgentSettings.llmEnabled === false) {
