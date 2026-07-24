@@ -206,7 +206,10 @@ function Port({ data, nodeData }) {
     };
 
     const isPending = state.pendingConnection && state.pendingConnection.sourcePortId === data.id;
-    const isSelected = state.selectedIds.includes(data.id);
+    const isConnectedToSelectedLink = state.links.some(l => 
+        l && state.selectedIds.includes(l.id) && (l.sourcePortId === data.id || l.targetPortId === data.id)
+    );
+    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedLink;
     const portColor = data.color || '#374151'; // default gray-700 equivalent
 
     // Calculate internal connections depth

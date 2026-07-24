@@ -617,8 +617,9 @@ function Canvas() {
                     
                     // Проверяем, выделен ли хотя бы один из истинных детей этого узла (только среди узлов, исключая слои)
                     const hasSelectedChild = state.selectedIds.some(sid => state.nodes[sid] && getTrueParentNodeId(sid) === node.id);
+                    const isConnectedToSelectedLink = state.links.some(l => l && state.selectedIds.includes(l.id) && ((state.ports[l.sourcePortId]?.nodeId === node.id) || (state.ports[l.targetPortId]?.nodeId === node.id)));
+                    const isSelected = state.selectedIds.includes(node.id) || isConnectedToSelectedLink;
 
-                    const isSelected = state.selectedIds.includes(node.id);
 
                     // Если узел имеет выделенных детей, он не должен затухать
                     const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isExplicitlyVisible && !hasSelectedChild;
