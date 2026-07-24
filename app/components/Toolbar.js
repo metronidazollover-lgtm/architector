@@ -649,7 +649,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.3,
-                    name: "Рендеринг запросов"
+                    name: "Рендеринг запросов",
+                    color: "#38bdf8"
                 },
                 "port-1-vp-out": {
                     id: "port-1-vp-out",
@@ -657,7 +658,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "События холста"
+                    name: "События холста",
+                    color: "#0284c7"
                 },
                 "port-1-tb-out": {
                     id: "port-1-tb-out",
@@ -665,7 +667,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Инструменты"
+                    name: "Инструменты",
+                    color: "#38bdf8"
                 },
                 "port-1-pp-in": {
                     id: "port-1-pp-in",
@@ -673,7 +676,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Данные элемента"
+                    name: "Данные элемента",
+                    color: "#0284c7"
                 },
                 "port-1-store-in": {
                     id: "port-1-store-in",
@@ -681,7 +685,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Экшены"
+                    name: "Экшены",
+                    color: "#2dd4bf"
                 },
                 "port-1-store-out": {
                     id: "port-1-store-out",
@@ -689,7 +694,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Свежий стейт"
+                    name: "Свежий стейт",
+                    color: "#0d9488"
                 },
                 "port-1-red-in": {
                     id: "port-1-red-in",
@@ -697,7 +703,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Обработка"
+                    name: "Обработка",
+                    color: "#2dd4bf"
                 },
                 "port-1-red-out": {
                     id: "port-1-red-out",
@@ -705,7 +712,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Новый стейт"
+                    name: "Новый стейт",
+                    color: "#0d9488"
                 },
                 "port-1-geom-in": {
                     id: "port-1-geom-in",
@@ -713,7 +721,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Координаты нод"
+                    name: "Координаты нод",
+                    color: "#f59e0b"
                 },
                 "port-1-geom-out": {
                     id: "port-1-geom-out",
@@ -721,7 +730,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Мировая матрица"
+                    name: "Мировая матрица",
+                    color: "#b45309"
                 },
                 "port-1-storage-in": {
                     id: "port-1-storage-in",
@@ -729,7 +739,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Дамп стейта"
+                    name: "Дамп стейта",
+                    color: "#818cf8"
                 },
                 "port-1-storage-out": {
                     id: "port-1-storage-out",
@@ -737,7 +748,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Сохраненный JSON"
+                    name: "Сохраненный JSON",
+                    color: "#4f46e5"
                 },
                 "port-1-ai-in": {
                     id: "port-1-ai-in",
@@ -745,7 +757,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.3,
-                    name: "Промпт"
+                    name: "Промпт",
+                    color: "#c084fc"
                 },
                 "port-1-ai-out": {
                     id: "port-1-ai-out",
@@ -753,7 +766,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Готовый граф"
+                    name: "Готовый граф",
+                    color: "#7c3aed"
                 },
 
                 // ================= LEVEL 2 PORTS =================
@@ -763,7 +777,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Клик-События"
+                    name: "Клик-События",
+                    color: "#38bdf8"
                 },
                 "port-2-trans-in": {
                     id: "port-2-trans-in",
@@ -771,7 +786,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Экран мышь"
+                    name: "Экран мышь",
+                    color: "#0284c7"
                 },
                 "port-2-trans-out": {
                     id: "port-2-trans-out",
@@ -779,7 +795,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Мир холста"
+                    name: "Мир холста",
+                    color: "#38bdf8"
                 },
                 "port-2-snap-in": {
                     id: "port-2-snap-in",
@@ -787,7 +804,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Мир координаты"
+                    name: "Мир координаты",
+                    color: "#f59e0b"
                 },
                 "port-2-snap-out": {
                     id: "port-2-snap-out",
@@ -795,7 +813,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Сетка координаты"
+                    name: "Сетка координаты",
+                    color: "#b45309"
                 },
                 "port-2-path-in": {
                     id: "port-2-path-in",
@@ -803,7 +822,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Порты начала/конца"
+                    name: "Порты начала/конца",
+                    color: "#f59e0b"
                 },
                 "port-2-path-out": {
                     id: "port-2-path-out",
@@ -811,7 +831,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Координаты кривой"
+                    name: "Координаты кривой",
+                    color: "#b45309"
                 },
                 "port-2-bez-in": {
                     id: "port-2-bez-in",
@@ -819,7 +840,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Контрольные точки"
+                    name: "Контрольные точки",
+                    color: "#38bdf8"
                 },
                 "port-2-bez-out": {
                     id: "port-2-bez-out",
@@ -827,7 +849,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Кривая Безье"
+                    name: "Кривая Безье",
+                    color: "#0284c7"
                 },
                 "port-2-render-in": {
                     id: "port-2-render-in",
@@ -835,7 +858,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "SVG Траектория"
+                    name: "SVG Траектория",
+                    color: "#38bdf8"
                 },
 
                 // ================= LEVEL 3 PORTS =================
@@ -845,7 +869,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "X/Y пиксели"
+                    name: "X/Y пиксели",
+                    color: "#38bdf8"
                 },
                 "port-3-inverse-in": {
                     id: "port-3-inverse-in",
@@ -853,7 +878,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Экранные точки"
+                    name: "Экранные точки",
+                    color: "#f59e0b"
                 },
                 "port-3-inverse-out": {
                     id: "port-3-inverse-out",
@@ -861,7 +887,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Инверсная проекция"
+                    name: "Инверсная проекция",
+                    color: "#b45309"
                 },
                 "port-3-world-in": {
                     id: "port-3-world-in",
@@ -869,7 +896,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "Вход проекция"
+                    name: "Вход проекция",
+                    color: "#f59e0b"
                 },
                 "port-3-world-out": {
                     id: "port-3-world-out",
@@ -877,7 +905,8 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Мир координаты"
+                    name: "Мир координаты",
+                    color: "#b45309"
                 },
                 "port-3-snap-in": {
                     id: "port-3-snap-in",
@@ -885,7 +914,8 @@ function Toolbar() {
                     type: "input",
                     edge: "left",
                     position: 0.5,
-                    name: "World X/Y"
+                    name: "World X/Y",
+                    color: "#f59e0b"
                 },
                 "port-3-snap-out": {
                     id: "port-3-snap-out",
@@ -893,56 +923,57 @@ function Toolbar() {
                     type: "output",
                     edge: "right",
                     position: 0.5,
-                    name: "Кратные 20"
+                    name: "Кратные 20",
+                    color: "#b45309"
                 }
             },
             links: [
                 // ================= ROOT CONTEXT LINKS (LEVEL 1) =================
-                { id: "link-1-vp-to-store", sourcePortId: "port-1-vp-out", targetPortId: "port-1-store-in", name: "User Action Dispatch", linkStyle: "bezier", context: "root" },
-                { id: "link-1-tb-to-store", sourcePortId: "port-1-tb-out", targetPortId: "port-1-store-in", name: "Toolbar Command", linkStyle: "orthogonal", context: "root" },
-                { id: "link-1-store-to-red", sourcePortId: "port-1-store-out", targetPortId: "port-1-red-in", name: "State Action Payload", linkStyle: "orthogonal", context: "root" },
-                { id: "link-1-red-to-store", sourcePortId: "port-1-red-out", targetPortId: "port-1-store-in", name: "New State Mutation", linkStyle: "bezier", context: "root" },
-                { id: "link-1-store-to-vp", sourcePortId: "port-1-store-out", targetPortId: "port-1-vp-in", name: "Canvas Re-render Sync", linkStyle: "orthogonal", context: "root" },
-                { id: "link-1-store-to-pp", sourcePortId: "port-1-store-out", targetPortId: "port-1-pp-in", name: "Selected Properties", linkStyle: "bezier", context: "root" },
-                { id: "link-1-vp-to-geom", sourcePortId: "port-1-vp-out", targetPortId: "port-1-geom-in", name: "Mouse Drag Delta", linkStyle: "orthogonal", context: "root" },
-                { id: "link-1-geom-to-vp", sourcePortId: "port-1-geom-out", targetPortId: "port-1-vp-in", name: "Absolute Bounds", linkStyle: "bezier", context: "root" },
-                { id: "link-1-store-to-storage", sourcePortId: "port-1-store-out", targetPortId: "port-1-storage-in", name: "LocalStorage Persist", linkStyle: "orthogonal", context: "root" },
-                { id: "link-1-storage-to-store", sourcePortId: "port-1-storage-out", targetPortId: "port-1-store-in", name: "Initial Hydrate", linkStyle: "bezier", context: "root" },
-                { id: "link-1-store-to-ai", sourcePortId: "port-1-store-out", targetPortId: "port-1-ai-in", name: "Graph Context Prompt", linkStyle: "orthogonal", context: "root" },
-                { id: "link-1-ai-to-store", sourcePortId: "port-1-ai-out", targetPortId: "port-1-store-in", name: "Generated Graph JSON", linkStyle: "bezier", context: "root" },
+                { id: "link-1-vp-to-store", sourcePortId: "port-1-vp-out", targetPortId: "port-1-store-in", name: "User Action Dispatch", linkStyle: "bezier", color: "#38bdf8", context: "root" },
+                { id: "link-1-tb-to-store", sourcePortId: "port-1-tb-out", targetPortId: "port-1-store-in", name: "Toolbar Command", linkStyle: "orthogonal", color: "#0284c7", context: "root" },
+                { id: "link-1-store-to-red", sourcePortId: "port-1-store-out", targetPortId: "port-1-red-in", name: "State Action Payload", linkStyle: "orthogonal", color: "#2dd4bf", context: "root" },
+                { id: "link-1-red-to-store", sourcePortId: "port-1-red-out", targetPortId: "port-1-store-in", name: "New State Mutation", linkStyle: "bezier", color: "#0d9488", context: "root" },
+                { id: "link-1-store-to-vp", sourcePortId: "port-1-store-out", targetPortId: "port-1-vp-in", name: "Canvas Re-render Sync", linkStyle: "orthogonal", color: "#2dd4bf", context: "root" },
+                { id: "link-1-store-to-pp", sourcePortId: "port-1-store-out", targetPortId: "port-1-pp-in", name: "Selected Properties", linkStyle: "bezier", color: "#0d9488", context: "root" },
+                { id: "link-1-vp-to-geom", sourcePortId: "port-1-vp-out", targetPortId: "port-1-geom-in", name: "Mouse Drag Delta", linkStyle: "orthogonal", color: "#f59e0b", context: "root" },
+                { id: "link-1-geom-to-vp", sourcePortId: "port-1-geom-out", targetPortId: "port-1-vp-in", name: "Absolute Bounds", linkStyle: "bezier", color: "#b45309", context: "root" },
+                { id: "link-1-store-to-storage", sourcePortId: "port-1-store-out", targetPortId: "port-1-storage-in", name: "LocalStorage Persist", linkStyle: "orthogonal", color: "#818cf8", context: "root" },
+                { id: "link-1-storage-to-store", sourcePortId: "port-1-storage-out", targetPortId: "port-1-store-in", name: "Initial Hydrate", linkStyle: "bezier", color: "#4f46e5", context: "root" },
+                { id: "link-1-store-to-ai", sourcePortId: "port-1-store-out", targetPortId: "port-1-ai-in", name: "Graph Context Prompt", linkStyle: "orthogonal", color: "#c084fc", context: "root" },
+                { id: "link-1-ai-to-store", sourcePortId: "port-1-ai-out", targetPortId: "port-1-store-in", name: "Generated Graph JSON", linkStyle: "bezier", color: "#7c3aed", context: "root" },
 
                 // ================= LEVEL 2 CONTEXT LINKS (Inside node-ui-canvas) =================
-                { id: "link-2-mouse-to-trans", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-trans-in", name: "Screen Coords", linkStyle: "orthogonal", context: "root" },
-                { id: "link-2-trans-to-snap", sourcePortId: "port-2-trans-out", targetPortId: "port-2-snap-in", name: "World Projection", linkStyle: "bezier", context: "root" },
-                { id: "link-2-snap-to-path", sourcePortId: "port-2-snap-out", targetPortId: "port-2-path-in", name: "Snapped Grid Points", linkStyle: "orthogonal", context: "root" },
-                { id: "link-2-path-to-bez", sourcePortId: "port-2-path-out", targetPortId: "port-2-bez-in", name: "Control Anchors", linkStyle: "bezier", context: "root" },
-                { id: "link-2-bez-to-render", sourcePortId: "port-2-bez-out", targetPortId: "port-2-render-in", name: "SVG Curve Path", linkStyle: "orthogonal", context: "root" },
+                { id: "link-2-mouse-to-trans", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-trans-in", name: "Screen Coords", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
+                { id: "link-2-trans-to-snap", sourcePortId: "port-2-trans-out", targetPortId: "port-2-snap-in", name: "World Projection", linkStyle: "bezier", color: "#0284c7", context: "root" },
+                { id: "link-2-snap-to-path", sourcePortId: "port-2-snap-out", targetPortId: "port-2-path-in", name: "Snapped Grid Points", linkStyle: "orthogonal", color: "#f59e0b", context: "root" },
+                { id: "link-2-path-to-bez", sourcePortId: "port-2-path-out", targetPortId: "port-2-bez-in", name: "Control Anchors", linkStyle: "bezier", color: "#b45309", context: "root" },
+                { id: "link-2-bez-to-render", sourcePortId: "port-2-bez-out", targetPortId: "port-2-render-in", name: "SVG Curve Path", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
 
                 // ================= LEVEL 3 CONTEXT LINKS =================
-                { id: "link-3-mouse-to-inverse", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-inverse-in", name: "Client Pixel X/Y", linkStyle: "orthogonal", context: "root" },
-                { id: "link-3-inverse-to-world", sourcePortId: "port-3-inverse-out", targetPortId: "port-3-world-in", name: "Inv Matrix Output", linkStyle: "bezier", context: "root" },
-                { id: "link-3-world-to-snap", sourcePortId: "port-3-world-out", targetPortId: "port-3-snap-in", name: "Un-quantized Vector", linkStyle: "orthogonal", context: "root" },
+                { id: "link-3-mouse-to-inverse", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-inverse-in", name: "Client Pixel X/Y", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
+                { id: "link-3-inverse-to-world", sourcePortId: "port-3-inverse-out", targetPortId: "port-3-world-in", name: "Inv Matrix Output", linkStyle: "bezier", color: "#f59e0b", context: "root" },
+                { id: "link-3-world-to-snap", sourcePortId: "port-3-world-out", targetPortId: "port-3-snap-in", name: "Un-quantized Vector", linkStyle: "orthogonal", color: "#b45309", context: "root" },
 
                 // Дополнительные взаимосвязи архитектуры (36 связей всего)
-                { id: "link-extra-1", sourcePortId: "port-1-tb-out", targetPortId: "port-1-vp-in", name: "Tool Select", linkStyle: "orthogonal", context: "root" },
-                { id: "link-extra-2", sourcePortId: "port-1-red-out", targetPortId: "port-1-pp-in", name: "Property Update", linkStyle: "bezier", context: "root" },
-                { id: "link-extra-3", sourcePortId: "port-1-geom-out", targetPortId: "port-1-store-in", name: "BBox Update", linkStyle: "orthogonal", context: "root" },
-                { id: "link-extra-4", sourcePortId: "port-1-ai-out", targetPortId: "port-1-vp-in", name: "Auto-layout render", linkStyle: "bezier", context: "root" },
-                { id: "link-extra-5", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-snap-in", name: "Direct Snap", linkStyle: "orthogonal", context: "root" },
-                { id: "link-extra-6", sourcePortId: "port-2-trans-out", targetPortId: "port-2-path-in", name: "Direct Pathing", linkStyle: "bezier", context: "root" },
-                { id: "link-extra-7", sourcePortId: "port-2-snap-out", targetPortId: "port-2-render-in", name: "Direct Grid Render", linkStyle: "orthogonal", context: "root" },
-                { id: "link-extra-8", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-world-in", name: "Direct Projection", linkStyle: "bezier", context: "root" },
-                { id: "link-extra-9", sourcePortId: "port-3-inverse-out", targetPortId: "port-3-snap-in", name: "Inverse Snap", linkStyle: "orthogonal", context: "root" },
-                { id: "link-extra-10", sourcePortId: "port-1-vp-out", targetPortId: "port-1-pp-in", name: "Selection Inspector", linkStyle: "bezier", context: "root" },
-                { id: "link-extra-11", sourcePortId: "port-1-tb-out", targetPortId: "port-1-geom-in", name: "Align Command", linkStyle: "orthogonal", context: "root" },
-                { id: "link-extra-12", sourcePortId: "port-1-storage-out", targetPortId: "port-1-vp-in", name: "Viewport Hydrate", linkStyle: "bezier", context: "root" },
-                { id: "link-extra-13", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-bez-in", name: "Quick Line", linkStyle: "orthogonal", context: "root" },
-                { id: "link-extra-14", sourcePortId: "port-2-trans-out", targetPortId: "port-2-render-in", name: "Transform Render", linkStyle: "bezier", context: "root" },
-                { id: "link-extra-15", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-snap-in", name: "Pixel Snap", linkStyle: "orthogonal", context: "root" },
-                { id: "link-extra-16", sourcePortId: "port-1-ai-out", targetPortId: "port-1-storage-in", name: "Backup AI Graph", linkStyle: "bezier", context: "root" },
-                { id: "link-extra-17", sourcePortId: "port-1-store-out", targetPortId: "port-1-geom-in", name: "Hierarchy Sync", linkStyle: "orthogonal", context: "root" },
-                { id: "link-extra-18", sourcePortId: "port-1-red-out", targetPortId: "port-1-ai-in", name: "Graph State Feedback", linkStyle: "bezier", context: "root" },
-                { id: "link-extra-19", sourcePortId: "port-3-world-out", targetPortId: "port-3-inverse-in", name: "Loopback Matrix", linkStyle: "orthogonal", context: "root" }
+                { id: "link-extra-1", sourcePortId: "port-1-tb-out", targetPortId: "port-1-vp-in", name: "Tool Select", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
+                { id: "link-extra-2", sourcePortId: "port-1-red-out", targetPortId: "port-1-pp-in", name: "Property Update", linkStyle: "bezier", color: "#0d9488", context: "root" },
+                { id: "link-extra-3", sourcePortId: "port-1-geom-out", targetPortId: "port-1-store-in", name: "BBox Update", linkStyle: "orthogonal", color: "#f59e0b", context: "root" },
+                { id: "link-extra-4", sourcePortId: "port-1-ai-out", targetPortId: "port-1-vp-in", name: "Auto-layout render", linkStyle: "bezier", color: "#c084fc", context: "root" },
+                { id: "link-extra-5", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-snap-in", name: "Direct Snap", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
+                { id: "link-extra-6", sourcePortId: "port-2-trans-out", targetPortId: "port-2-path-in", name: "Direct Pathing", linkStyle: "bezier", color: "#0284c7", context: "root" },
+                { id: "link-extra-7", sourcePortId: "port-2-snap-out", targetPortId: "port-2-render-in", name: "Direct Grid Render", linkStyle: "orthogonal", color: "#b45309", context: "root" },
+                { id: "link-extra-8", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-world-in", name: "Direct Projection", linkStyle: "bezier", color: "#38bdf8", context: "root" },
+                { id: "link-extra-9", sourcePortId: "port-3-inverse-out", targetPortId: "port-3-snap-in", name: "Inverse Snap", linkStyle: "orthogonal", color: "#f59e0b", context: "root" },
+                { id: "link-extra-10", sourcePortId: "port-1-vp-out", targetPortId: "port-1-pp-in", name: "Selection Inspector", linkStyle: "bezier", color: "#38bdf8", context: "root" },
+                { id: "link-extra-11", sourcePortId: "port-1-tb-out", targetPortId: "port-1-geom-in", name: "Align Command", linkStyle: "orthogonal", color: "#0284c7", context: "root" },
+                { id: "link-extra-12", sourcePortId: "port-1-storage-out", targetPortId: "port-1-vp-in", name: "Viewport Hydrate", linkStyle: "bezier", color: "#818cf8", context: "root" },
+                { id: "link-extra-13", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-bez-in", name: "Quick Line", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
+                { id: "link-extra-14", sourcePortId: "port-2-trans-out", targetPortId: "port-2-render-in", name: "Transform Render", linkStyle: "bezier", color: "#0284c7", context: "root" },
+                { id: "link-extra-15", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-snap-in", name: "Pixel Snap", linkStyle: "orthogonal", color: "#38bdf8", context: "root" },
+                { id: "link-extra-16", sourcePortId: "port-1-ai-out", targetPortId: "port-1-storage-in", name: "Backup AI Graph", linkStyle: "bezier", color: "#7c3aed", context: "root" },
+                { id: "link-extra-17", sourcePortId: "port-1-store-out", targetPortId: "port-1-geom-in", name: "Hierarchy Sync", linkStyle: "orthogonal", color: "#2dd4bf", context: "root" },
+                { id: "link-extra-18", sourcePortId: "port-1-red-out", targetPortId: "port-1-ai-in", name: "Graph State Feedback", linkStyle: "bezier", color: "#0d9488", context: "root" },
+                { id: "link-extra-19", sourcePortId: "port-3-world-out", targetPortId: "port-3-inverse-in", name: "Loopback Matrix", linkStyle: "orthogonal", color: "#b45309", context: "root" }
             ],
             canvas: {
                 offset: { x: 950, y: 350 },
