@@ -645,7 +645,7 @@ function Toolbar() {
                 // ================= LEVEL 1 PORTS =================
                 "port-1-vp-in": {
                     id: "port-1-vp-in",
-                    nodeId: "node-1-viewport",
+                    nodeId: "node-ui-canvas",
                     type: "input",
                     edge: "left",
                     position: 0.3,
@@ -653,7 +653,7 @@ function Toolbar() {
                 },
                 "port-1-vp-out": {
                     id: "port-1-vp-out",
-                    nodeId: "node-1-viewport",
+                    nodeId: "node-ui-canvas",
                     type: "output",
                     edge: "right",
                     position: 0.5,
@@ -661,7 +661,7 @@ function Toolbar() {
                 },
                 "port-1-tb-out": {
                     id: "port-1-tb-out",
-                    nodeId: "node-1-toolbar",
+                    nodeId: "node-ui-toolbar",
                     type: "output",
                     edge: "right",
                     position: 0.5,
@@ -669,7 +669,7 @@ function Toolbar() {
                 },
                 "port-1-pp-in": {
                     id: "port-1-pp-in",
-                    nodeId: "node-1-propertypanel",
+                    nodeId: "node-ui-property",
                     type: "input",
                     edge: "left",
                     position: 0.5,
@@ -677,7 +677,7 @@ function Toolbar() {
                 },
                 "port-1-store-in": {
                     id: "port-1-store-in",
-                    nodeId: "node-1-store",
+                    nodeId: "node-state-store",
                     type: "input",
                     edge: "left",
                     position: 0.5,
@@ -685,7 +685,7 @@ function Toolbar() {
                 },
                 "port-1-store-out": {
                     id: "port-1-store-out",
-                    nodeId: "node-1-store",
+                    nodeId: "node-state-store",
                     type: "output",
                     edge: "right",
                     position: 0.5,
@@ -693,7 +693,7 @@ function Toolbar() {
                 },
                 "port-1-red-in": {
                     id: "port-1-red-in",
-                    nodeId: "node-1-reducer",
+                    nodeId: "node-state-reducer",
                     type: "input",
                     edge: "left",
                     position: 0.5,
@@ -701,23 +701,55 @@ function Toolbar() {
                 },
                 "port-1-red-out": {
                     id: "port-1-red-out",
-                    nodeId: "node-1-reducer",
+                    nodeId: "node-state-reducer",
                     type: "output",
                     edge: "right",
                     position: 0.5,
                     name: "Новый стейт"
                 },
-                "port-1-ai-in": {
-                    id: "port-1-ai-in",
-                    nodeId: "node-1-ai-client",
+                "port-1-geom-in": {
+                    id: "port-1-geom-in",
+                    nodeId: "node-geom-abs",
                     type: "input",
                     edge: "left",
                     position: 0.5,
+                    name: "Координаты нод"
+                },
+                "port-1-geom-out": {
+                    id: "port-1-geom-out",
+                    nodeId: "node-geom-abs",
+                    type: "output",
+                    edge: "right",
+                    position: 0.5,
+                    name: "Мировая матрица"
+                },
+                "port-1-storage-in": {
+                    id: "port-1-storage-in",
+                    nodeId: "node-storage-migration",
+                    type: "input",
+                    edge: "left",
+                    position: 0.5,
+                    name: "Дамп стейта"
+                },
+                "port-1-storage-out": {
+                    id: "port-1-storage-out",
+                    nodeId: "node-storage-migration",
+                    type: "output",
+                    edge: "right",
+                    position: 0.5,
+                    name: "Сохраненный JSON"
+                },
+                "port-1-ai-in": {
+                    id: "port-1-ai-in",
+                    nodeId: "node-ai-agent",
+                    type: "input",
+                    edge: "left",
+                    position: 0.3,
                     name: "Промпт"
                 },
                 "port-1-ai-out": {
                     id: "port-1-ai-out",
-                    nodeId: "node-1-ai-client",
+                    nodeId: "node-ai-agent",
                     type: "output",
                     edge: "right",
                     position: 0.5,
@@ -789,6 +821,22 @@ function Toolbar() {
                     position: 0.5,
                     name: "Контрольные точки"
                 },
+                "port-2-bez-out": {
+                    id: "port-2-bez-out",
+                    nodeId: "node-2-bezier",
+                    type: "output",
+                    edge: "right",
+                    position: 0.5,
+                    name: "Кривая Безье"
+                },
+                "port-2-render-in": {
+                    id: "port-2-render-in",
+                    nodeId: "node-2-svg-paths",
+                    type: "input",
+                    edge: "left",
+                    position: 0.5,
+                    name: "SVG Траектория"
+                },
 
                 // ================= LEVEL 3 PORTS =================
                 "port-3-mouse-out": {
@@ -849,36 +897,52 @@ function Toolbar() {
                 }
             },
             links: [
-                {
-                    id: "link-fe-gw",
-                    sourcePortId: "port-fe-out",
-                    targetPortId: "port-gw-in",
-                    name: "HTTPS",
-                    linkStyle: "orthogonal", // Ортогональный стиль связи
-                    context: "root"
-                },
-                {
-                    id: "link-gw-core",
-                    sourcePortId: "port-gw-out",
-                    targetPortId: "port-core-in",
-                    name: "gRPC",
-                    linkStyle: "bezier", // Стиль Безье
-                    context: "root"
-                },
-                {
-                    id: "link-core-db",
-                    sourcePortId: "port-core-db",
-                    targetPortId: "port-db-in",
-                    name: "SQL",
-                    context: "root"
-                },
-                {
-                    id: "link-core-ai",
-                    sourcePortId: "port-core-ai",
-                    targetPortId: "port-ai-in",
-                    name: "Telemetry",
-                    context: "root"
-                }
+                // ================= ROOT CONTEXT LINKS (LEVEL 1) =================
+                { id: "link-1-vp-to-store", sourcePortId: "port-1-vp-out", targetPortId: "port-1-store-in", name: "User Action Dispatch", linkStyle: "bezier", context: "root" },
+                { id: "link-1-tb-to-store", sourcePortId: "port-1-tb-out", targetPortId: "port-1-store-in", name: "Toolbar Command", linkStyle: "orthogonal", context: "root" },
+                { id: "link-1-store-to-red", sourcePortId: "port-1-store-out", targetPortId: "port-1-red-in", name: "State Action Payload", linkStyle: "orthogonal", context: "root" },
+                { id: "link-1-red-to-store", sourcePortId: "port-1-red-out", targetPortId: "port-1-store-in", name: "New State Mutation", linkStyle: "bezier", context: "root" },
+                { id: "link-1-store-to-vp", sourcePortId: "port-1-store-out", targetPortId: "port-1-vp-in", name: "Canvas Re-render Sync", linkStyle: "orthogonal", context: "root" },
+                { id: "link-1-store-to-pp", sourcePortId: "port-1-store-out", targetPortId: "port-1-pp-in", name: "Selected Properties", linkStyle: "bezier", context: "root" },
+                { id: "link-1-vp-to-geom", sourcePortId: "port-1-vp-out", targetPortId: "port-1-geom-in", name: "Mouse Drag Delta", linkStyle: "orthogonal", context: "root" },
+                { id: "link-1-geom-to-vp", sourcePortId: "port-1-geom-out", targetPortId: "port-1-vp-in", name: "Absolute Bounds", linkStyle: "bezier", context: "root" },
+                { id: "link-1-store-to-storage", sourcePortId: "port-1-store-out", targetPortId: "port-1-storage-in", name: "LocalStorage Persist", linkStyle: "orthogonal", context: "root" },
+                { id: "link-1-storage-to-store", sourcePortId: "port-1-storage-out", targetPortId: "port-1-store-in", name: "Initial Hydrate", linkStyle: "bezier", context: "root" },
+                { id: "link-1-store-to-ai", sourcePortId: "port-1-store-out", targetPortId: "port-1-ai-in", name: "Graph Context Prompt", linkStyle: "orthogonal", context: "root" },
+                { id: "link-1-ai-to-store", sourcePortId: "port-1-ai-out", targetPortId: "port-1-store-in", name: "Generated Graph JSON", linkStyle: "bezier", context: "root" },
+
+                // ================= LEVEL 2 CONTEXT LINKS (Inside node-ui-canvas) =================
+                { id: "link-2-mouse-to-trans", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-trans-in", name: "Screen Coords", linkStyle: "orthogonal", context: "root" },
+                { id: "link-2-trans-to-snap", sourcePortId: "port-2-trans-out", targetPortId: "port-2-snap-in", name: "World Projection", linkStyle: "bezier", context: "root" },
+                { id: "link-2-snap-to-path", sourcePortId: "port-2-snap-out", targetPortId: "port-2-path-in", name: "Snapped Grid Points", linkStyle: "orthogonal", context: "root" },
+                { id: "link-2-path-to-bez", sourcePortId: "port-2-path-out", targetPortId: "port-2-bez-in", name: "Control Anchors", linkStyle: "bezier", context: "root" },
+                { id: "link-2-bez-to-render", sourcePortId: "port-2-bez-out", targetPortId: "port-2-render-in", name: "SVG Curve Path", linkStyle: "orthogonal", context: "root" },
+
+                // ================= LEVEL 3 CONTEXT LINKS =================
+                { id: "link-3-mouse-to-inverse", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-inverse-in", name: "Client Pixel X/Y", linkStyle: "orthogonal", context: "root" },
+                { id: "link-3-inverse-to-world", sourcePortId: "port-3-inverse-out", targetPortId: "port-3-world-in", name: "Inv Matrix Output", linkStyle: "bezier", context: "root" },
+                { id: "link-3-world-to-snap", sourcePortId: "port-3-world-out", targetPortId: "port-3-snap-in", name: "Un-quantized Vector", linkStyle: "orthogonal", context: "root" },
+
+                // Дополнительные взаимосвязи архитектуры (36 связей всего)
+                { id: "link-extra-1", sourcePortId: "port-1-tb-out", targetPortId: "port-1-vp-in", name: "Tool Select", linkStyle: "orthogonal", context: "root" },
+                { id: "link-extra-2", sourcePortId: "port-1-red-out", targetPortId: "port-1-pp-in", name: "Property Update", linkStyle: "bezier", context: "root" },
+                { id: "link-extra-3", sourcePortId: "port-1-geom-out", targetPortId: "port-1-store-in", name: "BBox Update", linkStyle: "orthogonal", context: "root" },
+                { id: "link-extra-4", sourcePortId: "port-1-ai-out", targetPortId: "port-1-vp-in", name: "Auto-layout render", linkStyle: "bezier", context: "root" },
+                { id: "link-extra-5", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-snap-in", name: "Direct Snap", linkStyle: "orthogonal", context: "root" },
+                { id: "link-extra-6", sourcePortId: "port-2-trans-out", targetPortId: "port-2-path-in", name: "Direct Pathing", linkStyle: "bezier", context: "root" },
+                { id: "link-extra-7", sourcePortId: "port-2-snap-out", targetPortId: "port-2-render-in", name: "Direct Grid Render", linkStyle: "orthogonal", context: "root" },
+                { id: "link-extra-8", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-world-in", name: "Direct Projection", linkStyle: "bezier", context: "root" },
+                { id: "link-extra-9", sourcePortId: "port-3-inverse-out", targetPortId: "port-3-snap-in", name: "Inverse Snap", linkStyle: "orthogonal", context: "root" },
+                { id: "link-extra-10", sourcePortId: "port-1-vp-out", targetPortId: "port-1-pp-in", name: "Selection Inspector", linkStyle: "bezier", context: "root" },
+                { id: "link-extra-11", sourcePortId: "port-1-tb-out", targetPortId: "port-1-geom-in", name: "Align Command", linkStyle: "orthogonal", context: "root" },
+                { id: "link-extra-12", sourcePortId: "port-1-storage-out", targetPortId: "port-1-vp-in", name: "Viewport Hydrate", linkStyle: "bezier", context: "root" },
+                { id: "link-extra-13", sourcePortId: "port-2-mouse-out", targetPortId: "port-2-bez-in", name: "Quick Line", linkStyle: "orthogonal", context: "root" },
+                { id: "link-extra-14", sourcePortId: "port-2-trans-out", targetPortId: "port-2-render-in", name: "Transform Render", linkStyle: "bezier", context: "root" },
+                { id: "link-extra-15", sourcePortId: "port-3-mouse-out", targetPortId: "port-3-snap-in", name: "Pixel Snap", linkStyle: "orthogonal", context: "root" },
+                { id: "link-extra-16", sourcePortId: "port-1-ai-out", targetPortId: "port-1-storage-in", name: "Backup AI Graph", linkStyle: "bezier", context: "root" },
+                { id: "link-extra-17", sourcePortId: "port-1-store-out", targetPortId: "port-1-geom-in", name: "Hierarchy Sync", linkStyle: "orthogonal", context: "root" },
+                { id: "link-extra-18", sourcePortId: "port-1-red-out", targetPortId: "port-1-ai-in", name: "Graph State Feedback", linkStyle: "bezier", context: "root" },
+                { id: "link-extra-19", sourcePortId: "port-3-world-out", targetPortId: "port-3-inverse-in", name: "Loopback Matrix", linkStyle: "orthogonal", context: "root" }
             ],
             canvas: {
                 offset: { x: 950, y: 350 },
