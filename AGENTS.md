@@ -91,6 +91,156 @@ architector-main/
 6. **Порядок скриптов в `index.html`:**
    * Скрипты подключаются strictly по цепочке: `utils/` → `store/` → `components/` → `app.js`. Новый компонент обязательно регистрируется в `app/index.html`.
 
+---
+
+## 🤖 Спецификация и протокол управления для внешних ИИ-Агентов (API & Function Calling Protocol)
+
+Данный раздел является **официальной спецификацией для подключенных внешних ИИ-агентов (LLM через OpenAI API, Anthropic Claude, Gemini или локальные нейросети)**, которые генерируют или модифицируют графы в приложении Architector.
+
+### 1. Формат выполнения команд
+
+Любые изменения графа со стороны ИИ-агента передаются в виде **массива Redux-экшенов в JSON-блоке** в конце текстового ответа:
+```json
+[
+  { "type": "ACTION_NAME", "payload": { ... } }
+]
+```
+
+### 2. Спецификация сущностей и типов данных
+
+#### 🎨 Слои (`layer`)
+Слой — это визуальный фрейм-контейнер для группировки узлов.
+* `id` *(string, обязательный)*: уникальный ID (например `"layer-ui"`).
+* `name` *(string, обязательный)*: заголовок слоя.
+* `content` *(string)*: краткое описание назначения слоя.
+* `color` *(string)*: HEX-цвет границы и фона шапки (например `"#0284c7"`).
+* `position` *({x: number, y: number}, обязательный)*: относительно родителя.
+* `size` *({w: number, h: number}, обязательный)*: размеры (рекомендуется от 500x400px).
+* `parentId` *(string)*: ID родительского контейнера (по умолчанию `"root"`).
+* `snapToGrid` *(boolean)*: удержание сетки (всегда `true`).
+
+#### 📦 Узлы (`node`)
+Узел — центральный компонент логики или структуры.
+* `id` *(string, обязательный)*: уникальный ID (например `"node-viewport"`).
+* `name` *(string, обязательный)*: название узла.
+* `content` *(string)*: текстовое или маркдаун описание.
+* `color` *(string)*: HEX-цвет фона шапки узла.
+* `position` *({x: number, y: number}, обязательный)*: координаты относительны родителя.
+* `size` *({w: number, h: number}, обязательный)*: габариты (автоподстройка по умолчанию, базовая ширина 220-300px).
+* `parentId` *(string)*: ID родительского контейнера (`"root"`, ID слоя, ID узла, ID порта или ID связи).
+* `shape` *(string)*: форма узла — `"rectangle"` (по умолчанию), `"circle"`, `"hexagon"`, `"diamond"`.
+* `type` *(string)*: `"default"` (обычный) или `"ai-agent"` (интерактивный ИИ-копилот).
+* `mediaUrl` *(string, опционально)*: URL картинки для медиа-карточки.
+* `mediaHeight` *(number, опционально)*: высота картинки в пикселях (например `80`).
+
+#### 🔌 Порты (`port`)
+Точка привязки линий на гранях узла.
+* `id` *(string, обязательный)*: уникальный ID (например `"port-vp-out"`).
+* `nodeId` *(string, обязательный)*: ID узла-владельца.
+* `type` *(string)*: `"input"` (вход) или `"output"` (выход).
+* `edge` *(string)*: грань узла — `"left"`, `"right"`, `"top"`, `"bottom"`.
+* `position` *(number 0.0..1.0)*: смещение вдоль грани (0.5 = середина).
+* `name` *(string)*: подпись порта.
+* `color` *(string)*: HEX-цвет точки привязки.
+
+#### ⚡ Связи (`link`)
+Линии, соединяющие порты.
+* `id` *(string, обязательный)*: уникальный ID (например `"link-ui-store"`).
+* `sourcePortId` *(string, обязательный)*: ID порта-источника.
+* `targetPortId` *(string, обязательный)*: ID порта-приемника.
+* `name` *(string)*: подпись связи (например `"HTTP Dispatch"`).
+* `linkStyle` *(string)*: `"orthogonal"` (прямые углы) или `"bezier"` (плавная кривая).
+* `color` *(string)*: HEX-цвет линии.
+* `context` *(string)*: контекст отображения (обычно совпадает со слоем или `"root"`).
+
+---
+
+### 3. Математика относительных координат (v10)
+
+1. **Если `parentId === 'root'`:** Координаты `position` задаются в абсолютной мировой системе координат (например `{x: -400, y: -250}`).
+2. **Если `parentId !== 'root'` (внутри Слоя, Узла, Порта или Связи):** Координаты `position` **ОБЯЗАТЕЛЬНО считаются от левого верхнего угла родителя `(0, 0)`**.
+   * Безопасный внутренний диапазон для слоев шириной 600px и высотой 400px: `x: 30..350`, `y: 80..280`.
+
+---
+
+### 4. Поддерживаемые Redux-экшены (API Спецификация)
+
+| Экшен | Payload | Описание |
+|---|---|---|
+| `ADD_LAYER` | `{ id, name, content, color, position, size, parentId }` | Добавить новый слой-фрейм |
+| `ADD_NODE` | `{ id, name, content, color, position, size, parentId, shape, type, mediaUrl, mediaHeight }` | Добавить узел |
+| `ADD_PORT` | `{ id, nodeId, type, edge, position, name, color }` | Добавить порт на грань узла |
+| `ADD_LINK` | `{ id, sourcePortId, targetPortId, name, linkStyle, color, context }` | Создать связь между портами |
+| `UPDATE_NODE` | `{ id, updates: { name, content, color, shape, mediaUrl } }` | Обновить свойства узла |
+| `UPDATE_LAYER` | `{ id, updates: { name, content, color, size } }` | Обновить параметры слоя |
+| `UPDATE_PORT` | `{ id, updates: { name, color, edge, position } }` | Переместить или переименовать порт |
+| `UPDATE_LINK` | `{ id, updates: { name, color, linkStyle } }` | Изменить стиль/цвет связи |
+| `REPARENT_ENTITY` | `{ id, newParentId }` | Перенести элемент в другой контейнер без сдвига в мире |
+| `DELETE_SELECTED` | `{ ids: string[] }` | Удалить список элементов |
+| `ALIGN_LAYERS` | `{ contextId }` | Автоматически выровнять слои в контексте |
+
+---
+
+### 5. Пример сгенерированного 3-уровневого графа (JSON Protocol)
+
+Пример генерации слоев 1-го уровня, узлов 2-го уровня, портов и **вложенного контейнера в контексте порта (3-й уровень)**:
+
+```json
+[
+  {
+    "type": "ADD_LAYER",
+    "payload": {
+      "id": "layer-1-ui",
+      "name": "1. UI Layer",
+      "content": "Пользовательский интерфейс и представление",
+      "color": "#0284c7",
+      "position": { "x": -400, "y": -250 },
+      "size": { "w": 600, "h": 400 },
+      "parentId": "root"
+    }
+  },
+  {
+    "type": "ADD_NODE",
+    "payload": {
+      "id": "node-canvas-view",
+      "name": "Canvas Viewport",
+      "content": "Интерактивная область холста",
+      "color": "#0f172a",
+      "position": { "x": 30, "y": 80 },
+      "size": { "w": 250, "h": 120 },
+      "parentId": "layer-1-ui",
+      "shape": "rectangle",
+      "mediaUrl": "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=200",
+      "mediaHeight": 60
+    }
+  },
+  {
+    "type": "ADD_PORT",
+    "payload": {
+      "id": "port-canvas-out",
+      "nodeId": "node-canvas-view",
+      "type": "output",
+      "edge": "right",
+      "position": 0.5,
+      "name": "Events Dispatch",
+      "color": "#38bdf8"
+    }
+  },
+  {
+    "type": "ADD_NODE",
+    "payload": {
+      "id": "node-inside-port-logger",
+      "name": "Port Logger Widget",
+      "content": "Дочерний логгер внутри контекста порта (Уровень 3)",
+      "color": "#0284c7",
+      "position": { "x": 20, "y": 20 },
+      "size": { "w": 200, "h": 90 },
+      "parentId": "port-canvas-out"
+    }
+  }
+]
+```
+
 
 ---
 
