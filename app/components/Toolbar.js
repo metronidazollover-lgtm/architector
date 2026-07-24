@@ -577,6 +577,8 @@ function Toolbar() {
             ],
             cameraByContext: {}
         };
+
+        dispatch({ type: 'LOAD_STATE', payload: demoState });
     };
 
     const addNode = () => {
