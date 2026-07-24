@@ -216,8 +216,19 @@ function Port({ data, nodeData }) {
         if (l.targetPortId === data.id && state.selectedIds.includes(l.sourcePortId)) return true;
         return false;
     });
+
+    const isOwnedBySelectedNode = state.selectedIds.includes(data.nodeId);
+    const isConnectedToSelectedNode = state.links.some(l => {
+        if (!l) return false;
+        const oppPortId = l.sourcePortId === data.id ? l.targetPortId : (l.targetPortId === data.id ? l.sourcePortId : null);
+        if (!oppPortId) return false;
+        const oppPort = state.ports[oppPortId];
+        return oppPort && state.selectedIds.includes(oppPort.nodeId);
+    });
+
     const isExplicitlySelected = state.selectedIds.includes(data.id);
-    const isSelected = isExplicitlySelected || isConnectedToSelectedLink || isConnectedToSelectedPort;
+    const isSelected = isExplicitlySelected || isConnectedToSelectedLink || isConnectedToSelectedPort || isOwnedBySelectedNode || isConnectedToSelectedNode;
+
 
 
     const portColor = data.color || '#374151'; // default gray-700 equivalent

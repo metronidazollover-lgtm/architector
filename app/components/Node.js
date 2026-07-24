@@ -25,8 +25,21 @@ function Node({ data, isContextNode, isParentOfSelected }) {
         });
     }, [state.links, state.selectedIds, state.ports, data.id]);
 
+    const isConnectedToSelectedNode = React.useMemo(() => {
+        return state.links.some(l => {
+            if (!l) return false;
+            const sPort = state.ports[l.sourcePortId];
+            const tPort = state.ports[l.targetPortId];
+            if (!sPort || !tPort) return false;
+            if (state.selectedIds.includes(sPort.nodeId) && tPort.nodeId === data.id) return true;
+            if (state.selectedIds.includes(tPort.nodeId) && sPort.nodeId === data.id) return true;
+            return false;
+        });
+    }, [state.links, state.selectedIds, state.ports, data.id]);
+
     const isExplicitlySelected = state.selectedIds.includes(data.id);
-    const isSelected = isExplicitlySelected || isConnectedToSelectedLink || isConnectedToSelectedPort;
+    const isSelected = isExplicitlySelected || isConnectedToSelectedLink || isConnectedToSelectedPort || isConnectedToSelectedNode;
+
     const { zoom } = state.canvas;
 
 
