@@ -209,7 +209,15 @@ function Port({ data, nodeData }) {
     const isConnectedToSelectedLink = state.links.some(l => 
         l && state.selectedIds.includes(l.id) && (l.sourcePortId === data.id || l.targetPortId === data.id)
     );
-    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedLink;
+
+    const isConnectedToSelectedPort = state.links.some(l => {
+        if (!l) return false;
+        if (l.sourcePortId === data.id && state.selectedIds.includes(l.targetPortId)) return true;
+        if (l.targetPortId === data.id && state.selectedIds.includes(l.sourcePortId)) return true;
+        return false;
+    });
+    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedLink || isConnectedToSelectedPort;
+
     const portColor = data.color || '#374151'; // default gray-700 equivalent
 
     // Calculate internal connections depth

@@ -1,7 +1,12 @@
 function Link({ data }) {
     const { state, dispatch } = useStore();
     const { nodes, ports } = state;
-    const isSelected = state.selectedIds.includes(data.id);
+    const isConnectedToSelectedPort = state.selectedIds.some(sid => 
+        state.ports[sid] && (data.sourcePortId === sid || data.targetPortId === sid)
+    );
+    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedPort;
+
+
 
     const sourcePort = ports[data.sourcePortId];
     const targetPort = ports[data.targetPortId];
