@@ -656,4 +656,72 @@ test('MOVE_SELECTED: предохраняет детей от двойного �
     assert.equal(s2.nodes.nodeB.position.y, 300);
 });
 
+test('ADD_AI_MESSAGE / CLEAR_AI_HISTORY: изоляция историй чата по nodeId и лимит 200 сообщений', () => {
+    let s = makeState();
+    
+    // Добавление сообщения в конкретный узел node1
+    s = reducer(s, { 
+        type: 'ADD_AI_MESSAGE', 
+        payload: { nodeId: 'node1', message: { role: 'user', content: 'Привет node1' } } 
+    });
+    
+    // Добавление сообщения в узел node2
+    s = reducer(s, { 
+        type: 'ADD_AI_MESSAGE', 
+        payload: { nodeId: 'node2', message: { role: 'user', content: 'Привет node2' } } 
+    });
+
+    assert.ok(s.aiChatHistoryByNode['node1']);
+    assert.ok(s.aiChatHistoryByNode['node2']);
+    assert.equal(s.aiChatHistoryByNode['node1'][0].content, 'Привет node1');
+    assert.equal(s.aiChatHistoryByNode['node2'][0].content, 'Привет node2');
+
+    // Очистка истории node1 не затрагивает node2
+    s = reducer(s, { type: 'CLEAR_AI_HISTORY', payload: { nodeId: 'node1' } });
+    assert.ok(s.aiChatHistoryByNode['node2']);
+});
+
+test('CREATE_AI_SESSION / SWITCH_AI_SESSION / DELETE_AI_SESSION: множественные диалоги узла', () => {
+    let s = makeState();
+    
+    // Создаем первое сообщение в Диалог 1 узла nodeA
+    s = reducer(s, {
+        type: 'ADD_AI_MESSAGE',
+        payload: { nodeId: 'nodeA', message: { role: 'user', content: 'Вопрос 1' } }
+    });
+
+    const nodeData1 = s.aiChatSessionsByNode['nodeA'];
+    assert.ok(nodeData1, 'Сессия создана');
+    assert.equal(nodeData1.sessions.length, 1);
+    assert.equal(nodeData1.sessions[0].messages[0].content, 'Вопрос 1');
+
+    // Создаем новую сессию по кнопке '+'
+    s = reducer(s, { type: 'CREATE_AI_SESSION', payload: { nodeId: 'nodeA' } });
+    const nodeData2 = s.aiChatSessionsByNode['nodeA'];
+    assert.equal(nodeData2.sessions.length, 2, 'В узле 2 диалога');
+    assert.notEqual(nodeData2.activeSessionId, nodeData1.activeSessionId, 'Активная сессия изменилась');
+
+    // Отправляем новое сообщение во 2-й диалог
+    s = reducer(s, {
+        type: 'ADD_AI_MESSAGE',
+        payload: { nodeId: 'nodeA', message: { role: 'user', content: 'Вопрос в новый диалог' } }
+    });
+
+    // Переключаемся обратно на 1-й диалог
+    const firstSessionId = nodeData1.activeSessionId;
+    s = reducer(s, { type: 'SWITCH_AI_SESSION', payload: { nodeId: 'nodeA', sessionId: firstSessionId } });
+    const nodeData3 = s.aiChatSessionsByNode['nodeA'];
+    assert.equal(nodeData3.activeSessionId, firstSessionId);
+
+    // Удаляем 2-й диалог — 1-й диалог остаётся живым
+    const secondSessionId = nodeData2.activeSessionId;
+    s = reducer(s, { type: 'DELETE_AI_SESSION', payload: { nodeId: 'nodeA', sessionId: secondSessionId } });
+    const nodeData4 = s.aiChatSessionsByNode['nodeA'];
+    assert.equal(nodeData4.sessions.length, 1);
+    assert.equal(nodeData4.sessions[0].id, firstSessionId);
+    assert.equal(nodeData4.sessions[0].messages[0].content, 'Вопрос 1');
+});
+
+
+
 

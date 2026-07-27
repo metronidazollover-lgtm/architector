@@ -168,16 +168,23 @@ architector-main/
 | Экшен | Payload | Описание |
 |---|---|---|
 | `ADD_LAYER` | `{ id, name, content, color, position, size, parentId }` | Добавить новый слой-фрейм |
-| `ADD_NODE` | `{ id, name, content, color, position, size, parentId, shape, type, mediaUrl, mediaHeight }` | Добавить узел |
+| `ADD_NODE` | `{ id, name, content, color, position, size, parentId, shape: "rectangle", type, mediaUrl, mediaHeight }` | Добавить прямоугольный узел |
 | `ADD_PORT` | `{ id, nodeId, type, edge, position, name, color }` | Добавить порт на грань узла |
 | `ADD_LINK` | `{ id, sourcePortId, targetPortId, name, linkStyle, color, context }` | Создать связь между портами |
-| `UPDATE_NODE` | `{ id, updates: { name, content, color, shape, mediaUrl } }` | Обновить свойства узла |
+| `UPDATE_NODE` | `{ id, updates: { name, content, color, mediaUrl } }` | Обновить свойства узла |
 | `UPDATE_LAYER` | `{ id, updates: { name, content, color, size } }` | Обновить параметры слоя |
 | `UPDATE_PORT` | `{ id, updates: { name, color, edge, position } }` | Переместить или переименовать порт |
 | `UPDATE_LINK` | `{ id, updates: { name, color, linkStyle } }` | Изменить стиль/цвет связи |
 | `REPARENT_ENTITY` | `{ id, newParentId }` | Перенести элемент в другой контейнер без сдвига в мире |
-| `DELETE_SELECTED` | `{ ids: string[] }` | Удалить список элементов |
+| `DELETE_SELECTED` | `{ ids: string[] }` | Удалить выделенные элементы |
 | `ALIGN_LAYERS` | `{ contextId }` | Автоматически выровнять слои в контексте |
+| `DIVE_INTO` | `{ id, name }` | Погрузить камеру пользователя внутрь узла, слоя, порта или связи |
+| `GO_TO_CONTEXT` | `targetId` | Переместить камеру к указанному контексту графа |
+| `NAV_BACK` / `NAV_FORWARD` | `{}` | Переход по истории навигации пользователя |
+| `REMOVE_NODE` | `nodeId` | Прицельно удалить конкретный узел с его портами |
+| `REMOVE_LAYER` | `layerId` | Прицельно удалить слой без потери детей |
+| `REMOVE_PORT` / `REMOVE_LINK` | `id` | Прицельно удалить конкретный порт или конкретную связь |
+| `MASS_UPDATE` | `{ ids: string[], updatesById: {} }` | Массово обновить свойства группы элементов |
 
 ---
 
@@ -209,9 +216,20 @@ architector-main/
       "position": { "x": 30, "y": 80 },
       "size": { "w": 250, "h": 120 },
       "parentId": "layer-1-ui",
-      "shape": "rectangle",
-      "mediaUrl": "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=200",
-      "mediaHeight": 60
+      "shape": "rectangle"
+    }
+  },
+  {
+    "type": "ADD_NODE",
+    "payload": {
+      "id": "node-store",
+      "name": "Store Provider",
+      "content": "Хранилище состояния",
+      "color": "#0f172a",
+      "position": { "x": 310, "y": 80 },
+      "size": { "w": 250, "h": 120 },
+      "parentId": "layer-1-ui",
+      "shape": "rectangle"
     }
   },
   {
@@ -227,19 +245,37 @@ architector-main/
     }
   },
   {
-    "type": "ADD_NODE",
+    "type": "ADD_PORT",
     "payload": {
-      "id": "node-inside-port-logger",
-      "name": "Port Logger Widget",
-      "content": "Дочерний логгер внутри контекста порта (Уровень 3)",
-      "color": "#0284c7",
-      "position": { "x": 20, "y": 20 },
-      "size": { "w": 200, "h": 90 },
-      "parentId": "port-canvas-out"
+      "id": "port-store-in",
+      "nodeId": "node-store",
+      "type": "input",
+      "edge": "left",
+      "position": 0.5,
+      "name": "Actions Handler",
+      "color": "#0284c7"
+    }
+  },
+  {
+    "type": "ADD_LINK",
+    "payload": {
+      "id": "link-canvas-to-store",
+      "sourcePortId": "port-canvas-out",
+      "targetPortId": "port-store-in",
+      "name": "Redux Dispatch",
+      "linkStyle": "orthogonal",
+      "color": "#38bdf8",
+      "context": "layer-1-ui"
     }
   }
 ]
 ```
+
+### 6. Ключевые инварианты при генерации портов и связей:
+
+1. **Порты ОБЯЗАТЕЛЬНЫ:** Нейросеть должна самостоятельно генерировать порты (`ADD_PORT`) для узлов, задавая им подписи `name`, тип `input`/`output`, грань `edge` (`left`, `right`, `top`, `bottom`) и HEX-цвет.
+2. **Связи соединяют ТОЛЬКО Порты:** Экшен `ADD_LINK` принимает в `sourcePortId` и `targetPortId` **строго ID ранее созданных портов**, а не ID узлов.
+3. **Авто-выравнивание элементов на слое:** Координаты нод на слое следует разносить по сетке (`{x: 30, y: 80}`, `{x: 310, y: 80}`). При добавлении узлов приложение автоматически применяет к слою выравнивание `GeometryUtils.getSmartPlacement`.
 
 
 ---

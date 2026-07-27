@@ -1,6 +1,13 @@
 function Link({ data }) {
+    if (!data || !data.id || !data.sourcePortId || !data.targetPortId) return null;
+
     const { state, dispatch } = useStore();
     const { nodes, ports } = state;
+    const sourcePort = ports ? ports[data.sourcePortId] : null;
+    const targetPort = ports ? ports[data.targetPortId] : null;
+
+    if (!sourcePort || !targetPort) return null;
+
     const isConnectedToSelectedPort = state.selectedIds.some(sid => 
         state.ports[sid] && (data.sourcePortId === sid || data.targetPortId === sid)
     );
@@ -8,14 +15,6 @@ function Link({ data }) {
         state.nodes[sid] && ((state.ports[data.sourcePortId]?.nodeId === sid) || (state.ports[data.targetPortId]?.nodeId === sid))
     );
     const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedPort || isConnectedToSelectedNode;
-
-
-
-
-    const sourcePort = ports[data.sourcePortId];
-    const targetPort = ports[data.targetPortId];
-
-    if (!sourcePort || !targetPort) return null;
 
     const sourceNode = nodes[sourcePort.nodeId];
     const targetNode = nodes[targetPort.nodeId];

@@ -167,12 +167,15 @@ const defaultState = {
             transitionFromContext: null,
         aiAgentSettings: {
             apiKey: '',
+            baseUrl: '',
+            provider: 'openai',
             model: 'gpt-4o',
             mode: 'agent',
             contextMode: 'global',
             llmEnabled: true
         }
     },
+    aiChatHistoryByNode: {},
     aiChatHistory: [
         { role: 'ai', content: 'Привет! Я ваш AI-ассистент. Помогу спроектировать архитектуру, ответить на вопросы и организовать ваши идеи на холсте.' }
     ],
@@ -219,7 +222,15 @@ const getInitialState = () => {
                 nodes: cleanNodes,
                 ports: mergedPorts,
                 links: Array.isArray(parsed.links) ? parsed.links : Object.values(parsed.links || {}),
-                ui: { ...defaultState.ui, ...(parsed.ui || {}) },
+                ui: { 
+                    ...defaultState.ui, 
+                    ...(parsed.ui || {}),
+                    aiAgentSettings: {
+                        ...defaultState.ui.aiAgentSettings,
+                        ...((parsed.ui && parsed.ui.aiAgentSettings) || {})
+                    }
+                },
+                aiChatHistoryByNode: parsed.aiChatHistoryByNode || defaultState.aiChatHistoryByNode,
                 aiChatHistory: parsed.aiChatHistory || defaultState.aiChatHistory
             };
         }
@@ -371,8 +382,9 @@ const reducer = (state, action) => {
             };
         }
         case 'UPDATE_LAYER': {
-            const { id, updates, skipHistory } = action.payload;
-            const historyState = skipHistory ? {} : saveHistory(state, `Изменен слой: ${state.layers[id].name}`);
+            const { id, updates, skipHistory } = action.payload || {};
+            if (!id || !state.layers || !state.layers[id]) return state;
+            const historyState = skipHistory ? {} : saveHistory(state, `Изменен слой: ${state.layers[id].name || id}`);
             return {
                 ...state,
                 ...historyState,
@@ -440,17 +452,37 @@ const reducer = (state, action) => {
                 nodeData.size = calculateNodeSize(nodeData.name, nodeData.content, nodeData.mediaUrl, nodeData.mediaHeight);
             }
             
+            let updatedNodes = { ...state.nodes, [id]: nodeData };
+            let updatedLayers = { ...state.layers };
+
+            // Автоматически применяем getSmartPlacement, если узел добавляется на слой
+            if (parentId && parentId !== 'root' && state.layers && state.layers[parentId]) {
+                const geom = getGeometry();
+                const layer = state.layers[parentId];
+                const layerNodes = Object.values(updatedNodes).filter(n => n && n.parentId === parentId);
+                if (layerNodes.length > 0 && geom && geom.getSmartPlacement) {
+                    const { updatesById, newLayerSize } = geom.getSmartPlacement(layerNodes, layer, updatedNodes);
+                    updatedLayers[parentId] = { ...layer, size: newLayerSize };
+                    Object.keys(updatesById).forEach(nId => {
+                        if (updatedNodes[nId]) {
+                            updatedNodes[nId] = { ...updatedNodes[nId], position: updatesById[nId].position };
+                        }
+                    });
+                }
+            }
+
             return {
                 ...state,
                 ...historyState,
-                // Сначала разворачиваем payload, затем жестко перезаписываем id, чтобы ключ и внутренний id всегда совпадали
-                nodes: { ...state.nodes, [id]: nodeData },
+                nodes: updatedNodes,
+                layers: updatedLayers,
                 selectedIds: [id]
             };
         }
         case 'UPDATE_NODE': {
-            const { id, updates, skipHistory } = action.payload;
-            const historyState = skipHistory ? {} : saveHistory(state, `Изменен узел: ${state.nodes[id].name}`);
+            const { id, updates, skipHistory } = action.payload || {};
+            if (!id || !state.nodes || !state.nodes[id]) return state;
+            const historyState = skipHistory ? {} : saveHistory(state, `Изменен узел: ${state.nodes[id].name || id}`);
             
             const oldNode = state.nodes[id];
             const updatedNode = { ...oldNode, ...updates };
@@ -498,7 +530,8 @@ const reducer = (state, action) => {
             };
         }
         case 'UPDATE_PORT': {
-            const { id, updates, skipHistory } = action.payload;
+            const { id, updates, skipHistory } = action.payload || {};
+            if (!id || !state.ports || !state.ports[id]) return state;
             const historyState = skipHistory ? {} : saveHistory(state, `Изменен порт`);
             return {
                 ...state,
@@ -519,12 +552,13 @@ const reducer = (state, action) => {
             };
         }
         case 'UPDATE_LINK': {
-            const { id, updates, skipHistory } = action.payload;
+            const { id, updates, skipHistory } = action.payload || {};
+            if (!id || !state.links || !state.links.some(l => l && l.id === id)) return state;
             const historyState = skipHistory ? {} : saveHistory(state, `Изменена связь`);
             return {
                 ...state,
                 ...historyState,
-                links: state.links.map(l => l.id === id ? { ...l, ...updates } : l)
+                links: state.links.map(l => l && l.id === id ? { ...l, ...updates } : l)
             };
         }
         case 'ADD_LINK': {
@@ -926,10 +960,168 @@ const reducer = (state, action) => {
             };
         }
         case 'ADD_AI_MESSAGE': {
-            const currentHistory = state.aiChatHistory || [];
+            const payload = action.payload || {};
+            const nodeId = payload.nodeId;
+            const message = payload.message || (payload.role ? payload : { role: 'ai', content: '' });
+
+            const currentGlobalHistory = state.aiChatHistory || [];
+            const newGlobalHistory = [...currentGlobalHistory, message].slice(-200);
+
+            if (nodeId) {
+                // Извлекаем существующие сессии или инициализируем их
+                let nodeSessionData = (state.aiChatSessionsByNode && state.aiChatSessionsByNode[nodeId]);
+                if (!nodeSessionData || !Array.isArray(nodeSessionData.sessions)) {
+                    const legacyHistory = (state.aiChatHistoryByNode && state.aiChatHistoryByNode[nodeId]) || [];
+                    const defaultId = 'session-1';
+                    nodeSessionData = {
+                        activeSessionId: defaultId,
+                        sessions: [{ id: defaultId, title: 'Диалог 1', messages: legacyHistory }]
+                    };
+                }
+
+                let activeId = nodeSessionData.activeSessionId;
+                let sessions = [...nodeSessionData.sessions];
+                let targetIdx = sessions.findIndex(s => s.id === activeId);
+
+                if (targetIdx === -1) {
+                    if (sessions.length > 0) {
+                        targetIdx = 0;
+                        activeId = sessions[0].id;
+                    } else {
+                        const newS = { id: 'session-' + Date.now(), title: 'Диалог 1', messages: [] };
+                        sessions.push(newS);
+                        targetIdx = 0;
+                        activeId = newS.id;
+                    }
+                }
+
+                const targetSession = sessions[targetIdx];
+                const updatedMessages = [...(targetSession.messages || []), message].slice(-200);
+
+                let title = targetSession.title || 'Диалог';
+                if ((!targetSession.messages || targetSession.messages.length === 0) && message.role === 'user' && message.content) {
+                    const cleanText = message.content.replace(/^>\s*.*$/gm, '').trim();
+                    title = cleanText.slice(0, 18) + (cleanText.length > 18 ? '...' : '');
+                }
+
+                sessions[targetIdx] = {
+                    ...targetSession,
+                    title: title || 'Диалог',
+                    messages: updatedMessages
+                };
+
+                return {
+                    ...state,
+                    aiChatHistory: newGlobalHistory,
+                    aiChatHistoryByNode: {
+                        ...(state.aiChatHistoryByNode || {}),
+                        [nodeId]: updatedMessages
+                    },
+                    aiChatSessionsByNode: {
+                        ...(state.aiChatSessionsByNode || {}),
+                        [nodeId]: {
+                            activeSessionId: activeId,
+                            sessions: sessions
+                        }
+                    }
+                };
+            }
             return {
                 ...state,
-                aiChatHistory: [...currentHistory, action.payload]
+                aiChatHistory: newGlobalHistory
+            };
+        }
+        case 'CREATE_AI_SESSION': {
+            const { nodeId } = action.payload || {};
+            if (!nodeId) return state;
+
+            let nodeSessionData = (state.aiChatSessionsByNode && state.aiChatSessionsByNode[nodeId]);
+            if (!nodeSessionData || !Array.isArray(nodeSessionData.sessions)) {
+                const legacyHistory = (state.aiChatHistoryByNode && state.aiChatHistoryByNode[nodeId]) || [];
+                const defaultId = 'session-1';
+                nodeSessionData = {
+                    activeSessionId: defaultId,
+                    sessions: [{ id: defaultId, title: 'Диалог 1', messages: legacyHistory }]
+                };
+            }
+
+            const newSessionId = 'session-' + Date.now() + Math.floor(Math.random() * 100);
+            const sessionNum = (nodeSessionData.sessions || []).length + 1;
+            const newSession = {
+                id: newSessionId,
+                title: `Диалог ${sessionNum}`,
+                messages: []
+            };
+
+            return {
+                ...state,
+                aiChatSessionsByNode: {
+                    ...(state.aiChatSessionsByNode || {}),
+                    [nodeId]: {
+                        activeSessionId: newSessionId,
+                        sessions: [...(nodeSessionData.sessions || []), newSession]
+                    }
+                }
+            };
+        }
+        case 'SWITCH_AI_SESSION': {
+            const { nodeId, sessionId } = action.payload || {};
+            if (!nodeId || !sessionId) return state;
+
+            let nodeSessionData = (state.aiChatSessionsByNode && state.aiChatSessionsByNode[nodeId]);
+            if (!nodeSessionData) return state;
+
+            return {
+                ...state,
+                aiChatSessionsByNode: {
+                    ...(state.aiChatSessionsByNode || {}),
+                    [nodeId]: {
+                        ...nodeSessionData,
+                        activeSessionId: sessionId
+                    }
+                }
+            };
+        }
+        case 'DELETE_AI_SESSION':
+        case 'CLEAR_AI_HISTORY': {
+            const { nodeId, sessionId } = action.payload || {};
+            if (!nodeId) {
+                return {
+                    ...state,
+                    aiChatHistory: [],
+                    aiChatHistoryByNode: {},
+                    aiChatSessionsByNode: {}
+                };
+            }
+
+            let nodeSessionData = (state.aiChatSessionsByNode && state.aiChatSessionsByNode[nodeId]);
+            if (!nodeSessionData || !Array.isArray(nodeSessionData.sessions)) {
+                const newByNode = { ...(state.aiChatHistoryByNode || {}) };
+                delete newByNode[nodeId];
+                return { ...state, aiChatHistoryByNode: newByNode };
+            }
+
+            const targetSessionId = sessionId || nodeSessionData.activeSessionId;
+            let remainingSessions = (nodeSessionData.sessions || []).filter(s => s.id !== targetSessionId);
+
+            if (remainingSessions.length === 0) {
+                const freshSessionId = 'session-' + Date.now();
+                remainingSessions = [{ id: freshSessionId, title: 'Диалог 1', messages: [] }];
+            }
+
+            const newActiveId = remainingSessions.some(s => s.id === nodeSessionData.activeSessionId)
+                ? nodeSessionData.activeSessionId
+                : remainingSessions[remainingSessions.length - 1].id;
+
+            return {
+                ...state,
+                aiChatSessionsByNode: {
+                    ...(state.aiChatSessionsByNode || {}),
+                    [nodeId]: {
+                        activeSessionId: newActiveId,
+                        sessions: remainingSessions
+                    }
+                }
             };
         }
         case 'EMERGENCY_CLEAR_MEMORY': {
@@ -940,6 +1132,10 @@ const reducer = (state, action) => {
                     cleanNodes[key] = { ...cleanNodes[key], mediaUrl: null };
                 }
             });
+            const cleanByNode = {};
+            Object.entries(state.aiChatHistoryByNode || {}).forEach(([nId, msgs]) => {
+                cleanByNode[nId] = (msgs || []).map(m => ({ ...m, media: null }));
+            });
 
             return {
                 ...state,
@@ -947,6 +1143,7 @@ const reducer = (state, action) => {
                 future: [],
                 historyLogs: ['История была автоматически очищена для освобождения памяти'],
                 aiChatHistory: (state.aiChatHistory || []).map(msg => ({...msg, media: null})),
+                aiChatHistoryByNode: cleanByNode,
                 nodes: cleanNodes
             };
         }

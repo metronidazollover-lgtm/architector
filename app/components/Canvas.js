@@ -499,19 +499,19 @@ function Canvas() {
 
                 {/* Render ALL Links but fade out non-current */}
                 {state.links.map((link, idx) => {
+                    if (!link || !link.id || !link.sourcePortId || !link.targetPortId) return null;
+                    const sPort = state.ports ? state.ports[link.sourcePortId] : null;
+                    const tPort = state.ports ? state.ports[link.targetPortId] : null;
+                    if (!sPort || !tPort) return null;
+
                     // Check isolation
                     if (state.isolatedIds.length > 0) {
-                        const sPort = state.ports[link.sourcePortId];
-                        const tPort = state.ports[link.targetPortId];
-                        if (!sPort || !tPort) return null;
                         const sNodeId = sPort.nodeId;
                         const tNodeId = tPort.nodeId;
                         // Show link only if both connected nodes are isolated
                         if (!state.isolatedIds.includes(sNodeId) || !state.isolatedIds.includes(tNodeId)) return null;
                     }
 
-                    const sPort = state.ports[link.sourcePortId];
-                    const tPort = state.ports[link.targetPortId];
                     const sNode = sPort ? state.nodes[sPort.nodeId] : null;
                     const tNode = tPort ? state.nodes[tPort.nodeId] : null;
                     
