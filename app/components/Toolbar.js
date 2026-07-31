@@ -366,7 +366,7 @@ function Toolbar() {
                     content: "Интерактивный ИИ-инженер. Умеет строить графы и генерировать схемы!",
                     color: "#3b0764",
                     position: { x: 30, y: 80 },
-                    size: { w: 280, h: 160 },
+                    size: { w: 380, h: 480 },
                     parentId: "layer-1-ai",
                     snapToGrid: true,
                     shape: "rectangle",
@@ -706,7 +706,7 @@ function Toolbar() {
                             name: '💬 AI Assistant Copilot',
                             type: 'ai-agent',
                             position: toContextRelative(-state.canvas.offset.x / state.canvas.zoom + 200, -state.canvas.offset.y / state.canvas.zoom + 100),
-                            size: { w: 320, h: 450 },
+                            size: { w: 380, h: 480 },
                             color: '#3b0764'
                         }
                     });

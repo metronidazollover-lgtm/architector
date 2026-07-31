@@ -22,11 +22,11 @@ declare function Library(props: any): any;
 declare function PropertyPanel(props: any): any;
 declare function AIAgentNodeContent(props: any): any;
 declare function NodePreview(props: any): any;
-declare function DepthProfile(props: any): any;
+
 declare function MiniMap(props: any): any;
 declare function OutlinerTreeRow(props: any): any;
 declare function OutlinerTree(props: any): any;
-declare function TunnelLabels(props: any): any;
+
 
 // Привязки из файлов с module.exports: tsc считает такие файлы CommonJS-модулями,
 // поэтому их const-декларации не глобальны и объявляются здесь заново.

@@ -12,6 +12,12 @@ function AIAgentNodeContent({ nodeId }) {
     const chatEndRef = React.useRef(null);
     const fileInputRef = React.useRef(null);
 
+    // Актуальный срез стейта для асинхронных колбеков (setTimeout), чтобы не захватывать устаревшее замыкание
+    const stateRef = React.useRef(state);
+    stateRef.current = state;
+    const mountedRef = React.useRef(true);
+    React.useEffect(() => { return () => { mountedRef.current = false; }; }, []);
+
     const { aiAgentSettings = {} } = state.ui;
     // Поддержка множественных сеансов чата для одного узла
     const nodeSessionData = (state.aiChatSessionsByNode && state.aiChatSessionsByNode[nodeId]) || null;
@@ -190,10 +196,10 @@ function AIAgentNodeContent({ nodeId }) {
             let headers = {};
             let body = {};
 
-            const targetModel = model && model.trim() !== '' ? model.trim() : 
-                (provider === 'anthropic' ? 'claude-3-5-sonnet' : 
-                 provider === 'google' ? 'gemini-1.5-flash' : 
-                 provider === 'grok' ? 'grok-2-mini' : 'gpt-4o');
+            const targetModel = model && model.trim() !== '' ? model.trim() :
+                (provider === 'anthropic' ? 'claude-3-5-sonnet' :
+                    provider === 'google' ? 'gemini-1.5-flash' :
+                        provider === 'grok' ? 'grok-2-mini' : 'gpt-4o');
 
             if (provider === 'anthropic') {
                 apiUrl = (baseUrl ? baseUrl.replace(/\/+$/, '') : 'https://api.anthropic.com') + '/v1/messages';
@@ -260,7 +266,7 @@ function AIAgentNodeContent({ nodeId }) {
                 try {
                     const parsedObj = JSON.parse(errText);
                     parsedErr = parsedObj.error?.message || parsedObj.message || errText;
-                } catch(e) {}
+                } catch (e) { }
                 throw new Error(`Статус ${response.status}: ${parsedErr.slice(0, 150)}`);
             }
 
@@ -283,12 +289,12 @@ function AIAgentNodeContent({ nodeId }) {
         try {
             const connectedNodes = new Set();
             const myPorts = Object.values(state.ports).filter(p => p.nodeId === nodeId).map(p => p.id);
-            
+
             state.links.forEach(link => {
                 let otherPortId = null;
                 if (myPorts.includes(link.sourcePortId)) otherPortId = link.targetPortId;
                 else if (myPorts.includes(link.targetPortId)) otherPortId = link.sourcePortId;
-                
+
                 if (otherPortId && state.ports[otherPortId]) {
                     const otherNodeId = state.ports[otherPortId].nodeId;
                     if (otherNodeId !== nodeId && state.nodes[otherNodeId]) {
@@ -316,15 +322,15 @@ function AIAgentNodeContent({ nodeId }) {
             let nodesSummary;
             if (isLocalMode) {
                 nodesSummary = Array.from(connectedNodes).map(n => ({
-                    id: n.id, 
-                    name: n.name, 
+                    id: n.id,
+                    name: n.name,
                     parentId: n.parentId,
                     type: n.type || 'default'
                 }));
             } else {
                 nodesSummary = Object.values(state.nodes).map(n => ({
-                    id: n.id, 
-                    name: n.name, 
+                    id: n.id,
+                    name: n.name,
                     parentId: n.parentId,
                     type: n.type || 'default'
                 }));
@@ -392,17 +398,14 @@ ${JSON.stringify(nodesSummary)}
 ВАМ СТРОГО ЗАПРЕЩЕНО генерировать JSON-команды для изменения графа. Только консультации, советы и ответы на вопросы.`;
             }
 
-            if (aiAgentSettings.llmEnabled === false) {
-                await new Promise(r => setTimeout(r, 800));
-                aiResponse = `(Локальная сеть) LLM отключен. Вы можете включить LLM тумблер в шапке или настроить API-ключ в настройках.`;
-            } else if (aiAgentSettings.apiKey && aiAgentSettings.apiKey.trim() !== '') {
+            if (aiAgentSettings.apiKey && aiAgentSettings.apiKey.trim() !== '') {
                 const provider = aiAgentSettings.provider || 'openai';
                 const baseUrl = aiAgentSettings.baseUrl || '';
-                
-                const model = (aiAgentSettings.model && aiAgentSettings.model.trim() !== '') ? aiAgentSettings.model.trim() : 
-                    (provider === 'anthropic' ? 'claude-3-5-sonnet' : 
-                     provider === 'google' ? 'gemini-1.5-flash' : 
-                     provider === 'grok' ? 'grok-2-mini' : 'gpt-4o');
+
+                const model = (aiAgentSettings.model && aiAgentSettings.model.trim() !== '') ? aiAgentSettings.model.trim() :
+                    (provider === 'anthropic' ? 'claude-3-5-sonnet' :
+                        provider === 'google' ? 'gemini-1.5-flash' :
+                            provider === 'grok' ? 'grok-2-mini' : 'gpt-4o');
 
                 let apiUrl = '';
                 let fetchHeaders = {};
@@ -482,7 +485,7 @@ ${JSON.stringify(nodesSummary)}
 
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 45000);
-                
+
                 const fetchOptions = {
                     method: 'POST',
                     headers: fetchHeaders,
@@ -507,7 +510,7 @@ ${JSON.stringify(nodesSummary)}
                     try {
                         const parsedObj = JSON.parse(errorText);
                         parsedErr = parsedObj.error?.message || parsedObj.message || errorText;
-                    } catch(e) {}
+                    } catch (e) { }
                     throw new Error(`API Error ${response.status}: ${parsedErr}`);
                 }
 
@@ -584,7 +587,8 @@ ${JSON.stringify(nodesSummary)}
 
                             // Автоматически применяем авто-расстановку узлов для всех слоев, куда ИИ добавил ноды
                             setTimeout(() => {
-                                const currentState = useStore.getState ? useStore.getState() : state;
+                                if (!mountedRef.current) return;
+                                const currentState = stateRef.current;
                                 const affectedLayerIds = new Set();
                                 actions.forEach(a => {
                                     if (a && a.payload) {
@@ -615,7 +619,7 @@ ${JSON.stringify(nodesSummary)}
                             aiResponse += `\n⚠️ *Отклонено ${invalidCount} невалидных команд.*`;
                         }
                     }
-                } catch(e) {
+                } catch (e) {
                     console.error('AI JSON parse error', e);
                     aiResponse += '\n\n❌ *Ассистент вернул неверный формат действий.*';
                 }
@@ -657,25 +661,25 @@ ${JSON.stringify(nodesSummary)}
         google: ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash-8b'],
         grok: ['grok-2-mini', 'grok-2', 'grok-beta']
     };
-    
+
     // Если удалось динамически сгрузить реальные модели с API — показываем их, иначе используем статический фоллбек
     const displayModels = fetchedModels.length > 0 ? fetchedModels : (providerPresets[currentProvider] || providerPresets.openai);
 
     return (
-        <div 
-            className="flex-1 flex flex-col h-full overflow-hidden bg-black/20" 
+        <div
+            className="flex-1 flex flex-col h-full overflow-hidden bg-black/20 rounded-b-lg"
             onMouseDown={e => e.stopPropagation()}
             data-file="components/AIAgentNodeContent.js"
         >
             <div className="px-3 py-2 border-b border-[#333] flex items-center justify-between bg-black/40 text-xs shrink-0">
                 <div className="flex gap-4 items-center">
-                    <button 
+                    <button
                         className={`font-semibold transition-colors pb-1 border-b-2 ${tab === 'chat' ? 'text-purple-400 border-purple-400' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
                         onClick={() => setTab('chat')}
                     >
                         Диалог
                     </button>
-                    <button 
+                    <button
                         className={`font-semibold transition-colors pb-1 border-b-2 flex items-center gap-1 ${tab === 'logs' ? 'text-purple-400 border-purple-400' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
                         onClick={() => setTab('logs')}
                     >
@@ -686,14 +690,14 @@ ${JSON.stringify(nodesSummary)}
                             </span>
                         )}
                     </button>
-                    <button 
+                    <button
                         className={`font-semibold transition-colors pb-1 border-b-2 ${tab === 'settings' ? 'text-purple-400 border-purple-400' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
                         onClick={() => setTab('settings')}
                     >
                         Настройки
                     </button>
                 </div>
-                
+
                 <div className="flex items-center gap-2">
                     {tab === 'chat' && (
                         <div className="flex items-center gap-1.5">
@@ -714,19 +718,19 @@ ${JSON.stringify(nodesSummary)}
                             )}
 
                             {/* Кнопка + Новый чат (Создает новую сессию без удаления старой) */}
-                            <button 
+                            <button
                                 type="button"
                                 className="text-purple-200 hover:text-white bg-purple-600/40 hover:bg-purple-600/70 px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 text-[10px] font-semibold border border-purple-500/50"
                                 onClick={() => dispatch({ type: 'CREATE_AI_SESSION', payload: { nodeId } })}
                                 title="Создать новый чистый диалог (Сохранить текущий)"
                             >
                                 <div className="icon-plus text-[10px]"></div>
-                                <span>+ Новый чат</span>
+                                <span>Новый чат</span>
                             </button>
 
                             {/* Кнопка удаляет только текущую активную сессию */}
                             {chatHistory && chatHistory.length > 0 && (
-                                <button 
+                                <button
                                     type="button"
                                     className="text-gray-500 hover:text-red-400 p-0.5 rounded transition-colors"
                                     onClick={() => dispatch({ type: 'DELETE_AI_SESSION', payload: { nodeId, sessionId: activeSessionId } })}
@@ -737,33 +741,25 @@ ${JSON.stringify(nodesSummary)}
                             )}
                         </div>
                     )}
-                    <span className="text-[10px] text-gray-400 font-semibold uppercase tracking-wider">LLM</span>
-                    <button 
-                        className={`w-8 h-4 rounded-full transition-colors relative ${aiAgentSettings.llmEnabled !== false ? 'bg-purple-500' : 'bg-[#444]'}`}
-                        onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { llmEnabled: aiAgentSettings.llmEnabled === false ? true : false } })}
-                        title={aiAgentSettings.llmEnabled !== false ? "LLM Включен" : "LLM Выключен"}
-                    >
-                        <div className={`absolute top-[2px] left-[2px] w-3 h-3 rounded-full bg-white transition-transform ${aiAgentSettings.llmEnabled !== false ? 'translate-x-4' : 'translate-x-0'}`}></div>
-                    </button>
                 </div>
             </div>
 
             {tab === 'settings' ? (
-                <div className="flex-1 p-3 flex flex-col gap-3.5 overflow-y-auto no-scrollbar">
+                <div className="flex-1 p-3 flex flex-col gap-3.5 overflow-y-auto no-scrollbar rounded-b-lg">
                     <div className="flex flex-col gap-1.5">
                         <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Провайдер ИИ</label>
-                        <select 
+                        <select
                             className="input-field border-[#444] focus:border-purple-500 cursor-pointer bg-black/50 text-xs"
                             value={currentProvider}
                             onChange={(e) => {
                                 const newProv = e.target.value;
                                 setFetchedModels([]); // Сбрасываем старый динамический список
                                 setFetchModelMsg('');
-                                dispatch({ 
-                                    type: 'UPDATE_AI_SETTINGS', 
-                                    payload: { 
+                                dispatch({
+                                    type: 'UPDATE_AI_SETTINGS',
+                                    payload: {
                                         provider: newProv
-                                    } 
+                                    }
                                 });
                             }}
                         >
@@ -776,9 +772,9 @@ ${JSON.stringify(nodesSummary)}
 
                     <div className="flex flex-col gap-1.5">
                         <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Base URL (Опционально)</label>
-                        <input 
-                            type="text" 
-                            className="input-field border-[#444] focus:border-purple-500 text-xs" 
+                        <input
+                            type="text"
+                            className="input-field border-[#444] focus:border-purple-500 text-xs"
                             placeholder={currentProvider === 'grok' ? 'https://api.x.ai/v1' : currentProvider === 'google' ? 'https://generativelanguage.googleapis.com/v1beta/openai' : currentProvider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com'}
                             value={aiAgentSettings.baseUrl || ''}
                             onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { baseUrl: e.target.value } })}
@@ -788,7 +784,7 @@ ${JSON.stringify(nodesSummary)}
                     <div className="flex flex-col gap-1.5">
                         <div className="flex items-center justify-between">
                             <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">API Ключ</label>
-                            <button 
+                            <button
                                 type="button"
                                 className="text-[10px] text-purple-400 hover:text-purple-300 underline font-semibold flex items-center gap-1"
                                 onClick={() => fetchAvailableModels(false)}
@@ -798,9 +794,9 @@ ${JSON.stringify(nodesSummary)}
                                 {isFetchingModels ? 'Загрузка...' : 'Загрузить список моделей'}
                             </button>
                         </div>
-                        <input 
-                            type="password" 
-                            className="input-field border-[#444] focus:border-purple-500 text-xs" 
+                        <input
+                            type="password"
+                            className="input-field border-[#444] focus:border-purple-500 text-xs"
                             placeholder={currentProvider === 'grok' ? 'xai-...' : currentProvider === 'google' ? 'AIzaSy...' : 'sk-...'}
                             value={aiAgentSettings.apiKey || ''}
                             onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { apiKey: e.target.value } })}
@@ -816,9 +812,9 @@ ${JSON.stringify(nodesSummary)}
                                 {fetchedModels.length > 0 ? `Доступные модели с API (${fetchedModels.length})` : 'Модель ИИ (Выбор или ввод)'}
                             </label>
                         </div>
-                        
+
                         {/* Выпадающий список действительно доступных моделей на этом ключе */}
-                        <select 
+                        <select
                             className="input-field border-[#444] focus:border-purple-500 cursor-pointer bg-black/50 text-xs"
                             value={aiAgentSettings.model || ''}
                             onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { model: e.target.value } })}
@@ -829,57 +825,17 @@ ${JSON.stringify(nodesSummary)}
                         </select>
 
                         {/* Текстовое поле прямого ввода на случай кастомных имен */}
-                        <input 
-                            type="text" 
-                            className="input-field border-[#444] focus:border-purple-500 text-xs font-mono mt-1" 
+                        <input
+                            type="text"
+                            className="input-field border-[#444] focus:border-purple-500 text-xs font-mono mt-1"
                             placeholder="Или введите имя модели вручную..."
                             value={aiAgentSettings.model || ''}
                             onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { model: e.target.value } })}
                         />
                     </div>
 
-                    <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Режим</label>
-                        <div className="flex gap-2">
-                            <button 
-                                className={`flex-1 py-1.5 rounded border text-xs flex items-center justify-center gap-1.5 transition-colors ${(!aiAgentSettings.mode || aiAgentSettings.mode === 'agent') ? 'bg-purple-600/20 border-purple-500 text-purple-300' : 'bg-black/30 border-[#444] text-gray-400 hover:bg-black/50'}`}
-                                onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { mode: 'agent' } })}
-                                title="ИИ может изменять граф"
-                            >
-                                <div className="icon-bot text-sm"></div> Agent
-                            </button>
-                            <button 
-                                className={`flex-1 py-1.5 rounded border text-xs flex items-center justify-center gap-1.5 transition-colors ${aiAgentSettings.mode === 'chat' ? 'bg-purple-600/20 border-purple-500 text-purple-300' : 'bg-black/30 border-[#444] text-gray-400 hover:bg-black/50'}`}
-                                onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { mode: 'chat' } })}
-                                title="ИИ только читает и отвечает на вопросы"
-                            >
-                                <div className="icon-message-square text-sm"></div> Chat
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Окружение (Контекст)</label>
-                        <div className="flex gap-2">
-                            <button 
-                                className={`flex-1 py-1.5 rounded border text-xs flex items-center justify-center gap-1.5 transition-colors ${(!aiAgentSettings.contextMode || aiAgentSettings.contextMode === 'global') ? 'bg-purple-600/20 border-purple-500 text-purple-300' : 'bg-black/30 border-[#444] text-gray-400 hover:bg-black/50'}`}
-                                onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { contextMode: 'global' } })}
-                                title="Видеть все узлы проекта"
-                            >
-                                <div className="icon-globe text-sm"></div> Глобально
-                            </button>
-                            <button 
-                                className={`flex-1 py-1.5 rounded border text-xs flex items-center justify-center gap-1.5 transition-colors ${aiAgentSettings.contextMode === 'local' ? 'bg-purple-600/20 border-purple-500 text-purple-300' : 'bg-black/30 border-[#444] text-gray-400 hover:bg-black/50'}`}
-                                onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { contextMode: 'local' } })}
-                                title="Видеть только подключенные узлы и их внутренности"
-                            >
-                                <div className="icon-network text-sm"></div> Локально
-                            </button>
-                        </div>
-                    </div>
-
                     <div className="pt-1 flex flex-col gap-2">
-                        <button 
+                        <button
                             className="btn bg-purple-600/30 hover:bg-purple-600/50 border-purple-500/50 text-purple-200 text-xs py-1.5 rounded transition-colors flex items-center justify-center gap-1.5"
                             onClick={handleTestConnection}
                             disabled={testStatus && testStatus.loading}
@@ -895,7 +851,7 @@ ${JSON.stringify(nodesSummary)}
                     </div>
                 </div>
             ) : tab === 'logs' ? (
-                <div className="flex-1 p-3 flex flex-col overflow-hidden bg-slate-950/90 font-mono text-[11px]">
+                <div className="flex-1 p-3 flex flex-col overflow-hidden bg-slate-950/90 font-mono text-[11px] rounded-b-lg">
                     <div className="flex items-center justify-between pb-2 mb-2 border-b border-gray-800 shrink-0">
                         <span className="text-gray-400 font-semibold uppercase text-[10px] tracking-wider">
                             Лог выполнения ИИ-команд ({actionLogs.length})
@@ -912,7 +868,7 @@ ${JSON.stringify(nodesSummary)}
                     </div>
                     {actionLogs.length === 0 ? (
                         <div className="flex-1 flex items-center justify-center text-gray-600 text-center p-4">
-                            История выполнения экшенов пуста.<br/>Отправьте запрос в режиме Agent для просмотра подробного лога.
+                            История выполнения экшенов пуста.<br />Отправьте запрос в режиме Agent для просмотра подробного лога.
                         </div>
                     ) : (
                         <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 no-scrollbar">
@@ -922,10 +878,9 @@ ${JSON.stringify(nodesSummary)}
                                     {log.type === 'success' && <span className="text-green-400 shrink-0 font-bold">✓</span>}
                                     {log.type === 'warn' && <span className="text-yellow-400 shrink-0 font-bold">⚠️</span>}
                                     {log.type === 'error' && <span className="text-red-400 shrink-0 font-bold">✗</span>}
-                                    <span className={`break-all ${
-                                        log.type === 'success' ? 'text-gray-300' :
-                                        log.type === 'warn' ? 'text-yellow-300' : 'text-red-300'
-                                    }`}>
+                                    <span className={`break-all ${log.type === 'success' ? 'text-gray-300' :
+                                            log.type === 'warn' ? 'text-yellow-300' : 'text-red-300'
+                                        }`}>
                                         {log.msg}
                                     </span>
                                 </div>
@@ -942,7 +897,7 @@ ${JSON.stringify(nodesSummary)}
                                     <div className={`px-2.5 py-1.5 rounded-lg text-xs whitespace-pre-wrap break-words select-text cursor-text ${msg.role === 'user' ? 'bg-purple-600 text-white' : 'bg-[#2a2a2a] border border-[#444] text-gray-200'}`}>
                                         {msg.content}
                                     </div>
-                                    <button 
+                                    <button
                                         className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-gray-500 hover:text-purple-400 shrink-0 mt-0.5"
                                         title="Комментировать / Цитировать"
                                         onClick={() => {
@@ -969,13 +924,13 @@ ${JSON.stringify(nodesSummary)}
                         <div ref={chatEndRef} />
                     </div>
 
-                    <div className="p-2 border-t border-[#333] bg-black/40 flex flex-col gap-1.5 shrink-0">
+                    <div className="p-2 pb-2.5 border-t border-[#333] bg-black/40 flex flex-col gap-1.5 shrink-0 rounded-b-lg">
                         {/* Панель оперативного переключения Режима и Контекста */}
                         <div className="flex items-center justify-between pb-1 border-b border-[#333]/60 text-[10px] gap-1">
                             <div className="flex items-center gap-1">
                                 <span className="text-gray-400 font-semibold uppercase text-[9px]">Режим:</span>
                                 <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
-                                    <button 
+                                    <button
                                         type="button"
                                         className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${(!aiAgentSettings.mode || aiAgentSettings.mode === 'agent') ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
                                         onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { mode: 'agent' } })}
@@ -983,7 +938,7 @@ ${JSON.stringify(nodesSummary)}
                                     >
                                         <div className="icon-bot text-[10px]"></div> Agent
                                     </button>
-                                    <button 
+                                    <button
                                         type="button"
                                         className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${aiAgentSettings.mode === 'chat' ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
                                         onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { mode: 'chat' } })}
@@ -997,7 +952,7 @@ ${JSON.stringify(nodesSummary)}
                             <div className="flex items-center gap-1">
                                 <span className="text-gray-400 font-semibold uppercase text-[9px]">Контекст:</span>
                                 <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
-                                    <button 
+                                    <button
                                         type="button"
                                         className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${(!aiAgentSettings.contextMode || aiAgentSettings.contextMode === 'global') ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
                                         onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { contextMode: 'global' } })}
@@ -1005,7 +960,7 @@ ${JSON.stringify(nodesSummary)}
                                     >
                                         <div className="icon-globe text-[10px]"></div> Глобально
                                     </button>
-                                    <button 
+                                    <button
                                         type="button"
                                         className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${aiAgentSettings.contextMode === 'local' ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
                                         onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { contextMode: 'local' } })}
@@ -1020,7 +975,7 @@ ${JSON.stringify(nodesSummary)}
                         {attachedMedia && (
                             <div className="relative w-10 h-10 shrink-0">
                                 <img src={attachedMedia} alt="Preview" className="w-full h-full object-cover rounded border border-purple-500/50" />
-                                <button 
+                                <button
                                     className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px]"
                                     onClick={() => setAttachedMedia(null)}
                                 >
@@ -1028,23 +983,23 @@ ${JSON.stringify(nodesSummary)}
                                 </button>
                             </div>
                         )}
-                        <div className="flex items-end gap-1.5">
-                            <input 
-                                type="file" 
-                                ref={fileInputRef} 
-                                className="hidden" 
+                        <div className="flex items-center gap-1.5 w-full px-2">
+                            <input
+                                type="file"
+                                ref={fileInputRef}
+                                className="hidden"
                                 accept="image/*"
                                 onChange={handleFileAttach}
                             />
-                            <button 
-                                className="btn p-1.5 rounded text-gray-400 hover:text-white shrink-0"
+                            <button
+                                className="btn p-1.5 rounded text-gray-400 hover:text-white shrink-0 flex items-center justify-center"
                                 onClick={() => fileInputRef.current?.click()}
                                 title="Прикрепить"
                             >
                                 <div className="icon-paperclip text-sm"></div>
                             </button>
-                            <textarea 
-                                className="input-field border-[#444] focus:border-purple-500 min-h-[32px] max-h-[80px] py-1.5 text-xs resize-none"
+                            <textarea
+                                className="input-field border-[#444] focus:border-purple-500 min-h-[100px] max-h-[180px] py-2 text-xs resize-none"
                                 placeholder="Задайте вопрос..."
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
@@ -1055,8 +1010,8 @@ ${JSON.stringify(nodesSummary)}
                                     }
                                 }}
                             />
-                            <button 
-                                className="btn bg-purple-600 hover:bg-purple-500 text-white border-purple-500 shrink-0 p-1.5 rounded"
+                            <button
+                                className="btn bg-purple-600 hover:bg-purple-500 text-white border-purple-500 shrink-0 p-1.5 rounded flex items-center justify-center"
                                 onClick={handleSend}
                                 disabled={isLoading || (!input.trim() && !attachedMedia)}
                             >

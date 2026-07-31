@@ -1,7 +1,6 @@
 function Canvas() {
     const { state, dispatch } = useStore();
     const { offset, zoom } = state.canvas;
-    const { nodes } = state.nodes;
     const canvasRef = React.useRef(null);
     const [isPanning, setIsPanning] = React.useState(false);
     const [isInteracting, setIsInteracting] = React.useState(false);

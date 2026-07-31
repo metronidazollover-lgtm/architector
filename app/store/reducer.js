@@ -171,8 +171,7 @@ const defaultState = {
             provider: 'openai',
             model: 'gpt-4o',
             mode: 'agent',
-            contextMode: 'global',
-            llmEnabled: true
+            contextMode: 'global'
         }
     },
     aiChatHistoryByNode: {},
@@ -450,6 +449,8 @@ const reducer = (state, action) => {
             const nodeData = { ...action.payload, id, parentId, snapToGrid: true };
             if (nodeData.type !== 'ai-agent') {
                 nodeData.size = calculateNodeSize(nodeData.name, nodeData.content, nodeData.mediaUrl, nodeData.mediaHeight);
+            } else if (!nodeData.size) {
+                nodeData.size = { w: 380, h: 480 };
             }
             
             let updatedNodes = { ...state.nodes, [id]: nodeData };

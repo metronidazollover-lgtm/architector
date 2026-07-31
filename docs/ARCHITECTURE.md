@@ -9,11 +9,11 @@ app/utils/geometry.js    чистая геометрия: порты, автор
 app/utils/hierarchy.js   иерархия: абсолютные координаты, статистика вложенности, циклы
 app/store/reducer.js     defaultState, редьюсер, миграции, загрузка localStorage (без JSX)
 app/store/Store.js       React-провайдер поверх редьюсера, персистенция
-app/components/*.js      представление; читают стор через useStore()
+app/components/*.js      представление (Canvas, Node, Layer, Port, Link, MiniMap, NodePreview, PropertyPanel, Toolbar, Library, OutlinerTree, AIAgentNodeContent); читают стор через useStore()
 ```
 
 Файлы без JSX имеют двойной экспорт (window + module.exports) и тестируются в Node:
-`node --test app/tests/*.test.js`. Типы — JSDoc (`app/types/typedefs.js`), проверка:
+`node --test app/tests/*.test.js` (60 тестов). Типы — JSDoc и TypeScript-декларации (`app/types/typedefs.js`, `app/types/globals.d.ts`), проверка:
 `npx -y -p typescript tsc -p app/jsconfig.json`.
 
 Скрипты подключаются в `app/index.html` по порядку utils → store → components → app.js.
