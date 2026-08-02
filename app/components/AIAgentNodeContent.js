@@ -1,3 +1,10 @@
+// === Изолированное хранилище API-ключей (не попадает в основной стейт, экспорт и git) ===
+const _API_KEY_STORAGE = 'architector_api_key';
+const _SAVED_KEYS_STORAGE = 'architector_saved_api_keys';
+function _setActiveApiKey(k) { try { localStorage.setItem(_API_KEY_STORAGE, k); } catch(e) {} }
+function _getSavedApiKeys() { try { return JSON.parse(localStorage.getItem(_SAVED_KEYS_STORAGE) || '[]'); } catch(e) { return []; } }
+function _setSavedApiKeys(arr) { try { localStorage.setItem(_SAVED_KEYS_STORAGE, JSON.stringify(arr)); } catch(e) {} }
+
 function AIAgentNodeContent({ nodeId }) {
     const { state, dispatch } = useStore();
     const [tab, setTab] = React.useState('chat'); // 'chat' | 'logs' | 'settings'
@@ -9,6 +16,9 @@ function AIAgentNodeContent({ nodeId }) {
     const [fetchedModels, setFetchedModels] = React.useState([]);
     const [isFetchingModels, setIsFetchingModels] = React.useState(false);
     const [fetchModelMsg, setFetchModelMsg] = React.useState('');
+    const [showKeyManager, setShowKeyManager] = React.useState(false);
+    const [savedKeys, setSavedKeys] = React.useState(_getSavedApiKeys);
+    const [kmForm, setKmForm] = React.useState({ label: '', provider: 'openai', key: '' });
     const chatEndRef = React.useRef(null);
     const fileInputRef = React.useRef(null);
 
@@ -126,7 +136,8 @@ function AIAgentNodeContent({ nodeId }) {
                 apiUrl = (baseUrl ? baseUrl.replace(/\/+$/, '') : 'https://api.anthropic.com') + '/v1/models';
                 headers = {
                     'x-api-key': apiKey.trim(),
-                    'anthropic-version': '2023-06-01'
+                    'anthropic-version': '2023-06-01',
+                    'anthropic-dangerous-direct-browser-access': 'true'
                 };
             } else if (provider === 'grok') {
                 apiUrl = (baseUrl ? baseUrl.replace(/\/+$/, '') : 'https://api.x.ai/v1') + '/models';
@@ -136,16 +147,7 @@ function AIAgentNodeContent({ nodeId }) {
                 headers = { 'Authorization': `Bearer ${apiKey.trim()}` };
             }
 
-            let response;
-            try {
-                response = await fetch(apiUrl, { method: 'GET', headers });
-            } catch (directErr) {
-                console.warn('Direct model list fetch failed, trying proxy...', directErr);
-                response = await fetch(`https://proxy-api.trickle-app.host/?url=${encodeURIComponent(apiUrl)}`, {
-                    method: 'GET',
-                    headers
-                });
-            }
+            const response = await fetch(apiUrl, { method: 'GET', headers });
 
             if (!response.ok) {
                 const errText = await response.text();
@@ -206,6 +208,7 @@ function AIAgentNodeContent({ nodeId }) {
                 headers = {
                     'x-api-key': apiKey.trim(),
                     'anthropic-version': '2023-06-01',
+                    'anthropic-dangerous-direct-browser-access': 'true',
                     'Content-Type': 'application/json'
                 };
                 body = {
@@ -248,17 +251,7 @@ function AIAgentNodeContent({ nodeId }) {
                 };
             }
 
-            let response;
-            try {
-                response = await fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify(body) });
-            } catch (directErr) {
-                console.warn('Direct fetch failed, trying proxy...', directErr);
-                response = await fetch(`https://proxy-api.trickle-app.host/?url=${encodeURIComponent(apiUrl)}`, {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify(body)
-                });
-            }
+            const response = await fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify(body) });
 
             if (!response.ok) {
                 const errText = await response.text();
@@ -425,6 +418,7 @@ ${JSON.stringify(nodesSummary)}
                     fetchHeaders = {
                         'x-api-key': aiAgentSettings.apiKey.trim(),
                         'anthropic-version': '2023-06-01',
+                        'anthropic-dangerous-direct-browser-access': 'true',
                         'Content-Type': 'application/json'
                     };
                     fetchBody = {
@@ -496,10 +490,6 @@ ${JSON.stringify(nodesSummary)}
                 let response;
                 try {
                     response = await fetch(apiUrl, fetchOptions);
-                } catch (directErr) {
-                    console.warn('Direct fetch failed, attempting proxy fallback...', directErr);
-                    if (directErr.name === 'AbortError') throw directErr;
-                    response = await fetch(`https://proxy-api.trickle-app.host/?url=${encodeURIComponent(apiUrl)}`, fetchOptions);
                 } finally {
                     clearTimeout(timeoutId);
                 }
@@ -631,8 +621,8 @@ ${JSON.stringify(nodesSummary)}
             let errorMessage = e.message || 'Сбой сети';
             if (e.name === 'AbortError') {
                 errorMessage = 'Превышено время ожидания ответа (45 секунд).';
-            } else if (errorMessage.includes('Failed to fetch')) {
-                errorMessage = 'Блокировка запроса браузером (CORS) или отсутствие интернета. Проверьте Base URL или API-ключ.';
+            } else if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
+                errorMessage = 'Сетевая ошибка (CORS или нет интернета). Проверьте Base URL, API-ключ, или укажите адрес локального прокси.';
             }
             dispatch({ type: 'ADD_AI_MESSAGE', payload: { nodeId, message: { role: 'ai', content: `⚠️ Ошибка: ${errorMessage}` } } });
         } finally {
@@ -783,7 +773,17 @@ ${JSON.stringify(nodesSummary)}
 
                     <div className="flex flex-col gap-1.5">
                         <div className="flex items-center justify-between">
-                            <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">API Ключ</label>
+                            <div className="flex items-center gap-1.5">
+                                <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">API Ключ</label>
+                                <button
+                                    type="button"
+                                    className="text-purple-400 hover:text-purple-300 transition-colors p-0.5 rounded hover:bg-purple-500/20"
+                                    onClick={() => setShowKeyManager(true)}
+                                    title="Менеджер сохранённых ключей"
+                                >
+                                    <div className="icon-key text-[11px]"></div>
+                                </button>
+                            </div>
                             <button
                                 type="button"
                                 className="text-[10px] text-purple-400 hover:text-purple-300 underline font-semibold flex items-center gap-1"
@@ -799,8 +799,12 @@ ${JSON.stringify(nodesSummary)}
                             className="input-field border-[#444] focus:border-purple-500 text-xs"
                             placeholder={currentProvider === 'grok' ? 'xai-...' : currentProvider === 'google' ? 'AIzaSy...' : 'sk-...'}
                             value={aiAgentSettings.apiKey || ''}
-                            onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { apiKey: e.target.value } })}
+                            onChange={(e) => { _setActiveApiKey(e.target.value); dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { apiKey: e.target.value } }); }}
                         />
+                        <div className="text-[9px] text-amber-500/60 flex items-center gap-1">
+                            <span>⚠️</span>
+                            <span>Ключ хранится локально в браузере. Не используйте на общих компьютерах.</span>
+                        </div>
                         {fetchModelMsg && (
                             <div className="text-[10px] text-gray-300 mt-0.5 font-medium">{fetchModelMsg}</div>
                         )}
@@ -1017,6 +1021,64 @@ ${JSON.stringify(nodesSummary)}
                             >
                                 <div className="icon-send text-sm"></div>
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* Модальный менеджер API-ключей */}
+            {showKeyManager && (
+                <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2" onMouseDown={(e) => { e.stopPropagation(); setShowKeyManager(false); }}>
+                    <div className="bg-[#1a1a2e] border border-purple-500/30 rounded-xl w-full max-w-xs max-h-[95%] flex flex-col overflow-hidden shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#333] bg-black/40">
+                            <span className="text-xs font-semibold text-purple-300 flex items-center gap-1.5">
+                                <div className="icon-key text-xs"></div>
+                                Менеджер ключей
+                            </span>
+                            <button className="text-gray-500 hover:text-white transition-colors p-0.5" onClick={() => setShowKeyManager(false)}>
+                                <div className="icon-x text-sm"></div>
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5 no-scrollbar">
+                            {savedKeys.length === 0 ? (
+                                <div className="text-center text-gray-500 text-[11px] py-5">Нет сохранённых ключей.<br/>Добавьте ключ ниже.</div>
+                            ) : savedKeys.map(k => (
+                                <div key={k.id} className="flex items-center gap-1.5 p-2 rounded-lg bg-black/40 border border-[#333] hover:border-purple-500/40 transition-colors group">
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-1">
+                                            <span className="text-[11px] font-semibold text-gray-200 truncate">{k.label}</span>
+                                            <span className={`text-[8px] px-1 py-px rounded-full font-bold uppercase ${k.provider === 'anthropic' ? 'bg-orange-900/50 text-orange-400' : k.provider === 'google' ? 'bg-blue-900/50 text-blue-400' : k.provider === 'grok' ? 'bg-red-900/50 text-red-400' : 'bg-green-900/50 text-green-400'}`}>{k.provider}</span>
+                                        </div>
+                                        <div className="text-[9px] text-gray-500 font-mono mt-0.5">{k.key.slice(0, 7)}••••{k.key.slice(-4)}</div>
+                                    </div>
+                                    <button className="text-[9px] px-1.5 py-0.5 rounded bg-purple-600/30 hover:bg-purple-600/60 text-purple-300 font-semibold transition-colors" onClick={() => { _setActiveApiKey(k.key); setFetchedModels([]); setFetchModelMsg(''); dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { apiKey: k.key, provider: k.provider } }); setShowKeyManager(false); }}>Применить</button>
+                                    <button className="text-gray-600 hover:text-red-400 transition-colors p-0.5 opacity-0 group-hover:opacity-100" onClick={() => { const next = savedKeys.filter(x => x.id !== k.id); setSavedKeys(next); _setSavedApiKeys(next); }}>
+                                        <div className="icon-trash text-[10px]"></div>
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="p-2.5 border-t border-[#333] bg-black/30 space-y-1.5">
+                            <div className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider">Сохранить новый ключ</div>
+                            <input type="text" className="input-field border-[#444] focus:border-purple-500 text-xs w-full" placeholder="Название (напр. OpenAI Work)" value={kmForm.label} onChange={(e) => setKmForm(f => ({...f, label: e.target.value}))} onMouseDown={(e) => e.stopPropagation()} />
+                            <div className="flex gap-1.5">
+                                <select className="input-field border-[#444] focus:border-purple-500 text-[10px] flex-1 cursor-pointer bg-black/50" value={kmForm.provider} onChange={(e) => setKmForm(f => ({...f, provider: e.target.value}))} onMouseDown={(e) => e.stopPropagation()}>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="anthropic">Anthropic</option>
+                                    <option value="google">Google</option>
+                                    <option value="grok">Grok</option>
+                                </select>
+                                <input type="password" className="input-field border-[#444] focus:border-purple-500 text-xs flex-[2]" placeholder="sk-..." value={kmForm.key} onChange={(e) => setKmForm(f => ({...f, key: e.target.value}))} onMouseDown={(e) => e.stopPropagation()} />
+                            </div>
+                            <button className="w-full btn bg-purple-600/40 hover:bg-purple-600/60 border-purple-500/40 text-purple-200 text-[11px] py-1.5 rounded font-semibold transition-colors" onClick={() => {
+                                if (!kmForm.label.trim() || !kmForm.key.trim()) return;
+                                const next = [...savedKeys, { id: 'key-' + Date.now(), label: kmForm.label.trim(), provider: kmForm.provider, key: kmForm.key.trim(), createdAt: new Date().toISOString().slice(0, 10) }];
+                                setSavedKeys(next);
+                                _setSavedApiKeys(next);
+                                setKmForm({ label: '', provider: 'openai', key: '' });
+                            }}>Сохранить</button>
+                        </div>
+                        <div className="px-2.5 py-1.5 bg-amber-950/20 border-t border-amber-500/20 text-[8px] text-amber-500/60 text-center">
+                            ⚠️ Ключи хранятся только в localStorage этого браузера. Не попадают в файлы проекта и git.
                         </div>
                     </div>
                 </div>

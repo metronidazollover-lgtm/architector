@@ -224,10 +224,14 @@ const getInitialState = () => {
                 ui: { 
                     ...defaultState.ui, 
                     ...(parsed.ui || {}),
-                    aiAgentSettings: {
-                        ...defaultState.ui.aiAgentSettings,
-                        ...((parsed.ui && parsed.ui.aiAgentSettings) || {})
-                    }
+                    aiAgentSettings: (() => {
+                        const base = { ...defaultState.ui.aiAgentSettings, ...((parsed.ui && parsed.ui.aiAgentSettings) || {}) };
+                        // Миграция: если ключ ещё в основном стейте — переносим в изолированное хранилище
+                        const sep = localStorage.getItem('architector_api_key');
+                        if (!sep && base.apiKey) { try { localStorage.setItem('architector_api_key', base.apiKey); } catch(e) {} }
+                        base.apiKey = sep || base.apiKey || '';
+                        return base;
+                    })()
                 },
                 aiChatHistoryByNode: parsed.aiChatHistoryByNode || defaultState.aiChatHistoryByNode,
                 aiChatHistory: parsed.aiChatHistory || defaultState.aiChatHistory
@@ -236,6 +240,11 @@ const getInitialState = () => {
     } catch (e) {
         console.error('Ошибка загрузки состояния:', e);
     }
+    // Для нового или повреждённого стейта: пробуем загрузить ранее сохранённый API-ключ
+    try {
+        const sep = localStorage.getItem('architector_api_key');
+        if (sep) return { ...defaultState, ui: { ...defaultState.ui, aiAgentSettings: { ...defaultState.ui.aiAgentSettings, apiKey: sep } } };
+    } catch(e) {}
     return defaultState;
 };
 

@@ -8,7 +8,9 @@ const StoreProvider = ({ children }) => {
 
     React.useEffect(() => {
         try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+            // API-ключ хранится отдельно (architector_api_key), вырезаем из основного стейта
+            const safeState = { ...state, ui: { ...state.ui, aiAgentSettings: { ...state.ui.aiAgentSettings, apiKey: '' } } };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(safeState));
         } catch (e) {
             console.error('Ошибка сохранения состояния:', e);
             if (e.name === 'QuotaExceededError' || e.message.includes('QuotaExceededError')) {
@@ -19,7 +21,8 @@ const StoreProvider = ({ children }) => {
                         past: [], 
                         future: [], 
                         historyLogs: ['История была автоматически очищена для освобождения памяти'],
-                        aiChatHistory: state.aiChatHistory.map(msg => ({...msg, media: null})) // Удаляем тяжелые картинки из чата
+                        aiChatHistory: state.aiChatHistory.map(msg => ({...msg, media: null})),
+                        ui: { ...state.ui, aiAgentSettings: { ...state.ui.aiAgentSettings, apiKey: '' } }
                     };
                     localStorage.setItem(STORAGE_KEY, JSON.stringify(emergencyState));
                     console.warn('Состояние сохранено в аварийном режиме (без истории и картинок).');
