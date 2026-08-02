@@ -79,7 +79,7 @@ architector-main/
    * Мировые координаты вычисляются динамически вызовом `HierarchyUtils.getAbsolutePosition(id, nodes, layers, ports)`.
 
 2. **Ключи словарей:**
-   * В объектах `nodes`, `layers`, `ports` ключ в словаре **ОБЯЗАТЕЛЬНО** совпадает с `entity.id` (например, `nodes["node-1"].id === "node-1"`).
+   * В объектах `nodes`, `layers`, `ports`, `links` ключ в словаре **ОБЯЗАТЕЛЬНО** совпадает с `entity.id` (например, `nodes["node-1"].id === "node-1"`).
 
 3. **Форма нод (`shape`):**
    * Все узлы имеют стандартизированную прямоугольную форму `shape: "rectangle"`.

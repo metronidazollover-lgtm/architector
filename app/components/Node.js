@@ -2,7 +2,7 @@ function Node({ data, isContextNode, isParentOfSelected }) {
     const { state, dispatch } = useStore();
 
     const isConnectedToSelectedLink = React.useMemo(() => {
-        return state.links.some(l => {
+        return Object.values(state.links || {}).some(l => {
             if (!l || !state.selectedIds.includes(l.id)) return false;
             const sPort = state.ports[l.sourcePortId];
             const tPort = state.ports[l.targetPortId];
@@ -14,7 +14,7 @@ function Node({ data, isContextNode, isParentOfSelected }) {
         const ownsSelectedPort = state.selectedIds.some(sid => state.ports[sid] && state.ports[sid].nodeId === data.id);
         if (ownsSelectedPort) return true;
 
-        return state.links.some(l => {
+        return Object.values(state.links || {}).some(l => {
             if (!l) return false;
             const sPort = state.ports[l.sourcePortId];
             const tPort = state.ports[l.targetPortId];
@@ -26,7 +26,7 @@ function Node({ data, isContextNode, isParentOfSelected }) {
     }, [state.links, state.selectedIds, state.ports, data.id]);
 
     const isConnectedToSelectedNode = React.useMemo(() => {
-        return state.links.some(l => {
+        return Object.values(state.links || {}).some(l => {
             if (!l) return false;
             const sPort = state.ports[l.sourcePortId];
             const tPort = state.ports[l.targetPortId];

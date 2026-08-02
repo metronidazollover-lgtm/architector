@@ -90,7 +90,7 @@
  * @property {Object<string, LayerEntity>} layers
  * @property {Object<string, NodeEntity>} nodes
  * @property {Object<string, PortEntity>} ports
- * @property {LinkEntity[]} links
+ * @property {Object<string, LinkEntity>} links
  * @property {string[]} selectedIds
  * @property {string[]} isolatedIds
  * @property {string} interactionMode

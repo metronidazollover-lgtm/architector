@@ -57,6 +57,24 @@ test('LOAD_STATE: v9-файл мигрирует на лету, v10 проход
     assert.deepEqual(s2.nodes.inLayer.position, { x: 20, y: 90 }); // auto-aligned on load
 });
 
+test('LOAD_STATE: конвертирует массив связей links в словарь { [id]: link }', () => {
+    const s0 = { ...defaultState };
+    const payloadWithArrayLinks = {
+        nodes: {},
+        ports: {},
+        layers: {},
+        links: [
+            { id: 'link-1', sourcePortId: 'p1', targetPortId: 'p2', name: 'Link 1' },
+            { id: 'link-2', sourcePortId: 'p3', targetPortId: 'p4', name: 'Link 2' }
+        ]
+    };
+    const s1 = reducer(s0, { type: 'LOAD_STATE', payload: payloadWithArrayLinks });
+    assert.ok(!Array.isArray(s1.links), 'links должен быть объектом-словарем');
+    assert.equal(Object.keys(s1.links).length, 2);
+    assert.deepEqual(s1.links['link-1'].name, 'Link 1');
+    assert.deepEqual(s1.links['link-2'].name, 'Link 2');
+});
+
 test('REPARENT_ENTITY: абсолютная позиция сохраняется', () => {
     const m = migrateToV10(v9project());
     const s0 = { ...defaultState, nodes: m.nodes, layers: m.layers };

@@ -146,7 +146,7 @@ const defaultState = {
     layers: {},
     nodes: {},
     ports: {},
-    links: [],
+    links: {},
     selectedIds: [],
     isolatedIds: [],
     interactionMode: 'default',
@@ -163,6 +163,7 @@ const defaultState = {
             aiAgentOpen: false,
             visibleContexts: [],
             hiddenContexts: [],
+            xRayLevels: [],
             peekNodeId: null,
             transitionFromContext: null,
         aiAgentSettings: {
@@ -183,6 +184,29 @@ const defaultState = {
     future: [],
     historyLogs: ['Инициализация проекта'],
     formatVersion: FORMAT_VERSION
+};
+
+const normalizeLinks = (raw) => {
+    if (!raw) return {};
+    if (Array.isArray(raw)) {
+        const dict = {};
+        raw.forEach((link, idx) => {
+            if (!link) return;
+            const id = link.id || `link-${idx}`;
+            dict[id] = { ...link, id };
+        });
+        return dict;
+    }
+    if (typeof raw === 'object') {
+        const dict = {};
+        Object.entries(raw).forEach(([key, link]) => {
+            if (!link) return;
+            const id = link.id || key;
+            dict[id] = { ...link, id };
+        });
+        return dict;
+    }
+    return {};
 };
 
 const getInitialState = () => {
@@ -220,10 +244,13 @@ const getInitialState = () => {
                 ...parsed, 
                 nodes: cleanNodes,
                 ports: mergedPorts,
-                links: Array.isArray(parsed.links) ? parsed.links : Object.values(parsed.links || {}),
+                links: normalizeLinks(parsed.links),
                 ui: { 
                     ...defaultState.ui, 
                     ...(parsed.ui || {}),
+                    xRayLevels: (parsed.ui && Array.isArray(parsed.ui.xRayLevels))
+                        ? parsed.ui.xRayLevels.filter(l => typeof l === 'number' && l >= 0)
+                        : [],
                     aiAgentSettings: (() => {
                         const base = { ...defaultState.ui.aiAgentSettings, ...((parsed.ui && parsed.ui.aiAgentSettings) || {}) };
                         // Миграция: если ключ ещё в основном стейте — переносим в изолированное хранилище
@@ -285,7 +312,7 @@ const contextExists = (state, id) =>
     !!state.nodes[id] ||
     !!state.ports[id] ||
     !!(state.layers && state.layers[id]) ||
-    !!(state.links && state.links.find(l => l && l.id === id));
+    !!(state.links && state.links[id]);
 
 const reducer = (state, action) => {
     switch (action.type) {
@@ -365,7 +392,7 @@ const reducer = (state, action) => {
                 layers: layers,
                 nodes: finalNodes,
                 ports: payload.ports || {},
-                links: payload.links || [],
+                links: normalizeLinks(payload.links),
                 canvas: payload.canvas || { offset: { x: 0, y: 0 }, zoom: 1 },
                 currentContext: payload.currentContext || 'root',
                 breadcrumbs: payload.breadcrumbs || [{ id: 'root', name: 'Главный холст' }],
@@ -563,21 +590,33 @@ const reducer = (state, action) => {
         }
         case 'UPDATE_LINK': {
             const { id, updates, skipHistory } = action.payload || {};
-            if (!id || !state.links || !state.links.some(l => l && l.id === id)) return state;
+            if (!id || !state.links || !state.links[id]) return state;
             const historyState = skipHistory ? {} : saveHistory(state, `Изменена связь`);
             return {
                 ...state,
                 ...historyState,
-                links: state.links.map(l => l && l.id === id ? { ...l, ...updates } : l)
+                links: {
+                    ...state.links,
+                    [id]: { ...state.links[id], ...updates }
+                }
             };
         }
         case 'ADD_LINK': {
             const id = action.payload.id || 'link-' + Date.now() + Math.floor(Math.random() * 1000);
             const historyState = saveHistory(state, `Создана связь`);
+            const linkObj = {
+                id,
+                name: action.payload.name || `Связь ${id.split('-')[1]}`,
+                context: action.payload.context || state.currentContext,
+                ...action.payload
+            };
             return {
                 ...state,
                 ...historyState,
-                links: [...state.links, { id, name: action.payload.name || `Связь ${id.split('-')[1]}`, context: action.payload.context || state.currentContext, ...action.payload }],
+                links: {
+                    ...state.links,
+                    [id]: linkObj
+                },
                 pendingConnection: null,
                 interactionMode: 'default'
             };
@@ -637,7 +676,7 @@ const reducer = (state, action) => {
                     targetOffsetY = (screenH / 2) - absPos.y * targetZoom;
                 }
             } else {
-                const link = state.links ? state.links.find(l => l && l.id === id) : null;
+                const link = state.links ? state.links[id] : null;
                 if (link) {
                     const sourcePort = state.ports[link.sourcePortId];
                     const targetPort = state.ports[link.targetPortId];
@@ -661,7 +700,7 @@ const reducer = (state, action) => {
             const hasChildren = Object.values(state.nodes).some(n => n && n.parentId === id) ||
                                 Object.values(state.layers || {}).some(l => l && l.parentId === id) ||
                                 !!state.ports[id] ||
-                                !!(state.links && state.links.some(l => l && l.id === id));
+                                !!(state.links && state.links[id]);
 
 
             // Если уровень уже посещали, возвращаем его сохранённую камеру вместо расчётной.
@@ -765,7 +804,7 @@ const reducer = (state, action) => {
                 }
                 // Связь → поднимаемся от source-узла
                 if (!curr) {
-                    const link = state.links.find(l => l && l.id === targetId);
+                    const link = state.links ? state.links[targetId] : null;
                     if (link) {
                         const sp = state.ports[link.sourcePortId];
                         curr = sp ? state.nodes[sp.nodeId] : null;
@@ -795,10 +834,12 @@ const reducer = (state, action) => {
         }
         case 'REMOVE_LINK': {
             const historyState = saveHistory(state, `Удалена связь`);
+            const newLinks = { ...state.links };
+            delete newLinks[action.payload];
             return {
                 ...state,
                 ...historyState,
-                links: state.links.filter(l => l.id !== action.payload)
+                links: newLinks
             };
         }
         case 'REMOVE_NODE': {
@@ -812,7 +853,13 @@ const reducer = (state, action) => {
             const newPorts = { ...state.ports };
             portsToRemove.forEach(pid => delete newPorts[pid]);
             
-            const newLinks = state.links.filter(l => !portsToRemove.includes(l.sourcePortId) && !portsToRemove.includes(l.targetPortId));
+            const newLinks = { ...state.links };
+            Object.keys(newLinks).forEach(lid => {
+                const l = newLinks[lid];
+                if (l && (portsToRemove.includes(l.sourcePortId) || portsToRemove.includes(l.targetPortId))) {
+                    delete newLinks[lid];
+                }
+            });
             
             let newContext = state.currentContext;
             let newBreadcrumbs = state.breadcrumbs;
@@ -840,7 +887,13 @@ const reducer = (state, action) => {
             const newPorts = { ...state.ports };
             delete newPorts[action.payload];
             // Также удаляем все связанные с портом связи
-            const newLinks = state.links.filter(l => l.sourcePortId !== action.payload && l.targetPortId !== action.payload);
+            const newLinks = { ...state.links };
+            Object.keys(newLinks).forEach(lid => {
+                const l = newLinks[lid];
+                if (l && (l.sourcePortId === action.payload || l.targetPortId === action.payload)) {
+                    delete newLinks[lid];
+                }
+            });
             return {
                 ...state,
                 ...historyState,
@@ -1177,17 +1230,14 @@ const reducer = (state, action) => {
             const newNodes = { ...state.nodes };
             const newLayers = { ...state.layers };
             const newPorts = { ...state.ports };
-            const newLinks = [...state.links];
+            const newLinks = { ...state.links };
 
             ids.forEach(id => {
                 const specificUpdates = updatesById && updatesById[id] ? updatesById[id] : updates;
                 if (newNodes[id]) newNodes[id] = { ...newNodes[id], ...specificUpdates };
                 else if (newLayers[id]) newLayers[id] = { ...newLayers[id], ...specificUpdates };
                 else if (newPorts[id]) newPorts[id] = { ...newPorts[id], ...specificUpdates };
-                else {
-                    const lIdx = newLinks ? newLinks.findIndex(l => l && l.id === id) : -1;
-                    if (lIdx !== -1) newLinks[lIdx] = { ...newLinks[lIdx], ...specificUpdates };
-                }
+                else if (newLinks[id]) newLinks[id] = { ...newLinks[id], ...specificUpdates };
             });
 
             return { ...state, ...historyState, nodes: newNodes, layers: newLayers, ports: newPorts, links: newLinks };
@@ -1248,7 +1298,7 @@ const reducer = (state, action) => {
             let newNodes = { ...state.nodes };
             let newLayers = { ...state.layers };
             let newPorts = { ...state.ports };
-            let newLinks = [...state.links];
+            let newLinks = { ...state.links };
             
             let portsToRemove = [];
             let removedLayerIds = [];
@@ -1263,8 +1313,8 @@ const reducer = (state, action) => {
                     delete newLayers[id];
                 }
                 else if (newPorts[id]) portsToRemove.push(id);
-                else {
-                    newLinks = newLinks.filter(l => l.id !== id);
+                else if (newLinks[id]) {
+                    delete newLinks[id];
                 }
             });
 
@@ -1283,7 +1333,12 @@ const reducer = (state, action) => {
             });
 
             portsToRemove.forEach(pid => delete newPorts[pid]);
-            newLinks = newLinks.filter(l => !portsToRemove.includes(l.sourcePortId) && !portsToRemove.includes(l.targetPortId));
+            Object.keys(newLinks).forEach(lid => {
+                const l = newLinks[lid];
+                if (l && (portsToRemove.includes(l.sourcePortId) || portsToRemove.includes(l.targetPortId))) {
+                    delete newLinks[lid];
+                }
+            });
 
             return {
                 ...state,
@@ -1347,7 +1402,7 @@ const reducer = (state, action) => {
                     targetOffsetY = (screenH / 2) - absPos.y * newZoom;
                 }
             } else {
-                const link = state.links ? state.links.find(l => l && l.id === id) : null;
+                const link = state.links ? state.links[id] : null;
                 if (link) {
                     const sourcePort = state.ports[link.sourcePortId];
                     const targetPort = state.ports[link.targetPortId];

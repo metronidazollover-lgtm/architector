@@ -49,7 +49,7 @@ function Link({ data }) {
     
     if (data.linkStyle === 'orthogonal') {
         // Уникальный отступ для каждой линии, чтобы они не сливались
-        const linkIndex = state.links ? state.links.findIndex(l => l && l.id === data.id) : -1;
+        const linkIndex = state.links ? Object.keys(state.links).indexOf(data.id) : -1;
         const marginOffset = (linkIndex > -1 ? linkIndex % 6 : 0) * 8;
         const margin = 20 + marginOffset;
         let m1 = margin;

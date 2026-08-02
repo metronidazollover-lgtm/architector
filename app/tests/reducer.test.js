@@ -26,9 +26,9 @@ const makeState = () => ({
         portB: { id: 'portB', nodeId: 'nodeB', type: 'output', edge: 'right', position: 0.5 },
         portC: { id: 'portC', nodeId: 'nodeC', type: 'input', edge: 'left', position: 0.5 }
     },
-    links: [
-        { id: 'linkBC', sourcePortId: 'portB', targetPortId: 'portC' }
-    ]
+    links: {
+        linkBC: { id: 'linkBC', sourcePortId: 'portB', targetPortId: 'portC' }
+    }
 });
 
 test('DIVE_INTO: сохраняет камеру покидаемого контекста и пишет историю', () => {
@@ -125,7 +125,7 @@ test('DELETE_SELECTED: удаление узла удаляет его порт�
     assert.equal(s1.nodes.nodeB, undefined);
     assert.equal(s1.ports.portB, undefined);
     assert.ok(s1.ports.portC);
-    assert.equal(s1.links.length, 0);
+    assert.equal(Object.keys(s1.links).length, 0);
 });
 
 test('UNDO/REDO: круговой откат структуры', () => {

@@ -7,7 +7,7 @@ function Canvas() {
     const wheelTimeoutRef = React.useRef(null);
     
     const getContextDepth = React.useCallback((contextId) => {
-        if (contextId === 'root') return 0;
+        if (!contextId || contextId === 'root') return 0;
         let depth = 0;
         let currentId = contextId;
         const visited = new Set();
@@ -15,31 +15,97 @@ function Canvas() {
             visited.add(currentId);
             if (state.layers && state.layers[currentId]) {
                 currentId = state.layers[currentId].parentId || 'root';
-            } else if (state.nodes[currentId]) {
+            } else if (state.nodes && state.nodes[currentId]) {
                 depth++;
                 currentId = state.nodes[currentId].parentId || 'root';
+            } else if (state.ports && state.ports[currentId]) {
+                depth++;
+                currentId = state.ports[currentId].nodeId || 'root';
+            } else if (state.links && state.links[currentId]) {
+                depth++;
+                const link = state.links[currentId];
+                currentId = link.context || 'root';
             } else {
                 break;
             }
         }
         return depth;
-    }, [state.layers, state.nodes]);
+    }, [state.layers, state.nodes, state.ports, state.links]);
 
-    const getTrueParentNodeId = React.useCallback((entityId) => {
+    const getTrueParentContextId = React.useCallback((entityId) => {
         if (!entityId || entityId === 'root') return 'root';
-        let currentId = state.nodes[entityId]?.parentId || (state.layers && state.layers[entityId]?.parentId) || 'root';
-        const visited = new Set();
-        while (currentId && currentId !== 'root' && !visited.has(currentId)) {
-            visited.add(currentId);
-            if (state.nodes[currentId]) return currentId;
-            if (state.layers && state.layers[currentId]) {
-                currentId = state.layers[currentId].parentId || 'root';
-            } else {
-                break;
+        const safeNodes = state.nodes || {};
+        const safeLayers = state.layers || {};
+        const safePorts = state.ports || {};
+        const safeLinks = state.links || {};
+        const entity = safeNodes[entityId] || safeLayers[entityId] || safePorts[entityId] || safeLinks[entityId];
+        if (!entity || !entity.parentId || entity.parentId === 'root') return 'root';
+        const pId = entity.parentId;
+        if (safeLayers[pId]) {
+            return safeLayers[pId].parentId || 'root';
+        }
+        return pId;
+    }, [state.nodes, state.layers, state.ports, state.links]);
+
+    const getActiveLevelsSet = React.useCallback(() => {
+        const xRay = state.ui?.xRayLevels;
+        const validXRay = Array.isArray(xRay) ? xRay.filter(l => typeof l === 'number' && l >= 0) : [];
+        const hUtils = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof global !== 'undefined' && global.HierarchyUtils) || null;
+        const safeNodes = state.nodes || {};
+        const safeLayers = state.layers || {};
+        const safePorts = state.ports || {};
+        const safeLinks = state.links || {};
+
+        if (validXRay.length > 0) {
+            return new Set(validXRay);
+        }
+
+        const active = new Set();
+        const ctx = state.currentContext || 'root';
+        if (ctx === 'root') {
+            active.add(0);
+        } else {
+            const ctxDepth = hUtils ? hUtils.getEntityDepth(ctx, safeNodes, safeLayers, safePorts, safeLinks) : 0;
+            // Непосредственный родительский уровень-рамка
+            active.add(ctxDepth);
+            // Внутренний уровень содержимого
+            active.add(ctxDepth + 1);
+        }
+        return active;
+    }, [state.ui, state.currentContext, state.nodes, state.layers, state.ports, state.links]);
+
+    const isNodeVisible = React.useCallback((node) => {
+        if (!node || node.hidden) return false;
+        const isolated = state.isolatedIds || [];
+        if (isolated.length > 0 && !isolated.includes(node.id)) return false;
+
+        const safeNodes = state.nodes || {};
+        const safeLayers = state.layers || {};
+        const safePorts = state.ports || {};
+        const safeLinks = state.links || {};
+
+        // Если текущий контекст — это связь, её якоря (source/target nodes) всегда видны
+        const ctxLink = safeLinks[state.currentContext];
+        if (ctxLink) {
+            const sPort = safePorts[ctxLink.sourcePortId];
+            const tPort = safePorts[ctxLink.targetPortId];
+            if ((sPort && sPort.nodeId === node.id) || (tPort && tPort.nodeId === node.id)) {
+                return true;
             }
         }
-        return 'root';
-    }, [state.nodes, state.layers]);
+
+        const hUtils = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof HierarchyUtils !== 'undefined' ? HierarchyUtils : null);
+        const exactNodeDepth = hUtils ? hUtils.getEntityDepth(node.id, safeNodes, safeLayers, safePorts, safeLinks) : 0;
+
+        const activeLevels = getActiveLevelsSet();
+
+        // Узел виден СТРОГО если его глобальный уровень вложенности входит в список активных уровней
+        if (!activeLevels.has(exactNodeDepth)) {
+            return false;
+        }
+
+        return true;
+    }, [state.isolatedIds, state.nodes, state.layers, state.ports, state.links, state.currentContext, getActiveLevelsSet]);
 
     // Используем Ref для актуального стейта камеры, чтобы не переподключать слушатель wheel каждый кадр
     const cameraRef = React.useRef({ zoom, offset });
@@ -384,13 +450,26 @@ function Canvas() {
                 <span className="w-px h-4 bg-[#444]"></span>
 
                 {/* Активные крошки */}
+                {/* Активные крошки */}
                 {state.breadcrumbs.map((crumb, index) => {
                     const isCurrent = index === state.breadcrumbs.length - 1;
-                    
-                    const isVisible = (state.ui.xRayLevels || []).includes(index);
-                    
-                    // Скрываем глаз для самого первого уровня (Root), если мы находимся прямо в нём
-                    const showEye = !(isCurrent && index === 0);
+                    const activeLevels = getActiveLevelsSet();
+                    const isLevelActive = activeLevels.has(index);
+                    const showEye = true;
+
+                    const handleToggleLevelEye = (e) => {
+                        e.stopPropagation();
+                        const nextLevels = new Set(activeLevels);
+                        if (nextLevels.has(index)) {
+                            nextLevels.delete(index);
+                        } else {
+                            nextLevels.add(index);
+                        }
+                        dispatch({ 
+                            type: 'SET_UI', 
+                            payload: { xRayLevels: Array.from(nextLevels) } 
+                        });
+                    };
 
                     return (
                         <React.Fragment key={crumb.id}>
@@ -403,18 +482,15 @@ function Canvas() {
                                     {index === 0 && <span className="icon-house text-xs"></span>}
                                     <span>{crumb.name}</span>
                                     <span className="text-[10px] opacity-60 ml-0.5 font-normal">(Уровень {index})</span>
-                                    {isVisible && <span className="text-[10px] text-[var(--accent-blue)] opacity-80 ml-1">(X-Ray)</span>}
+                                    {isLevelActive && <span className="text-[10px] text-[var(--accent-blue)] opacity-80 ml-1">(X-Ray)</span>}
                                 </button>
                                 {showEye && (
                                     <button 
-                                        className={`ml-1 p-0.5 rounded transition-colors ${isVisible ? 'text-[var(--accent-blue)] bg-[var(--accent-blue)]/10' : 'text-gray-500 hover:text-gray-300 hover:bg-white/10'}`}
-                                        onClick={(e) => { 
-                                            e.stopPropagation(); 
-                                            dispatch({ type: 'TOGGLE_XRAY_LEVEL', payload: index }); 
-                                        }}
-                                        title={isVisible ? "Отключить X-Ray для этого уровня" : "Показать всех соседей этого уровня (Включить X-Ray)"}
+                                        className={`ml-1 p-0.5 rounded transition-colors ${isLevelActive ? 'text-[var(--accent-blue)] bg-[var(--accent-blue)]/10' : 'text-gray-500 hover:text-gray-300 hover:bg-white/10'}`}
+                                        onClick={handleToggleLevelEye}
+                                        title={isLevelActive ? `Скрыть элементы Уровня ${index}` : `Показать элементы Уровня ${index}`}
                                     >
-                                        <div className={`text-xs ${isVisible ? 'icon-eye' : 'icon-eye-off'}`}></div>
+                                        <div className={`text-xs ${isLevelActive ? 'icon-eye' : 'icon-eye-off'}`}></div>
                                     </button>
                                 )}
                             </div>
@@ -443,7 +519,7 @@ function Canvas() {
             </div>
 
             {/* Context specific backgrounds */}
-            {state.links && state.links.find(l => l && l.id === state.currentContext) && (
+            {state.links && state.links[state.currentContext] && (
                 <div className="absolute inset-0 pointer-events-none flex justify-between z-0 opacity-10">
                     <div className="w-1/4 h-full bg-gradient-to-r from-[var(--accent-blue)] to-transparent flex items-center p-8">
                         <div className="text-[10rem] font-bold text-white transform -rotate-90 origin-left opacity-20">INPUT</div>
@@ -465,39 +541,24 @@ function Canvas() {
                 {state.layers && Object.values(state.layers).map((layer, idx) => {
                     if (state.isolatedIds.length > 0 && !state.isolatedIds.includes(layer.id)) return null;
 
-                    const effectiveContextId = layer.parentId || 'root';
-                    const isCurrentChild = effectiveContextId === state.currentContext;
-                    const isTheContextItself = layer.id === state.currentContext;
-                    const isAncestorContext = state.breadcrumbs.some(b => b.id === effectiveContextId) && effectiveContextId !== state.currentContext;
-                    const contextDepth = getContextDepth(effectiveContextId);
-                    const isExplicitlyVisible = (state.ui.xRayLevels || []).includes(contextDepth);
-                    const isBreadcrumbAncestor = state.breadcrumbs.some(b => b.id === layer.id) && !isTheContextItself;
-                    const isPeekChild = !!state.ui.peekNodeId && effectiveContextId === state.ui.peekNodeId;
-                    const isTransitionChild = !!state.ui.transitionFromContext && effectiveContextId === state.ui.transitionFromContext;
+                    const hUtils = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof HierarchyUtils !== 'undefined' ? HierarchyUtils : null);
+                    const layerDepth = hUtils ? hUtils.getEntityDepth(layer.id, state.nodes, state.layers, state.ports, state.links) : 0;
+                    const activeLevels = getActiveLevelsSet();
 
-                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild && !isTransitionChild) return null;
-
-                    const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isExplicitlyVisible && !isPeekChild;
+                    if (!activeLevels.has(layerDepth)) return null;
 
                     return (
                         <div
                             key={layer.id || `layer-${idx}`}
-                            className={`
-                                ${isDimmed ? 'opacity-30 pointer-events-none grayscale' : ''}
-                                ${isExplicitlyVisible && !isCurrentChild ? 'pointer-events-auto' : ''}
-                                ${isBreadcrumbAncestor ? 'animate-pulse opacity-50 ring-2 ring-[var(--accent-blue)] rounded-xl' : ''}
-                                ${isPeekChild ? 'opacity-100 pointer-events-none' : ''}
-                                ${isTransitionChild && !isCurrentChild ? 'opacity-50 pointer-events-none' : ''}
-                            `}
-                            style={{ zIndex: isPeekChild ? 30 : (isCurrentChild ? 5 : (isExplicitlyVisible ? 2 : (isBreadcrumbAncestor ? 1 : 0))) }}
+                            style={{ zIndex: 2 }}
                         >
                             <Layer data={layer} />
                         </div>
                     );
                 })}
 
-                {/* Render ALL Links but fade out non-current */}
-                {state.links.map((link, idx) => {
+                {/* Render ALL Links */}
+                {Object.values(state.links || {}).map((link, idx) => {
                     if (!link || !link.id || !link.sourcePortId || !link.targetPortId) return null;
                     const sPort = state.ports ? state.ports[link.sourcePortId] : null;
                     const tPort = state.ports ? state.ports[link.targetPortId] : null;
@@ -507,12 +568,34 @@ function Canvas() {
                     if (state.isolatedIds.length > 0) {
                         const sNodeId = sPort.nodeId;
                         const tNodeId = tPort.nodeId;
-                        // Show link only if both connected nodes are isolated
                         if (!state.isolatedIds.includes(sNodeId) || !state.isolatedIds.includes(tNodeId)) return null;
                     }
 
                     const sNode = sPort ? state.nodes[sPort.nodeId] : null;
                     const tNode = tPort ? state.nodes[tPort.nodeId] : null;
+
+                    if (!sNode || !tNode) return null;
+
+                    const hUtils = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof HierarchyUtils !== 'undefined' ? HierarchyUtils : null);
+                    const safeNodes = state.nodes || {};
+                    const safeLayers = state.layers || {};
+                    const safePorts = state.ports || {};
+                    const safeLinks = state.links || {};
+
+                    const sDepth = hUtils ? hUtils.getEntityDepth(sPort.nodeId, safeNodes, safeLayers, safePorts, safeLinks) : 0;
+                    const tDepth = hUtils ? hUtils.getEntityDepth(tPort.nodeId, safeNodes, safeLayers, safePorts, safeLinks) : 0;
+
+                    const activeLevels = getActiveLevelsSet();
+                    const isTheContextItself = link.id === state.currentContext;
+                    const isBreadcrumbAncestor = (state.breadcrumbs || []).some(b => b && b.id === link.id);
+                    const isLinkSelected = (state.selectedIds || []).includes(link.id) || (state.selectedIds || []).includes(sPort.id) || (state.selectedIds || []).includes(tPort.id);
+
+                    const isLinkContextActive = isTheContextItself || isBreadcrumbAncestor || isLinkSelected;
+
+                    // Связь отображается, если она является контекстом погружения ИЛИ если ОБА её присоединенных уровня активны
+                    if (!isLinkContextActive && (!activeLevels.has(sDepth) || !activeLevels.has(tDepth))) {
+                        return null;
+                    }
                     
                     let sContext = 'root';
                     if (sNode) sContext = state.layers && state.layers[sNode.parentId] ? state.layers[sNode.parentId].parentId || 'root' : sNode.parentId || 'root';
@@ -542,55 +625,72 @@ function Canvas() {
                     }
 
                     const isCurrentChild = effectiveContextId === state.currentContext;
-                    const isTheContextItself = link.id === state.currentContext;
-                    const isAncestorContext = state.breadcrumbs.some(b => b.id === effectiveContextId) && effectiveContextId !== state.currentContext;
+                    const isAncestorContext = (state.breadcrumbs || []).some(b => b && b.id === effectiveContextId) && effectiveContextId !== state.currentContext;
                     const contextDepth = getContextDepth(effectiveContextId);
                     const isExplicitlyVisible = (state.ui.xRayLevels || []).includes(contextDepth);
-                    const isBreadcrumbAncestor = state.breadcrumbs.some(b => b.id === link.id) && !isTheContextItself;
 
-                    if (isCrossLevel && !isExplicitlyVisible && sContext !== tContext && getContextDepth(sContext) === getContextDepth(tContext)) {
-                        return null; // Разные контексты на одной глубине без X-Ray
+                    const currCtx = state.currentContext;
+                    const isVisibleInCurrentContext = (sContext === currCtx || tContext === currCtx || link.context === currCtx);
+                    const isConnectedToCurrentNodeContext = !!state.nodes[currCtx] && (
+                        (sPort && sPort.nodeId === currCtx) || (tPort && tPort.nodeId === currCtx)
+                    );
+                    const isConnectedToCurrentPortContext = !!state.ports[currCtx] && (
+                        link.sourcePortId === currCtx || link.targetPortId === currCtx
+                    );
+
+                    // Скрываем связь, если она не относится к текущему контексту, не привязана к нему и не подсвечена X-Ray
+                    if (!isCurrentChild && !isTheContextItself && !isVisibleInCurrentContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isConnectedToCurrentNodeContext && !isConnectedToCurrentPortContext) {
+                        return null;
                     }
 
-                    const isPortConnectedLink = !!(state.ports[state.currentContext] && (link.sourcePortId === state.currentContext || link.targetPortId === state.currentContext));
-                    const isNodeConnectedLink = !!(state.nodes[state.currentContext] && (state.ports[link.sourcePortId]?.nodeId === state.currentContext || state.ports[link.targetPortId]?.nodeId === state.currentContext));
-                    const isConnectedContextLink = isPortConnectedLink || isNodeConnectedLink;
-                    const isPeekChildLink = !!state.ui.peekNodeId && effectiveContextId === state.ui.peekNodeId;
-                    const isTransitionChildLink = !!state.ui.transitionFromContext && effectiveContextId === state.ui.transitionFromContext;
-
-                    if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChildLink && !isTransitionChildLink && !isConnectedContextLink) return null;
-
-
-                    const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isExplicitlyVisible && !isPeekChildLink && !isConnectedContextLink;
-                    const linkZIndex = isPeekChildLink ? 30 : (isCurrentChild || isConnectedContextLink ? 10 : (isExplicitlyVisible ? 5 : 0));
+                    const opacity = (isVisibleInCurrentContext || isExplicitlyVisible || isCurrentChild || isTheContextItself || isConnectedToCurrentNodeContext || isConnectedToCurrentPortContext) ? 1 : 0.15;
+                    const pointerEvents = (isVisibleInCurrentContext || isExplicitlyVisible || isCurrentChild || isTheContextItself || isConnectedToCurrentNodeContext || isConnectedToCurrentPortContext) ? 'auto' : 'none';
 
                     return (
-                        <div key={link.id || `link-${idx}`} className={`${isDimmed ? 'opacity-30 pointer-events-none grayscale' : ''} ${(isExplicitlyVisible || isConnectedContextLink) && !isCurrentChild ? 'pointer-events-auto opacity-100' : ''} ${isPeekChildLink ? 'opacity-100 pointer-events-none' : ''}`} style={{ zIndex: linkZIndex }}>
+                        <div key={link.id || `link-${idx}`} style={{ opacity, pointerEvents }}>
                             <Link data={link} />
                         </div>
                     );
-
                 })}
                 
                 <PendingLink />
 
-                {/* Render ALL Nodes but fade out non-current */}
+                {/* Render Nodes */}
                 {Object.values(state.nodes).map((node, idx) => {
-                    if (!node) return null;
-                    if (state.isolatedIds.length > 0 && !state.isolatedIds.includes(node.id)) return null;
+                    if (!node || !isNodeVisible(node)) return null;
 
-                    // If a node is assigned to a layer, its effective context parent is the layer's parent context
-                    const nodeParentLayer = state.layers && state.layers[node.parentId];
-                    const effectiveContextId = nodeParentLayer ? (nodeParentLayer.parentId || 'root') : (node.parentId || 'root');
+                    // Isolation Filter
+                    if (state.isolatedIds.length > 0 && !state.isolatedIds.includes(node.id)) {
+                        return null;
+                    }
 
-                    const isCurrentChild = effectiveContextId === state.currentContext;
-                    const isTheContextItself = node.id === state.currentContext;
-                    const isAncestorContext = state.breadcrumbs.some(b => b.id === effectiveContextId) && effectiveContextId !== state.currentContext;
-                    const contextDepth = getContextDepth(effectiveContextId);
-                    const isExplicitlyVisible = (state.ui.xRayLevels || []).includes(contextDepth);
-                    const isBreadcrumbAncestor = state.breadcrumbs.some(b => b.id === node.id) && !isTheContextItself;
-                    
-                    // Always show the parent node and opposite connected nodes of a port if we dive into a port
+                    // Погружение в узел/слой/порт/связь: прямой ребёнок виден, сам контекст размывается на фоне
+                    const getTrueParentContextId = (id) => {
+                        const n = state.nodes[id];
+                        if (!n || !n.parentId || n.parentId === 'root') return 'root';
+                        const pId = n.parentId;
+                        if (state.layers && state.layers[pId]) {
+                            return state.layers[pId].parentId || 'root';
+                        }
+                        return pId;
+                    };
+
+                    const nodeParentContext = getTrueParentContextId(node.id);
+                    const effectiveContextId = state.currentContext;
+
+                    const isCurrentChild = nodeParentContext === effectiveContextId || node.parentId === effectiveContextId;
+                    const isTheContextItself = node.id === effectiveContextId;
+                    const hUtils = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof HierarchyUtils !== 'undefined' ? HierarchyUtils : null);
+                    // Предок контекста (узла, слоя, порта или связи), на который мы смотрим изнутри
+                    const isAncestorContext = hUtils ? hUtils.isDescendantOf(effectiveContextId, node.id, state.nodes, state.layers, state.ports, state.links) : false;
+                    // Элементы из хлебных крошек
+                    const isBreadcrumbAncestor = state.breadcrumbs.some(b => b.id === node.id);
+
+                    // Проверка явного показа скрытого узла по кнопке "глаз" на панели уровня (X-Ray)
+                    const nodeContextDepth = getContextDepth(nodeParentContext);
+                    const isExplicitlyVisible = (state.ui.xRayLevels || []).includes(nodeContextDepth) || (state.ui.visibleContexts || []).includes(node.id);
+
+                    // Показываем родительский узел порта, если мы погрузились в этот порт
                     let isParentOfCurrentPort = false;
                     if (state.ports[state.currentContext]) {
                         const activePort = state.ports[state.currentContext];
@@ -598,7 +698,7 @@ function Canvas() {
                             if (activePort.nodeId === node.id) {
                                 isParentOfCurrentPort = true;
                             } else {
-                                isParentOfCurrentPort = state.links.some(l => 
+                                isParentOfCurrentPort = Object.values(state.links || {}).some(l => 
                                     l && ((l.sourcePortId === activePort.id && state.ports[l.targetPortId]?.nodeId === node.id) ||
                                           (l.targetPortId === activePort.id && state.ports[l.sourcePortId]?.nodeId === node.id))
                                 );
@@ -611,7 +711,7 @@ function Canvas() {
                     if (state.nodes[state.currentContext]) {
                         const activeNodeId = state.currentContext;
                         if (activeNodeId !== node.id) {
-                            isConnectedToCurrentNodeContext = state.links.some(l => 
+                            isConnectedToCurrentNodeContext = Object.values(state.links || {}).some(l => 
                                 l && ((state.ports[l.sourcePortId]?.nodeId === activeNodeId && state.ports[l.targetPortId]?.nodeId === node.id) ||
                                       (state.ports[l.targetPortId]?.nodeId === activeNodeId && state.ports[l.sourcePortId]?.nodeId === node.id))
                             );
@@ -620,7 +720,7 @@ function Canvas() {
 
                     // Show source and target nodes if we dive into a link
                     let isLinkSourceOrTarget = false;
-                    const contextLink = state.links ? state.links.find(l => l && l.id === state.currentContext) : null;
+                    const contextLink = state.links ? state.links[state.currentContext] : null;
                     if (contextLink) {
                         const sPort = state.ports[contextLink.sourcePortId];
                         const tPort = state.ports[contextLink.targetPortId];
@@ -630,22 +730,21 @@ function Canvas() {
                     }
 
                     // Alt+hover peek: дети peek-узла временно видимы в полный размер
-                    const peekId = state.ui.peekNodeId;
-                    const isPeekChild = !!peekId && effectiveContextId === peekId;
+                    const peekId = state.ui ? state.ui.peekNodeId : null;
+                    const isPeekChild = !!peekId && getTrueParentContextId(node.id) === peekId;
                     const isPeekSource = peekId === node.id;
                     const isPeekDimmed = !!peekId && !isPeekChild && !isPeekSource && isCurrentChild;
-                    const isTransitionChild = !!state.ui.transitionFromContext && effectiveContextId === state.ui.transitionFromContext;
+                    const isTransitionChild = !!state.ui?.transitionFromContext && effectiveContextId === state.ui.transitionFromContext;
 
                     if (!isCurrentChild && !isTheContextItself && !isAncestorContext && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isConnectedToCurrentNodeContext && !isExplicitlyVisible && !isBreadcrumbAncestor && !isPeekChild && !isTransitionChild) return null;
                     if (node.hidden) return null;
                     
                     // Проверяем, выделен ли хотя бы один из истинных детей этого узла (только среди узлов, исключая слои)
-                    const hasSelectedChild = state.selectedIds.some(sid => state.nodes[sid] && getTrueParentNodeId(sid) === node.id);
-                    const isConnectedToSelectedLink = state.links.some(l => l && state.selectedIds.includes(l.id) && ((state.ports[l.sourcePortId]?.nodeId === node.id) || (state.ports[l.targetPortId]?.nodeId === node.id)));
-                    const isConnectedToSelectedPort = state.selectedIds.some(sid => state.ports[sid]?.nodeId === node.id) || state.links.some(l => l && ((state.ports[l.sourcePortId]?.nodeId === node.id && state.selectedIds.includes(l.targetPortId)) || (state.ports[l.targetPortId]?.nodeId === node.id && state.selectedIds.includes(l.sourcePortId))));
-                    const isSelected = state.selectedIds.includes(node.id) || isConnectedToSelectedLink || isConnectedToSelectedPort;
-
-
+                    const selectedIds = state.selectedIds || [];
+                    const hasSelectedChild = selectedIds.some(sid => state.nodes && state.nodes[sid] && getTrueParentContextId(sid) === node.id);
+                    const isConnectedToSelectedLink = Object.values(state.links || {}).some(l => l && selectedIds.includes(l.id) && ((state.ports[l.sourcePortId]?.nodeId === node.id) || (state.ports[l.targetPortId]?.nodeId === node.id)));
+                    const isConnectedToSelectedPort = selectedIds.some(sid => state.ports && state.ports[sid]?.nodeId === node.id) || Object.values(state.links || {}).some(l => l && ((state.ports[l.sourcePortId]?.nodeId === node.id && selectedIds.includes(l.targetPortId)) || (state.ports[l.targetPortId]?.nodeId === node.id && selectedIds.includes(l.sourcePortId))));
+                    const isSelected = selectedIds.includes(node.id) || isConnectedToSelectedLink || isConnectedToSelectedPort;
 
                     // Если узел имеет выделенных детей, он не должен затухать
                     const isDimmed = (isAncestorContext || isBreadcrumbAncestor) && !isTheContextItself && !isParentOfCurrentPort && !isLinkSourceOrTarget && !isConnectedToCurrentNodeContext && !isExplicitlyVisible && !hasSelectedChild;

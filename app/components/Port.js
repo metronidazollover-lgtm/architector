@@ -206,11 +206,11 @@ function Port({ data, nodeData }) {
     };
 
     const isPending = state.pendingConnection && state.pendingConnection.sourcePortId === data.id;
-    const isConnectedToSelectedLink = state.links.some(l => 
+    const isConnectedToSelectedLink = Object.values(state.links || {}).some(l => 
         l && state.selectedIds.includes(l.id) && (l.sourcePortId === data.id || l.targetPortId === data.id)
     );
 
-    const isConnectedToSelectedPort = state.links.some(l => {
+    const isConnectedToSelectedPort = Object.values(state.links || {}).some(l => {
         if (!l) return false;
         if (l.sourcePortId === data.id && state.selectedIds.includes(l.targetPortId)) return true;
         if (l.targetPortId === data.id && state.selectedIds.includes(l.sourcePortId)) return true;
@@ -218,7 +218,7 @@ function Port({ data, nodeData }) {
     });
 
     const isOwnedBySelectedNode = state.selectedIds.includes(data.nodeId);
-    const isConnectedToSelectedNode = state.links.some(l => {
+    const isConnectedToSelectedNode = Object.values(state.links || {}).some(l => {
         if (!l) return false;
         const oppPortId = l.sourcePortId === data.id ? l.targetPortId : (l.targetPortId === data.id ? l.sourcePortId : null);
         if (!oppPortId) return false;
@@ -235,7 +235,7 @@ function Port({ data, nodeData }) {
 
     // Calculate internal connections depth
     let maxInternalDepth = 0;
-    state.links.forEach(link => {
+    Object.values(state.links || {}).forEach(link => {
         let otherPortId = null;
         if (link.sourcePortId === data.id) otherPortId = link.targetPortId;
         else if (link.targetPortId === data.id) otherPortId = link.sourcePortId;
@@ -261,7 +261,7 @@ function Port({ data, nodeData }) {
 
     // Check cross-level link
     let isCrossLevel = false;
-    state.links.forEach(l => {
+    Object.values(state.links || {}).forEach(l => {
         if (l.sourcePortId === data.id || l.targetPortId === data.id) {
             const otherPortId = l.sourcePortId === data.id ? l.targetPortId : l.sourcePortId;
             const otherPort = state.ports[otherPortId];

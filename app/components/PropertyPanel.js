@@ -31,7 +31,7 @@ function PropertyPanel() {
             if (nodes[id]) return { type: 'Узел', icon: 'icon-box', data: nodes[id] };
             if (layers && layers[id]) return { type: 'Слой', icon: 'icon-layers', data: layers[id] };
             if (ports[id]) return { type: 'Порт', icon: 'icon-circle', data: ports[id] };
-            const l = (links && Array.isArray(links)) ? links.find(lnk => lnk && lnk.id === id) : null;
+            const l = links ? links[id] : null;
             if (l) return { type: 'Связь', icon: 'icon-git-commit', data: l };
             return null;
         }).filter(Boolean);
@@ -183,7 +183,7 @@ function PropertyPanel() {
     // Режим единичного редактирования
     const id = selectedIds[0];
     const selectedNode = nodes[id];
-    const selectedLink = (links && Array.isArray(links)) ? links.find(l => l && l.id === id) : null;
+    const selectedLink = links ? links[id] : null;
     const selectedPort = ports[id];
     const selectedLayer = layers ? layers[id] : null;
 

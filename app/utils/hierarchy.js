@@ -111,17 +111,83 @@ const HierarchyUtils = {
     },
 
     /**
+     * Точный глобальный уровень вложенности (depth, 0-based) сущности графа.
+     * Узлы на Главном холсте, порты и связи на них — уровень 0.
+     * Элементы внутри контейнеров — уровень 1, 2 и т.д.
+     * @param {string} id
+     * @param {Object} nodes
+     * @param {Object} [layers]
+     * @param {Object} [ports]
+     * @param {Object} [links]
+     * @returns {number}
+     */
+    getEntityDepth: (id, nodes, layers = null, ports = null, links = null) => {
+        if (!id || id === 'root') return 0;
+        
+        const safeNodes = nodes || {};
+        const safeLayers = layers || {};
+        const safePorts = ports || {};
+        const safeLinks = Array.isArray(links) ? links.reduce((acc, l) => { if (l && l.id) acc[l.id] = l; return acc; }, {}) : (links || {});
+
+        // 1. Если это порт
+        if (safePorts[id]) {
+            const port = safePorts[id];
+            return HierarchyUtils.getEntityDepth(port.nodeId, safeNodes, safeLayers, safePorts, safeLinks);
+        }
+
+        // 2. Если это связь
+        if (safeLinks[id]) {
+            const link = safeLinks[id];
+            if (!link.context || link.context === 'root') return 0;
+            return HierarchyUtils.getEntityDepth(link.context, safeNodes, safeLayers, safePorts, safeLinks) + 1;
+        }
+
+        // 3. Если это слой
+        if (safeLayers[id]) {
+            const layer = safeLayers[id];
+            return HierarchyUtils.getEntityDepth(layer.parentId || 'root', safeNodes, safeLayers, safePorts, safeLinks);
+        }
+
+        // 4. Если это узел
+        if (safeNodes[id]) {
+            let depth = 0;
+            let pId = safeNodes[id].parentId;
+            const visited = new Set([id]);
+            while (pId && pId !== 'root' && !visited.has(pId)) {
+                visited.add(pId);
+                if (safeLayers[pId]) {
+                    pId = safeLayers[pId].parentId;
+                } else if (safeNodes[pId]) {
+                    depth++;
+                    pId = safeNodes[pId].parentId;
+                } else if (safePorts[pId]) {
+                    depth++;
+                    pId = safePorts[pId].nodeId;
+                } else if (safeLinks[pId]) {
+                    depth++;
+                    pId = safeLinks[pId].context;
+                } else {
+                    break;
+                }
+            }
+            return depth;
+        }
+
+        return 0;
+    },
+
+    /**
      * Является ли candidateId потомком (или самим) ancestorId по цепочке parentId.
      * Защита от циклов при перевложении.
      */
-    isDescendantOf: (candidateId, ancestorId, nodes, layers) => {
+    isDescendantOf: (candidateId, ancestorId, nodes, layers, ports = null, links = null) => {
         if (candidateId === ancestorId) return true;
-        let current = nodes[candidateId] || (layers && layers[candidateId]);
+        let current = (nodes && nodes[candidateId]) || (layers && layers[candidateId]) || (ports && ports[candidateId]) || (links && links[candidateId]);
         const visited = new Set();
         while (current && !visited.has(current.id)) {
             visited.add(current.id);
             if (current.parentId === ancestorId) return true;
-            current = nodes[current.parentId] || (layers && layers[current.parentId]) || null;
+            current = (nodes && nodes[current.parentId]) || (layers && layers[current.parentId]) || (ports && ports[current.parentId]) || (links && links[current.parentId]) || null;
         }
         return false;
     },
@@ -143,7 +209,8 @@ const HierarchyUtils = {
         });
 
         let linkCount = 0;
-        (links || []).forEach(l => {
+        const linkList = Array.isArray(links) ? links : Object.values(links || {});
+        linkList.forEach(l => {
             if (!l) return;
             const sourcePort = ports[l.sourcePortId];
             const targetPort = ports[l.targetPortId];
@@ -167,7 +234,8 @@ HierarchyUtils.getBoundaryLinks = (contextId, nodes, layers, ports, links) => {
         nodeId !== contextId && HierarchyUtils.isDescendantOf(nodeId, contextId, nodes, layers);
 
     const result = { incoming: [], outgoing: [] };
-    (links || []).forEach(link => {
+    const linkList = Array.isArray(links) ? links : Object.values(links || {});
+    linkList.forEach(link => {
         if (!link) return;
         const sourcePort = ports[link.sourcePortId];
         const targetPort = ports[link.targetPortId];

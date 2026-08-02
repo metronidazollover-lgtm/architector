@@ -603,7 +603,7 @@ function Toolbar() {
             layers: {},
             nodes: {},
             ports: {},
-            links: []
+            links: {}
         };
         dispatch({ type: 'LOAD_STATE', payload: templateState });
     };

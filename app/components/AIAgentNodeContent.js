@@ -283,7 +283,7 @@ function AIAgentNodeContent({ nodeId }) {
             const connectedNodes = new Set();
             const myPorts = Object.values(state.ports).filter(p => p.nodeId === nodeId).map(p => p.id);
 
-            state.links.forEach(link => {
+            Object.values(state.links || {}).forEach(link => {
                 let otherPortId = null;
                 if (myPorts.includes(link.sourcePortId)) otherPortId = link.targetPortId;
                 else if (myPorts.includes(link.targetPortId)) otherPortId = link.sourcePortId;

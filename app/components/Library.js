@@ -15,7 +15,7 @@ function Library() {
             } else if (ports && ports[selectedId]) {
                 setObjectTab('ports');
             } else {
-                const link = (links && Array.isArray(links)) ? links.find(l => l && l.id === selectedId) : null;
+                const link = links ? links[selectedId] : null;
                 if (link) {
                     setObjectTab('links');
                 }
@@ -35,7 +35,7 @@ function Library() {
             const portNode = nodes[ports[id].nodeId];
             if (portNode) targetContext = portNode.parentId || 'root';
         } else {
-            const link = (links && Array.isArray(links)) ? links.find(l => l && l.id === id) : null;
+            const link = links ? links[id] : null;
             if (link) targetContext = link.context || 'root';
         }
 
@@ -54,19 +54,36 @@ function Library() {
 
     const getNodeHierarchyInfo = (entityId) => {
         let level = 1;
-        let currentId = nodes[entityId]?.parentId || (layers && layers[entityId] ? layers[entityId].parentId : null);
+        if (!entityId || entityId === 'root') return { level: 0, parentNode: null };
+
+        const safeNodes = nodes || {};
+        const safeLayers = layers || {};
+        const safePorts = ports || {};
+        const safeLinks = Array.isArray(links) ? links.reduce((acc, l) => { if (l && l.id) acc[l.id] = l; return acc; }, {}) : (links || {});
+
+        let currentId = safeNodes[entityId]?.parentId || 
+                        safeLayers[entityId]?.parentId || 
+                        safePorts[entityId]?.nodeId || 
+                        safeLinks[entityId]?.context || null;
         let parentNode = null;
         const visited = new Set();
         if (entityId) visited.add(entityId);
         
         while (currentId && currentId !== 'root' && !visited.has(currentId)) {
             visited.add(currentId);
-            if (layers && layers[currentId]) {
-                currentId = layers[currentId].parentId;
-            } else if (nodes[currentId]) {
-                if (!parentNode) parentNode = nodes[currentId];
+            if (safeLayers[currentId]) {
+                currentId = safeLayers[currentId].parentId;
+            } else if (safeNodes[currentId]) {
+                if (!parentNode) parentNode = safeNodes[currentId];
                 level++;
-                currentId = nodes[currentId].parentId;
+                currentId = safeNodes[currentId].parentId;
+            } else if (safePorts[currentId]) {
+                if (!parentNode && safeNodes[safePorts[currentId].nodeId]) parentNode = safeNodes[safePorts[currentId].nodeId];
+                level++;
+                currentId = safePorts[currentId].nodeId;
+            } else if (safeLinks[currentId]) {
+                level++;
+                currentId = safeLinks[currentId].context;
             } else {
                 break;
             }
@@ -216,7 +233,7 @@ function Library() {
                             className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'links' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
                             onClick={() => setObjectTab('links')}
                         >
-                            Связи ({links ? links.length : 0})
+                            Связи ({links ? Object.keys(links).length : 0})
                         </button>
                     </div>
                     <div className="flex flex-col overflow-y-auto no-scrollbar pb-2 flex-1">
@@ -303,8 +320,8 @@ function Library() {
 
                         {objectTab === 'links' && (
                             <div className="flex flex-col">
-                                {(!links || links.length === 0) && <div className="text-gray-600 italic px-4 py-3 text-sm">Нет связей</div>}
-                                {links && Array.isArray(links) && links.map(link => {
+                                {(!links || Object.keys(links).length === 0) && <div className="text-gray-600 italic px-4 py-3 text-sm">Нет связей</div>}
+                                {links && Object.values(links).map(link => {
                                     if (!link) return null;
                                     let level = 1;
                                     let parentNode = null;
@@ -335,128 +352,171 @@ function Library() {
                 <div className="flex flex-col flex-1 overflow-hidden">
                     <div className="flex flex-col overflow-y-auto no-scrollbar pb-2 flex-1">
                         {(() => {
-                            // Вспомогательная: цепочка имён предков (Root → A → B)
-                            const buildParentChain = (id) => {
-                                const chain = [];
-                                let cur = nodes[id];
-                                const visited = new Set();
-                                while (cur && cur.parentId && cur.parentId !== 'root' && !visited.has(cur.parentId)) {
-                                    visited.add(cur.parentId);
-                                    const parent = nodes[cur.parentId];
-                                    if (parent) {
-                                        chain.unshift(parent.name);
-                                        cur = parent;
-                                    } else {
-                                        // Пропускаем слои (layers — визуальные фреймы)
-                                        const layerParent = layers && layers[cur.parentId];
-                                        if (layerParent) {
-                                            cur = { parentId: layerParent.parentId };
-                                        } else {
-                                            break;
-                                        }
-                                    }
-                                }
-                                return chain;
+                            // Собираем все сущности графа и рассчитываем их глобальную глубину (depth) через HierarchyUtils
+                            const getEntityDepth = (id) => {
+                                const hUtils = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof HierarchyUtils !== 'undefined' ? HierarchyUtils : null);
+                                return hUtils ? hUtils.getEntityDepth(id, nodes, layers, ports, links) : 0;
                             };
 
-                            // Вспомогательная: максимальная глубина от узла вниз
-                            const getMaxDepthBelow = (rootId, visited) => {
-                                if (!visited) visited = new Set();
-                                if (visited.has(rootId)) return 0;
-                                visited.add(rootId);
-                                let maxD = 0;
-                                Object.values(nodes).forEach(n => {
-                                    if (n && n.parentId === rootId) {
-                                        maxD = Math.max(maxD, 1 + getMaxDepthBelow(n.id, visited));
-                                    }
-                                });
-                                return maxD;
-                            };
+                            const allEntities = [];
 
-                            // Собираем все узлы-контейнеры (имеющие детей)
-                            const containers = Object.values(nodes).filter(n => {
-                                if (!n) return false;
-                                return Object.values(nodes).some(child => child && child.parentId === n.id)
-                                    || Object.values(layers || {}).some(l => l && l.parentId === n.id);
+                            Object.values(nodes || {}).forEach(n => {
+                                if (!n) return;
+                                const depth = getEntityDepth(n.id);
+                                allEntities.push({ id: n.id, type: 'node', entity: n, depth, name: n.name, color: n.color, icon: 'icon-box' });
                             });
 
-                            if (containers.length === 0) {
-                                return <div className="text-gray-600 italic px-4 py-3 text-sm">Нет узлов с вложенным содержимым</div>;
+                            Object.values(layers || {}).forEach(l => {
+                                if (!l) return;
+                                const depth = getEntityDepth(l.id);
+                                allEntities.push({ id: l.id, type: 'layer', entity: l, depth, name: l.name, color: l.color, icon: 'icon-layers' });
+                            });
+
+                            Object.values(ports || {}).forEach(p => {
+                                if (!p) return;
+                                const depth = getEntityDepth(p.id);
+                                allEntities.push({ id: p.id, type: 'port', entity: p, depth, name: p.name || `Порт ${p.type}`, color: p.color, icon: 'icon-circle' });
+                            });
+
+                            const linkList = Array.isArray(links) ? links : Object.values(links || {});
+                            linkList.forEach(l => {
+                                if (!l || !l.id) return;
+                                const depth = getEntityDepth(l.id);
+                                const linkName = l.name || (typeof l.id === 'string' ? `Связь ${l.id.replace('link-', '')}` : 'Связь');
+                                allEntities.push({ id: l.id, type: 'link', entity: l, depth, name: linkName, color: l.color, icon: 'icon-git-commit' });
+                            });
+
+                            // Группируем элементы по уровням
+                            const levelsMap = {};
+                            allEntities.forEach(item => {
+                                const d = item.depth;
+                                if (!levelsMap[d]) levelsMap[d] = { depth: d, nodes: 0, layers: 0, ports: 0, links: 0, total: 0, items: [] };
+                                levelsMap[d].items.push(item);
+                                levelsMap[d].total++;
+                                if (item.type === 'node') levelsMap[d].nodes++;
+                                else if (item.type === 'layer') levelsMap[d].layers++;
+                                else if (item.type === 'port') levelsMap[d].ports++;
+                                else if (item.type === 'link') levelsMap[d].links++;
+                            });
+
+                            const levelEntries = Object.values(levelsMap).sort((a, b) => a.depth - b.depth);
+
+                            if (levelEntries.length === 0) {
+                                return <div className="text-gray-600 italic px-4 py-3 text-sm">Нет элементов в проекте</div>;
                             }
 
-                            // Вычисляем глубину каждого контейнера
-                            const withMeta = containers.map(n => {
-                                const info = getNodeHierarchyInfo(n.id);
-                                const depth = info.level - 1; // 0-based
-                                const stats = window.HierarchyUtils.getChildrenStats(nodes, layers, ports, links, n.id);
-                                const chain = buildParentChain(n.id);
-                                const depthBelow = getMaxDepthBelow(n.id);
-                                return { node: n, depth, stats, chain, depthBelow };
-                            });
+                            const getActiveLevelsSet = () => {
+                                const xRay = state.ui?.xRayLevels;
+                                const validXRay = Array.isArray(xRay) ? xRay.filter(l => typeof l === 'number' && l >= 0) : [];
+                                const hUtils = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof global !== 'undefined' && global.HierarchyUtils) || null;
+                                if (validXRay.length > 0) {
+                                    return new Set(validXRay);
+                                }
+                                const active = new Set();
+                                const ctx = state.currentContext || 'root';
+                                if (ctx === 'root') {
+                                    active.add(0);
+                                } else {
+                                    const ctxDepth = hUtils ? hUtils.getEntityDepth(ctx, nodes, layers, ports, links) : 0;
+                                    active.add(ctxDepth);
+                                    active.add(ctxDepth + 1);
+                                }
+                                return active;
+                            };
 
-                            // Группируем по глубине
-                            const byDepth = {};
-                            withMeta.forEach(item => {
-                                const d = item.depth;
-                                if (!byDepth[d]) byDepth[d] = [];
-                                byDepth[d].push(item);
-                            });
+                            const activeLevels = getActiveLevelsSet();
 
                             return (
-                                <div className="flex flex-col">
-                                    {Object.entries(byDepth)
-                                        .sort(([a], [b]) => Number(a) - Number(b))
-                                        .map(([depth, items]) => (
-                                            <div key={depth}>
-                                                <div className="px-3 py-1.5 bg-[#1a1a1a] text-[10px] uppercase text-gray-500 font-semibold border-b border-[#333]/50 sticky top-0 backdrop-blur-md z-10">
-                                                    Уровень {depth} {Number(depth) === 0 ? '(Главный холст)' : ''}
-                                                </div>
-                                                {items.map(item => {
-                                                    const isSelected = state.selectedIds && state.selectedIds.includes(item.node.id);
-                                                    const isCurrent = state.currentContext === item.node.id;
-                                                    return (
-                                                        <div
-                                                            key={item.node.id}
-                                                            className={`group flex items-center gap-2 px-3 py-2 cursor-pointer border-b border-[#333]/50 transition-colors
-                                                                ${isSelected ? 'bg-[var(--accent-blue)]/10 border-[var(--accent-blue)]/30' : 'hover:bg-white/5'}
-                                                                ${isCurrent ? 'border-l-2 border-l-[var(--accent-blue)]' : ''}
-                                                            `}
-                                                            onClick={() => handleSelect(item.node.id)}
-                                                            onDoubleClick={(e) => {
-                                                                e.stopPropagation();
-                                                                dispatch({ type: 'GO_TO_CONTEXT', payload: item.node.id });
-                                                            }}
-                                                            title={`${item.chain.length > 0 ? item.chain.join(' → ') + ' → ' : ''}${item.node.name} — ${item.stats.total} прямых детей, глубина вложенности: ${item.depthBelow}. Двойной клик — войти`}
+                                <div className="flex flex-col gap-2 p-2">
+                                    {levelEntries.map(level => {
+                                        const depthNum = level.depth;
+                                        const isLevelActive = activeLevels.has(depthNum);
+
+                                        const handleFocusLevel = (e) => {
+                                            e.stopPropagation();
+                                            if (isLevelActive && activeLevels.size === 1) {
+                                                dispatch({ type: 'SET_UI', payload: { xRayLevels: [] } });
+                                            } else {
+                                                dispatch({ type: 'SET_UI', payload: { xRayLevels: [depthNum] } });
+                                            }
+                                        };
+
+                                        const handleToggleXRay = (e) => {
+                                            e.stopPropagation();
+                                            const nextLevels = new Set(activeLevels);
+                                            if (nextLevels.has(depthNum)) {
+                                                nextLevels.delete(depthNum);
+                                            } else {
+                                                nextLevels.add(depthNum);
+                                            }
+                                            dispatch({ type: 'SET_UI', payload: { xRayLevels: Array.from(nextLevels) } });
+                                        };
+
+                                        return (
+                                            <div key={depthNum} className={`rounded-lg border transition-all ${isLevelActive ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)]/10 shadow-md' : 'border-[#333] bg-[#1a1a1a]/50 hover:border-[#444]'}`}>
+                                                {/* Шапка уровня */}
+                                                <div 
+                                                    className="px-3 py-2 flex items-center justify-between cursor-pointer border-b border-[#333]/40 select-none group"
+                                                    onClick={handleFocusLevel}
+                                                    title={`Клик — показать строго Уровень ${depthNum}`}
+                                                >
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={`w-2 h-2 rounded-full ${isLevelActive ? 'bg-[var(--accent-blue)] animate-pulse' : 'bg-gray-500'}`}></div>
+                                                        <span className={`text-xs font-semibold uppercase tracking-wider ${isLevelActive ? 'text-[var(--accent-blue)]' : 'text-gray-300'}`}>
+                                                            Уровень {depthNum} {depthNum === 0 ? '(Главный холст)' : ''}
+                                                        </span>
+                                                        <span className="text-[10px] text-gray-500 bg-white/5 border border-white/10 rounded-full px-2 py-0.5 ml-1">
+                                                            {level.total} элм.
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="flex items-center gap-1">
+                                                        <button
+                                                            className={`p-1 rounded text-xs transition-colors ${isLevelActive ? 'text-[var(--accent-blue)] bg-[var(--accent-blue)]/20' : 'text-gray-500 hover:text-white hover:bg-white/10'}`}
+                                                            onClick={handleToggleXRay}
+                                                            title={isLevelActive ? "Скрыть этот уровень" : "Показать этот уровень"}
                                                         >
+                                                            <div className={isLevelActive ? 'icon-eye' : 'icon-eye-off'}></div>
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {/* Статистика и сводка */}
+                                                <div className="px-3 py-1 bg-black/20 flex items-center gap-3 text-[10px] text-gray-400 font-mono">
+                                                    {level.nodes > 0 && <span>{level.nodes} узл.</span>}
+                                                    {level.layers > 0 && <span>{level.layers} сл.</span>}
+                                                    {level.ports > 0 && <span>{level.ports} порт.</span>}
+                                                    {level.links > 0 && <span>{level.links} связ.</span>}
+                                                </div>
+
+                                                {/* Элементы данного уровня */}
+                                                <div className="flex flex-col divide-y divide-[#333]/30">
+                                                    {level.items.map(item => {
+                                                        const isSelected = state.selectedIds && state.selectedIds.includes(item.id);
+                                                        const isCurrentCtx = state.currentContext === item.id;
+                                                        return (
                                                             <div
-                                                                className="w-3 h-3 rounded-[3px] shrink-0 border border-white/10"
-                                                                style={{ backgroundColor: item.node.color || '#333' }}
-                                                            ></div>
-                                                            <div className="flex flex-col overflow-hidden flex-1">
-                                                                <div className="flex items-center gap-1 overflow-hidden">
-                                                                    {item.chain.length > 0 && (
-                                                                        <span className="text-[10px] text-gray-600 truncate shrink-0">
-                                                                            {item.chain.join(' → ')} →
-                                                                        </span>
-                                                                    )}
-                                                                    <span className={`text-sm truncate ${isSelected ? 'text-[var(--accent-blue)] font-medium' : 'text-gray-200'}`}>
-                                                                        {item.node.name}
-                                                                    </span>
+                                                                key={item.id}
+                                                                className={`flex items-center justify-between px-3 py-1.5 cursor-pointer text-xs transition-colors ${isSelected ? 'bg-[var(--accent-blue)]/20 text-white' : 'hover:bg-white/5 text-gray-300'} ${isCurrentCtx ? 'border-l-2 border-l-[var(--accent-blue)] font-medium' : ''}`}
+                                                                onClick={(e) => { e.stopPropagation(); handleSelect(item.id); }}
+                                                                onDoubleClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    dispatch({ type: 'GO_TO_CONTEXT', payload: item.id });
+                                                                }}
+                                                                title={`${item.name} (${item.type}). Двойной клик — войти в контекст`}
+                                                            >
+                                                                <div className="flex items-center gap-2 truncate">
+                                                                    <div className={`${item.icon} text-xs text-gray-400 shrink-0`}></div>
+                                                                    <span className="truncate">{item.name}</span>
                                                                 </div>
-                                                                <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                                                                    <span>{item.stats.total} {item.stats.total === 1 ? 'дитя' : 'детей'}</span>
-                                                                    {item.stats.linkCount > 0 && <span>· {item.stats.linkCount} связей</span>}
-                                                                    {item.depthBelow > 0 && (
-                                                                        <span className="text-[var(--accent-blue)] opacity-70">· глубина {item.depthBelow}</span>
-                                                                    )}
-                                                                </div>
+                                                                <span className="text-[9px] uppercase text-gray-500 font-mono shrink-0 ml-2">{item.type}</span>
                                                             </div>
-                                                            <div className="icon-chevron-right text-gray-600 text-xs opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                                                        </div>
-                                                    );
-                                                })}
+                                                        );
+                                                    })}
+                                                </div>
                                             </div>
-                                        ))}
+                                        );
+                                    })}
                                 </div>
                             );
                         })()}

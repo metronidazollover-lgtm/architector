@@ -17,10 +17,10 @@ const ports = {
     pb: { id: 'pb', nodeId: 'b' },
     po: { id: 'po', nodeId: 'outside' }
 };
-const links = [
-    { id: 'inner', sourcePortId: 'pa', targetPortId: 'pb' },
-    { id: 'crossing', sourcePortId: 'pa', targetPortId: 'po' }
-];
+const links = {
+    inner: { id: 'inner', sourcePortId: 'pa', targetPortId: 'pb' },
+    crossing: { id: 'crossing', sourcePortId: 'pa', targetPortId: 'po' }
+};
 
 test('getChildrenStats: считает узлы, слои и только внутренние связи', () => {
     const stats = HierarchyUtils.getChildrenStats(nodes, layers, ports, links, 'parent');
@@ -80,4 +80,31 @@ test('getBoundaryLinks: связи через границу контекста,
     assert.deepEqual(b.incoming.map(i => i.link.id), ['l2']);
     assert.equal(b.incoming[0].outerNodeId, 'outer');
     assert.equal(b.incoming[0].innerNodeId, 'deep');
+});
+
+test('getEntityDepth: точный глобальный уровень вложенности для всех сущностей', () => {
+    const dNodes = {
+        nodeA: { id: 'nodeA', parentId: 'root' },
+        nodeB: { id: 'nodeB', parentId: 'root' },
+        nodeB1: { id: 'nodeB1', parentId: 'nodeB' },
+        nodeB2: { id: 'nodeB2', parentId: 'linkPBPB1' }
+    };
+    const dLayers = {
+        layer1: { id: 'layer1', parentId: 'nodeB' }
+    };
+    const dPorts = {
+        portPB: { id: 'portPB', nodeId: 'nodeB1' },
+        portPB1: { id: 'portPB1', nodeId: 'nodeB1' }
+    };
+    const dLinks = {
+        linkPBPB1: { id: 'linkPBPB1', context: 'nodeB' }
+    };
+
+    assert.equal(HierarchyUtils.getEntityDepth('nodeA', dNodes, dLayers, dPorts, dLinks), 0);
+    assert.equal(HierarchyUtils.getEntityDepth('nodeB', dNodes, dLayers, dPorts, dLinks), 0);
+    assert.equal(HierarchyUtils.getEntityDepth('nodeB1', dNodes, dLayers, dPorts, dLinks), 1);
+    assert.equal(HierarchyUtils.getEntityDepth('portPB', dNodes, dLayers, dPorts, dLinks), 1);
+    assert.equal(HierarchyUtils.getEntityDepth('portPB1', dNodes, dLayers, dPorts, dLinks), 1);
+    assert.equal(HierarchyUtils.getEntityDepth('linkPBPB1', dNodes, dLayers, dPorts, dLinks), 1); // Link inside nodeB (level 1)
+    assert.equal(HierarchyUtils.getEntityDepth('nodeB2', dNodes, dLayers, dPorts, dLinks), 2); // Child inside linkPBPB1 (level 2)
 });

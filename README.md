@@ -44,7 +44,7 @@
   * `AIAgentNodeContent.js` — интерфейс встроенного ИИ-ассистента для узлов типа `ai-agent` с возможностью автоматического изменения графа на основе JSON-команд.
 
 * `app/types/` (`typedefs.js`, `globals.d.ts`) + `app/jsconfig.json` — JSDoc-типы и глобальные декларации TypeScript; проверка: `npx -y -p typescript tsc -p app/jsconfig.json`.
-* `app/tests/` — юнит-тесты чистой логики (60 тестов); запуск: `node --test app/tests/*.test.js`.
+* `app/tests/` — юнит-тесты чистой логики (62 теста); запуск: `node --test app/tests/*.test.js`.
 
 
 Планируемые изменения интерфейса и модели данных описаны в `docs/PLAN.md`; модель данных и инварианты — в `docs/ARCHITECTURE.md`; жесты и хоткеи — в `docs/UX.md`.

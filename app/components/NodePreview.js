@@ -13,7 +13,7 @@ function NodePreview({ nodeId }) {
         const childLayers = Object.values(state.layers || {}).filter(l => l && l.parentId === nodeId);
 
         const childIds = new Set(childNodes.map(n => n.id));
-        const innerLinks = (state.links || []).filter(l => {
+        const innerLinks = Object.values(state.links || {}).filter(l => {
             if (!l) return false;
             const sp = state.ports[l.sourcePortId];
             const tp = state.ports[l.targetPortId];
