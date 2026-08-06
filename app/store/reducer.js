@@ -265,7 +265,11 @@ const getInitialState = () => {
             };
         }
     } catch (e) {
-        console.error('Ошибка загрузки состояния:', e);
+        console.error('Ошибка загрузки сохраненного состояния (выполняется автоматический сброс битого localStorage):', e);
+        try {
+            localStorage.removeItem(STORAGE_KEY);
+            localStorage.removeItem(LEGACY_STORAGE_KEY_V9);
+        } catch (_) {}
     }
     // Для нового или повреждённого стейта: пробуем загрузить ранее сохранённый API-ключ
     try {
@@ -622,8 +626,27 @@ const reducer = (state, action) => {
             };
         }
         case 'DIVE_INTO': {
-            const { id, name } = action.payload;
-            if (state.currentContext === id) return state;
+            let { id, name } = action.payload || {};
+            if (!id) return state;
+
+            // Разрешено погружаться только в узел или слой.
+            // Если пытаемся погрузиться в порт или связь — они не являются контейнерами,
+            // поэтому проваливаемся в их узел-владелец или контекст связи.
+            if (state.ports && state.ports[id]) {
+                id = state.ports[id].nodeId;
+                name = state.nodes[id] ? state.nodes[id].name : name;
+            } else if (state.links && state.links[id]) {
+                const link = state.links[id];
+                const sp = state.ports ? state.ports[link.sourcePortId] : null;
+                if (sp && sp.nodeId) {
+                    id = sp.nodeId;
+                    name = state.nodes[id] ? state.nodes[id].name : name;
+                } else {
+                    id = link.context || 'root';
+                }
+            }
+
+            if (!id || state.currentContext === id) return state;
             
             // Расчет фокуса камеры
             let targetZoom = 1;
@@ -666,55 +689,23 @@ const reducer = (state, action) => {
                 targetZoom = Math.min(scaleX, scaleY, 1.2);
                 targetOffsetX = (screenW / 2) - centerX * targetZoom;
                 targetOffsetY = (screenH / 2) - centerY * targetZoom;
-            } else if (state.ports[id]) {
-                const port = state.ports[id];
-                const node = state.nodes[port.nodeId];
-                if (node) {
-                    targetZoom = 1; // Стандартное приближение
-                    const absPos = getPortAbs(port, node, state);
-                    targetOffsetX = (screenW / 2) - absPos.x * targetZoom;
-                    targetOffsetY = (screenH / 2) - absPos.y * targetZoom;
-                }
-            } else {
-                const link = state.links ? state.links[id] : null;
-                if (link) {
-                    const sourcePort = state.ports[link.sourcePortId];
-                    const targetPort = state.ports[link.targetPortId];
-                    if (sourcePort && targetPort) {
-                        const sNode = state.nodes[sourcePort.nodeId];
-                        const tNode = state.nodes[targetPort.nodeId];
-                        if (sNode && tNode) {
-                            const p1 = getPortAbs(sourcePort, sNode, state);
-                            const p2 = getPortAbs(targetPort, tNode, state);
-                            const midX = (p1.x + p2.x) / 2;
-                            const midY = (p1.y + p2.y) / 2;
-                            targetZoom = 2;
-                            targetOffsetX = (screenW / 2) - midX * targetZoom;
-                            targetOffsetY = (screenH / 2) - midY * targetZoom;
-                        }
-                    }
-                }
             }
 
-            // Проверяем, есть ли у целевого контекста (узла/порта/связи) дети или присоединенные сущности
+            // Проверяем, есть ли у целевого контекста дети
             const hasChildren = Object.values(state.nodes).some(n => n && n.parentId === id) ||
-                                Object.values(state.layers || {}).some(l => l && l.parentId === id) ||
-                                !!state.ports[id] ||
-                                !!(state.links && state.links[id]);
+                                Object.values(state.layers || {}).some(l => l && l.parentId === id);
 
-
-            // Если уровень уже посещали, возвращаем его сохранённую камеру вместо расчётной.
-            // keepCamera (zoom-to-dive, этап 6.2): камера не трогается — переход бесшовный.
-            // Для пустых узлов (без детей) — не меняем камеру (нет смысла зумить в пустоту).
             const savedCamera = (state.cameraByContext || {})[id];
             const newCanvas = (action.payload.keepCamera || !hasChildren)
                 ? state.canvas
                 : (savedCamera || { offset: { x: targetOffsetX, y: targetOffsetY }, zoom: targetZoom });
 
+            const newBreadcrumbs = getHierarchy().getBreadcrumbPath(id, state.nodes, state.layers, state.ports, state.links);
+
             return {
                 ...state,
                 currentContext: id,
-                breadcrumbs: [...state.breadcrumbs, { id, name }],
+                breadcrumbs: newBreadcrumbs,
                 selectedIds: [],
                 canvas: newCanvas,
                 cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
@@ -786,41 +777,20 @@ const reducer = (state, action) => {
             };
         }
         case 'GO_TO_CONTEXT': {
-            const targetId = action.payload;
+            let targetId = action.payload;
+            if (!targetId) return state;
+
+            if (state.ports && state.ports[targetId]) {
+                targetId = state.ports[targetId].nodeId;
+            } else if (state.links && state.links[targetId]) {
+                const link = state.links[targetId];
+                const sp = state.ports ? state.ports[link.sourcePortId] : null;
+                targetId = sp ? sp.nodeId : (link.context || 'root');
+            }
+
             if (state.currentContext === targetId) return state;
 
-            const breadcrumbs = [{ id: 'root', name: 'Главный холст' }];
-            if (targetId !== 'root') {
-                const path = [];
-                // Поддержка nodes и layers как цели
-                let curr = state.nodes[targetId]
-                    || (state.layers && state.layers[targetId])
-                    || null;
-                // Порт → поднимаемся от его узла-владельца
-                if (!curr && state.ports[targetId]) {
-                    const port = state.ports[targetId];
-                    curr = state.nodes[port.nodeId];
-                    path.unshift({ id: targetId, name: port.name || 'Порт' });
-                }
-                // Связь → поднимаемся от source-узла
-                if (!curr) {
-                    const link = state.links ? state.links[targetId] : null;
-                    if (link) {
-                        const sp = state.ports[link.sourcePortId];
-                        curr = sp ? state.nodes[sp.nodeId] : null;
-                        path.unshift({ id: targetId, name: link.name || 'Связь' });
-                    }
-                }
-                const visited = new Set();
-                while (curr && curr.id !== 'root' && !visited.has(curr.id)) {
-                    visited.add(curr.id);
-                    path.unshift({ id: curr.id, name: curr.name });
-                    curr = state.nodes[curr.parentId]
-                        || (state.layers && state.layers[curr.parentId])
-                        || null;
-                }
-                breadcrumbs.push(...path);
-            }
+            const breadcrumbs = getHierarchy().getBreadcrumbPath(targetId, state.nodes, state.layers, state.ports, state.links);
 
             return {
                 ...state,

@@ -29,8 +29,10 @@ function OutlinerTreeRow({ entity, depth, ctx, visited = new Set() }) {
                 onClick={() => onSelect(entity.id)}
                 onDoubleClick={(e) => {
                     e.stopPropagation();
-                    if (state.nodes[entity.id] || (state.ports && state.ports[entity.id]) || (state.layers && state.layers[entity.id])) {
-                        dispatch({ type: 'GO_TO_CONTEXT', payload: entity.id });
+                    if (state.nodes[entity.id] || (state.layers && state.layers[entity.id])) {
+                        dispatch({ type: 'DIVE_INTO', payload: { id: entity.id, name: entity.name } });
+                    } else {
+                        dispatch({ type: 'SET_SELECTED', payload: entity.id });
                     }
                 }}
 

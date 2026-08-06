@@ -43,16 +43,11 @@ test('DIVE_INTO: сохраняет камеру покидаемого конт
     assert.deepEqual(s1.selectedIds, []);
 });
 
-test('DIVE_INTO: порт поддерживает погружение и создание дочерних структур', () => {
+test('DIVE_INTO: порт перенаправляет контекст в узел-владелец', () => {
     const s0 = makeState();
     const s1 = reducer(s0, { type: 'DIVE_INTO', payload: { id: 'portB', name: 'Порт: output' } });
-    assert.equal(s1.currentContext, 'portB');
-    assert.deepEqual(s1.breadcrumbs.map(b => b.id), ['root', 'portB']);
-
-    const s2 = reducer(s1, { type: 'ADD_NODE', payload: { id: 'nodeInPort', name: 'ChildInPort', position: { x: 10, y: 20 } } });
-    assert.equal(s2.nodes.nodeInPort.parentId, 'portB');
-    const childStats = HierarchyUtils.getChildrenStats(s2.nodes, s2.layers, s2.ports, s2.links, 'portB');
-    assert.equal(childStats.nodeCount, 1);
+    assert.equal(s1.currentContext, 'nodeB');
+    assert.deepEqual(s1.breadcrumbs.map(b => b.id), ['root', 'nodeA', 'nodeB']);
 });
 
 
@@ -201,23 +196,21 @@ test('GO_TO_CONTEXT на порт строит путь через node-влад
     let s = makeState();
     // portB.nodeId = 'nodeB', nodeB.parentId = 'nodeA'
     s = reducer(s, { type: 'GO_TO_CONTEXT', payload: 'portB' });
-    assert.equal(s.currentContext, 'portB');
+    assert.equal(s.currentContext, 'nodeB');
     const ids = s.breadcrumbs.map(b => b.id);
     assert.ok(ids.includes('root'), 'root должен быть');
     assert.ok(ids.includes('nodeA'), 'nodeA должен быть (предок nodeB)');
     assert.ok(ids.includes('nodeB'), 'nodeB должен быть (владелец порта)');
-    assert.ok(ids.includes('portB'), 'portB должен быть');
 });
 
 test('GO_TO_CONTEXT на связь строит путь через source-узел', () => {
     let s = makeState();
     // linkBC.sourcePortId = 'portB' → nodeB.parentId = 'nodeA'
     s = reducer(s, { type: 'GO_TO_CONTEXT', payload: 'linkBC' });
-    assert.equal(s.currentContext, 'linkBC');
+    assert.equal(s.currentContext, 'nodeB');
     const ids = s.breadcrumbs.map(b => b.id);
     assert.ok(ids.includes('root'), 'root должен быть');
     assert.ok(ids.includes('nodeB'), 'nodeB должен быть');
-    assert.ok(ids.includes('linkBC'), 'linkBC должен быть');
 });
 
 test('Auto-sizing: empty/short text nodes and long text nodes aspect ratio', () => {
@@ -721,6 +714,24 @@ test('CREATE_AI_SESSION / SWITCH_AI_SESSION / DELETE_AI_SESSION: множест�
     assert.equal(nodeData4.sessions[0].id, firstSessionId);
     assert.equal(nodeData4.sessions[0].messages[0].content, 'Вопрос 1');
 });
+
+test('LOAD_STATE: demo_project.json проходит валидацию и корректно загружает граф', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const demoPath = path.join(__dirname, '../demo_project.json');
+    const demoRaw = fs.readFileSync(demoPath, 'utf8');
+    const demoJson = JSON.parse(demoRaw);
+
+    const s = reducer(defaultState, { type: 'LOAD_STATE', payload: demoJson });
+
+    assert.ok(s.layers['layer-1-containers'], 'Слой контейнеров загрузился');
+    assert.ok(s.nodes['node-a'], 'Узел А загрузился');
+    assert.ok(s.nodes['node-b1-1'], 'Узел Б1.1 3-го уровня загрузился');
+    assert.ok(s.ports['port-a-out'], 'Порт А-Выход загрузился');
+    assert.ok(s.links['link-a-to-b'], 'Связь А->Б загрузилась');
+    assert.equal(s.formatVersion, 10);
+});
+
 
 
 

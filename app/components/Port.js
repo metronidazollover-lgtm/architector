@@ -202,8 +202,9 @@ function Port({ data, nodeData }) {
 
     const handleDoubleClick = (e) => {
         e.stopPropagation();
-        dispatch({ type: 'DIVE_INTO', payload: { id: data.id, name: `Порт: ${data.type}` } });
+        dispatch({ type: 'SET_SELECTED', payload: data.id });
     };
+
 
     const isPending = state.pendingConnection && state.pendingConnection.sourcePortId === data.id;
     const isConnectedToSelectedLink = Object.values(state.links || {}).some(l => 

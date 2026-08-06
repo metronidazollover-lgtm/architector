@@ -34,6 +34,8 @@
  * @property {NodeShape} [shape]
  * @property {'default'|'ai-agent'} [type]
  * @property {string} [mediaUrl]
+ * @property {number} [mediaHeight]
+ * @property {boolean} [userResized]
  * @property {boolean} [hidden]
  */
 

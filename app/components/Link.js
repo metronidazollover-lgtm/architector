@@ -161,7 +161,7 @@ function Link({ data }) {
 
     const handleDoubleClick = (e) => {
         e.stopPropagation();
-        dispatch({ type: 'DIVE_INTO', payload: { id: data.id, name: `Связь: ${data.id.split('-')[1]}` } });
+        dispatch({ type: 'SET_SELECTED', payload: data.id });
     };
 
     return (

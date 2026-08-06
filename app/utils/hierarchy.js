@@ -252,5 +252,36 @@ HierarchyUtils.getBoundaryLinks = (contextId, nodes, layers, ports, links) => {
     return result;
 };
 
+HierarchyUtils.getBreadcrumbPath = (targetId, nodes, layers, ports, links) => {
+    const breadcrumbs = [{ id: 'root', name: 'Главный холст' }];
+    if (!targetId || targetId === 'root') return breadcrumbs;
+
+    let effectiveId = targetId;
+    if (ports && ports[targetId]) {
+        effectiveId = ports[targetId].nodeId;
+    } else if (links && links[targetId]) {
+        const link = links[targetId];
+        const sp = ports ? ports[link.sourcePortId] : null;
+        effectiveId = sp ? sp.nodeId : 'root';
+    }
+
+    if (!effectiveId || effectiveId === 'root') return breadcrumbs;
+
+    const path = [];
+    let current = nodes[effectiveId] || (layers && layers[effectiveId]);
+    const visited = new Set();
+
+    while (current && current.id !== 'root' && !visited.has(current.id)) {
+        visited.add(current.id);
+        path.unshift({ id: current.id, name: current.name || current.id });
+        const parentId = current.parentId;
+        if (!parentId || parentId === 'root') break;
+        current = nodes[parentId] || (layers && layers[parentId]);
+    }
+
+    return [...breadcrumbs, ...path];
+};
+
 if (typeof window !== 'undefined') window.HierarchyUtils = HierarchyUtils;
 if (typeof module !== 'undefined') module.exports = HierarchyUtils;
+
