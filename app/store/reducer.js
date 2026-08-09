@@ -161,9 +161,8 @@ const defaultState = {
             libraryOpen: false,
             libraryTab: 'objects',
             aiAgentOpen: false,
-            visibleContexts: [],
-            hiddenContexts: [],
-            xRayLevels: [],
+            xRayDown: 0,
+            xRayUp: 0,
             peekNodeId: null,
             transitionFromContext: null,
         aiAgentSettings: {
@@ -248,9 +247,8 @@ const getInitialState = () => {
                 ui: { 
                     ...defaultState.ui, 
                     ...(parsed.ui || {}),
-                    xRayLevels: (parsed.ui && Array.isArray(parsed.ui.xRayLevels))
-                        ? parsed.ui.xRayLevels.filter(l => typeof l === 'number' && l >= 0)
-                        : [],
+                    xRayDown: (parsed.ui && typeof parsed.ui.xRayDown === 'number') ? Math.max(0, parsed.ui.xRayDown) : 0,
+                    xRayUp: (parsed.ui && typeof parsed.ui.xRayUp === 'number') ? Math.max(0, parsed.ui.xRayUp) : 0,
                     aiAgentSettings: (() => {
                         const base = { ...defaultState.ui.aiAgentSettings, ...((parsed.ui && parsed.ui.aiAgentSettings) || {}) };
                         // Миграция: если ключ ещё в основном стейте — переносим в изолированное хранилище
@@ -710,7 +708,7 @@ const reducer = (state, action) => {
                 canvas: newCanvas,
                 cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
                 navHistory: pushNavEntry(state),
-                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [], transitionFromContext: state.currentContext }
+                ui: { ...state.ui, transitionFromContext: state.currentContext }
             };
         }
         case 'NAVIGATE_TO': {
@@ -729,7 +727,7 @@ const reducer = (state, action) => {
                 canvas: keepCamera ? state.canvas : (savedCamera || { offset: { x: 0, y: 0 }, zoom: 1 }),
                 cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
                 navHistory: pushNavEntry(state),
-                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [], transitionFromContext: state.currentContext }
+                ui: { ...state.ui, transitionFromContext: state.currentContext }
             };
         }
         case 'NAV_BACK': {
@@ -751,7 +749,7 @@ const reducer = (state, action) => {
                     past,
                     future: [{ id: state.currentContext, breadcrumbs: state.breadcrumbs }, ...((state.navHistory && state.navHistory.future) || [])]
                 },
-                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [], transitionFromContext: state.currentContext }
+                ui: { ...state.ui, transitionFromContext: state.currentContext }
             };
         }
         case 'NAV_FORWARD': {
@@ -773,7 +771,7 @@ const reducer = (state, action) => {
                     past: [...((state.navHistory && state.navHistory.past) || []), { id: state.currentContext, breadcrumbs: state.breadcrumbs }],
                     future
                 },
-                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [], transitionFromContext: state.currentContext }
+                ui: { ...state.ui, transitionFromContext: state.currentContext }
             };
         }
         case 'GO_TO_CONTEXT': {
@@ -799,7 +797,7 @@ const reducer = (state, action) => {
                 canvas: (state.cameraByContext || {})[targetId] || state.canvas,
                 cameraByContext: { ...(state.cameraByContext || {}), [state.currentContext]: state.canvas },
                 navHistory: pushNavEntry(state),
-                ui: { ...state.ui, visibleContexts: [], hiddenContexts: [], xRayLevels: [], transitionFromContext: state.currentContext }
+                ui: { ...state.ui, transitionFromContext: state.currentContext }
             };
         }
         case 'REMOVE_LINK': {
@@ -938,29 +936,13 @@ const reducer = (state, action) => {
                 ...navPatch
             };
         }
-        case 'TOGGLE_CONTEXT_VISIBILITY': {
-            const contextId = action.payload;
-            const currentVis = state.ui.visibleContexts || [];
-            const newVis = currentVis.includes(contextId) 
-                ? currentVis.filter(id => id !== contextId)
-                : [...currentVis, contextId];
-            return { ...state, ui: { ...state.ui, visibleContexts: newVis } };
+        case 'SET_XRAY_DOWN': {
+            const val = Math.max(0, typeof action.payload === 'number' ? action.payload : 0);
+            return { ...state, ui: { ...state.ui, xRayDown: val } };
         }
-        case 'TOGGLE_CONTEXT_HIDDEN': {
-            const contextId = action.payload;
-            const currentHidden = state.ui.hiddenContexts || [];
-            const newHidden = currentHidden.includes(contextId) 
-                ? currentHidden.filter(id => id !== contextId)
-                : [...currentHidden, contextId];
-            return { ...state, ui: { ...state.ui, hiddenContexts: newHidden } };
-        }
-        case 'TOGGLE_XRAY_LEVEL': {
-            const level = action.payload;
-            const currentLevels = state.ui.xRayLevels || [];
-            const newLevels = currentLevels.includes(level)
-                ? currentLevels.filter(l => l !== level)
-                : [...currentLevels, level];
-            return { ...state, ui: { ...state.ui, xRayLevels: newLevels } };
+        case 'SET_XRAY_UP': {
+            const val = Math.max(0, typeof action.payload === 'number' ? action.payload : 0);
+            return { ...state, ui: { ...state.ui, xRayUp: val } };
         }
         case 'TOGGLE_UI': {
             return {

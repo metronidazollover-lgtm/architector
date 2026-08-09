@@ -189,19 +189,9 @@ function Library() {
                         >
                             <div className="icon-undo-2"></div>
                         </button>
-                        <button 
-                            className={`p-1 rounded text-sm transition-colors ${future.length === 0 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-white/10 hover:text-white'}`}
-                            onClick={() => dispatch({ type: 'REDO' })}
-                            disabled={future.length === 0}
-                            title="Шаг вперед"
-                        >
-                            <div className="icon-redo-2"></div>
-                        </button>
-                    </div>
-                )}
-            </div>
-            
-            {activeTab === 'objects' ? (
+    const renderContent = () => {
+        if (activeTab === 'objects') {
+            return (
                 <div className="flex flex-col flex-1 overflow-hidden">
                     <div className="flex px-2 py-1.5 gap-1 border-b border-[#333]/50 bg-[#1a1a1a]/50 shrink-0 overflow-x-auto no-scrollbar">
                         <button
@@ -348,185 +338,181 @@ function Library() {
                         )}
                     </div>
                 </div>
-            ) : activeTab === 'levels' ? (
-                <div className="flex flex-col flex-1 overflow-hidden">
-                    <div className="flex flex-col overflow-y-auto no-scrollbar pb-2 flex-1">
-                        {(() => {
-                            // Собираем все сущности графа и рассчитываем их глобальную глубину (depth) через HierarchyUtils
-                            const getEntityDepth = (id) => {
-                                const hUtils = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof HierarchyUtils !== 'undefined' ? HierarchyUtils : null);
-                                return hUtils ? hUtils.getEntityDepth(id, nodes, layers, ports, links) : 0;
-                            };
+            );
+        }
 
-                            const allEntities = [];
+        if (activeTab === 'levels') {
+            const H = window.HierarchyUtils;
+            const maxDepths = H ? H.getMaxRelativeDepths(state.currentContext, nodes, layers, ports, links) : { maxDown: 10, maxUp: 10 };
+            const currentDown = state.ui?.xRayDown || 0;
+            const currentUp = state.ui?.xRayUp || 0;
 
-                            Object.values(nodes || {}).forEach(n => {
-                                if (!n) return;
-                                const depth = getEntityDepth(n.id);
-                                allEntities.push({ id: n.id, type: 'node', entity: n, depth, name: n.name, color: n.color, icon: 'icon-box' });
-                            });
+            const currCtx = state.currentContext || 'root';
+            const directChildren = [];
+            const xrayChildren = [];
 
-                            Object.values(layers || {}).forEach(l => {
-                                if (!l) return;
-                                const depth = getEntityDepth(l.id);
-                                allEntities.push({ id: l.id, type: 'layer', entity: l, depth, name: l.name, color: l.color, icon: 'icon-layers' });
-                            });
+            Object.values(nodes || {}).forEach(n => {
+                if (!n) return;
+                const rel = H ? H.getRelativeDepth(n.id, currCtx, nodes, layers, ports, links) : null;
+                if (rel === 1) directChildren.push({ entity: n, type: 'node', name: n.name, icon: 'icon-box' });
+                else if (rel !== null && rel > 1 && rel <= currentDown + 1) {
+                    xrayChildren.push({ entity: n, type: 'node', name: n.name, rel, icon: 'icon-box' });
+                }
+            });
 
-                            Object.values(ports || {}).forEach(p => {
-                                if (!p) return;
-                                const depth = getEntityDepth(p.id);
-                                allEntities.push({ id: p.id, type: 'port', entity: p, depth, name: p.name || `Порт ${p.type}`, color: p.color, icon: 'icon-circle' });
-                            });
+            Object.values(layers || {}).forEach(l => {
+                if (!l) return;
+                const rel = H ? H.getRelativeDepth(l.id, currCtx, nodes, layers, ports, links) : null;
+                if (rel === 1) directChildren.push({ entity: l, type: 'layer', name: l.name, icon: 'icon-layers' });
+            });
 
-                            const linkList = Array.isArray(links) ? links : Object.values(links || {});
-                            linkList.forEach(l => {
-                                if (!l || !l.id) return;
-                                const depth = getEntityDepth(l.id);
-                                const linkName = l.name || (typeof l.id === 'string' ? `Связь ${l.id.replace('link-', '')}` : 'Связь');
-                                allEntities.push({ id: l.id, type: 'link', entity: l, depth, name: linkName, color: l.color, icon: 'icon-git-commit' });
-                            });
+            return (
+                <div className="flex flex-col flex-1 overflow-hidden p-3 gap-3 text-sm">
+                    {/* Секция X-Ray контроля */}
+                    <div className="rounded-lg border border-[#333] bg-[#1a1a1a]/80 p-3 flex flex-col gap-2.5">
+                        <div className="text-xs font-semibold text-gray-300 flex items-center justify-between">
+                            <span>🔍 Просвечивание (X-Ray)</span>
+                            <button
+                                className="text-[10px] text-gray-400 hover:text-white underline"
+                                onClick={() => {
+                                    dispatch({ type: 'SET_XRAY_DOWN', payload: 0 });
+                                    dispatch({ type: 'SET_XRAY_UP', payload: 0 });
+                                }}
+                            >
+                                Сбросить
+                            </button>
+                        </div>
 
-                            // Группируем элементы по уровням
-                            const levelsMap = {};
-                            allEntities.forEach(item => {
-                                const d = item.depth;
-                                if (!levelsMap[d]) levelsMap[d] = { depth: d, nodes: 0, layers: 0, ports: 0, links: 0, total: 0, items: [] };
-                                levelsMap[d].items.push(item);
-                                levelsMap[d].total++;
-                                if (item.type === 'node') levelsMap[d].nodes++;
-                                else if (item.type === 'layer') levelsMap[d].layers++;
-                                else if (item.type === 'port') levelsMap[d].ports++;
-                                else if (item.type === 'link') levelsMap[d].links++;
-                            });
+                        {/* Вглубь (xRayDown) */}
+                        <div className="flex items-center justify-between bg-black/30 px-2.5 py-1.5 rounded border border-white/5">
+                            <span className="text-xs text-gray-400">Вглубь (потомки):</span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    className="w-5 h-5 flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-xs font-bold text-gray-300 disabled:opacity-30"
+                                    disabled={currentDown <= 0}
+                                    onClick={() => dispatch({ type: 'SET_XRAY_DOWN', payload: currentDown - 1 })}
+                                >
+                                    −
+                                </button>
+                                <span className="text-xs font-mono font-semibold text-[var(--accent-blue)] min-w-[75px] text-center">
+                                    {maxDepths.maxDown === 0 ? '0 (нет)' : currentDown === 0 ? `0 / ${maxDepths.maxDown} ур.` : `${currentDown} из ${maxDepths.maxDown}`}
+                                </span>
+                                <button
+                                    className="w-5 h-5 flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-xs font-bold text-gray-300 disabled:opacity-30"
+                                    disabled={currentDown >= maxDepths.maxDown}
+                                    onClick={() => dispatch({ type: 'SET_XRAY_DOWN', payload: currentDown + 1 })}
+                                >
+                                    +
+                                </button>
+                            </div>
+                        </div>
 
-                            const levelEntries = Object.values(levelsMap).sort((a, b) => a.depth - b.depth);
+                        {/* Наверх (xRayUp) */}
+                        <div className="flex items-center justify-between bg-black/30 px-2.5 py-1.5 rounded border border-white/5">
+                            <span className="text-xs text-gray-400">Наверх (предки):</span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    className="w-5 h-5 flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-xs font-bold text-gray-300 disabled:opacity-30"
+                                    disabled={currentUp <= 0}
+                                    onClick={() => dispatch({ type: 'SET_XRAY_UP', payload: currentUp - 1 })}
+                                >
+                                    −
+                                </button>
+                                <span className="text-xs font-mono font-semibold text-amber-400 min-w-[75px] text-center">
+                                    {maxDepths.maxUp === 0 ? '0 (нет)' : currentUp === 0 ? `0 / ${maxDepths.maxUp} ур.` : `${currentUp} из ${maxDepths.maxUp}`}
+                                </span>
+                                <button
+                                    className="w-5 h-5 flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-xs font-bold text-gray-300 disabled:opacity-30"
+                                    disabled={currentUp >= maxDepths.maxUp}
+                                    onClick={() => dispatch({ type: 'SET_XRAY_UP', payload: currentUp + 1 })}
+                                >
+                                    +
+                                </button>
+                            </div>
+                        </div>
+                    </div>
 
-                            if (levelEntries.length === 0) {
-                                return <div className="text-gray-600 italic px-4 py-3 text-sm">Нет элементов в проекте</div>;
-                            }
-
-                            const getActiveLevelsSet = () => {
-                                const xRay = state.ui?.xRayLevels;
-                                const validXRay = Array.isArray(xRay) ? xRay.filter(l => typeof l === 'number' && l >= 0) : [];
-                                const hUtils = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof global !== 'undefined' && global.HierarchyUtils) || null;
-                                if (validXRay.length > 0) {
-                                    return new Set(validXRay);
-                                }
-                                const active = new Set();
-                                const ctx = state.currentContext || 'root';
-                                if (ctx === 'root') {
-                                    active.add(0);
-                                } else {
-                                    const ctxDepth = hUtils ? hUtils.getEntityDepth(ctx, nodes, layers, ports, links) : 0;
-                                    active.add(ctxDepth);
-                                    active.add(ctxDepth + 1);
-                                }
-                                return active;
-                            };
-
-                            const activeLevels = getActiveLevelsSet();
-
-                            return (
-                                <div className="flex flex-col gap-2 p-2">
-                                    {levelEntries.map(level => {
-                                        const depthNum = level.depth;
-                                        const isLevelActive = activeLevels.has(depthNum);
-
-                                        const handleFocusLevel = (e) => {
-                                            e.stopPropagation();
-                                            if (isLevelActive && activeLevels.size === 1) {
-                                                dispatch({ type: 'SET_UI', payload: { xRayLevels: [] } });
-                                            } else {
-                                                dispatch({ type: 'SET_UI', payload: { xRayLevels: [depthNum] } });
-                                            }
-                                        };
-
-                                        const handleToggleXRay = (e) => {
-                                            e.stopPropagation();
-                                            const nextLevels = new Set(activeLevels);
-                                            if (nextLevels.has(depthNum)) {
-                                                nextLevels.delete(depthNum);
-                                            } else {
-                                                nextLevels.add(depthNum);
-                                            }
-                                            dispatch({ type: 'SET_UI', payload: { xRayLevels: Array.from(nextLevels) } });
-                                        };
-
-                                        return (
-                                            <div key={depthNum} className={`rounded-lg border transition-all ${isLevelActive ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)]/10 shadow-md' : 'border-[#333] bg-[#1a1a1a]/50 hover:border-[#444]'}`}>
-                                                {/* Шапка уровня */}
-                                                <div 
-                                                    className="px-3 py-2 flex items-center justify-between cursor-pointer border-b border-[#333]/40 select-none group"
-                                                    onClick={handleFocusLevel}
-                                                    title={`Клик — показать строго Уровень ${depthNum}`}
+                    {/* Секция текущего контекста и содержимого */}
+                    <div className="flex flex-col flex-1 overflow-y-auto no-scrollbar gap-2">
+                        {directChildren.length === 0 && xrayChildren.length === 0 ? (
+                            <div className="text-gray-500 italic px-2 py-4 text-center text-xs">Контекст пуст</div>
+                        ) : (
+                            <div className="flex flex-col gap-3">
+                                {directChildren.length > 0 && (
+                                    <div className="flex flex-col gap-1">
+                                        <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 px-1">
+                                            Прямой контент ({directChildren.length})
+                                        </div>
+                                        {directChildren.map(item => {
+                                            const isSelected = state.selectedIds && state.selectedIds.includes(item.entity.id);
+                                            return (
+                                                <div
+                                                    key={item.entity.id}
+                                                    className={`flex items-center justify-between px-2.5 py-1.5 rounded cursor-pointer text-xs transition-colors border ${isSelected ? 'bg-[var(--accent-blue)]/20 border-[var(--accent-blue)]/50 text-white' : 'bg-[#1a1a1a] border-[#333] hover:border-[#555] text-gray-300'}`}
+                                                    onClick={() => handleSelect(item.entity.id)}
+                                                    onDoubleClick={() => dispatch({ type: 'DIVE_INTO', payload: { id: item.entity.id, name: item.name } })}
                                                 >
-                                                    <div className="flex items-center gap-2">
-                                                        <div className={`w-2 h-2 rounded-full ${isLevelActive ? 'bg-[var(--accent-blue)] animate-pulse' : 'bg-gray-500'}`}></div>
-                                                        <span className={`text-xs font-semibold uppercase tracking-wider ${isLevelActive ? 'text-[var(--accent-blue)]' : 'text-gray-300'}`}>
-                                                            Уровень {depthNum} {depthNum === 0 ? '(Главный холст)' : ''}
-                                                        </span>
-                                                        <span className="text-[10px] text-gray-500 bg-white/5 border border-white/10 rounded-full px-2 py-0.5 ml-1">
-                                                            {level.total} элм.
-                                                        </span>
+                                                    <div className="flex items-center gap-2 truncate">
+                                                        <div className={`${item.icon} text-gray-400 shrink-0`}></div>
+                                                        <span className="truncate">{item.name}</span>
                                                     </div>
+                                                    <span className="text-[9px] uppercase text-gray-500 font-mono">{item.type}</span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
 
-                                                    <div className="flex items-center gap-1">
-                                                        <button
-                                                            className={`p-1 rounded text-xs transition-colors ${isLevelActive ? 'text-[var(--accent-blue)] bg-[var(--accent-blue)]/20' : 'text-gray-500 hover:text-white hover:bg-white/10'}`}
-                                                            onClick={handleToggleXRay}
-                                                            title={isLevelActive ? "Скрыть этот уровень" : "Показать этот уровень"}
-                                                        >
-                                                            <div className={isLevelActive ? 'icon-eye' : 'icon-eye-off'}></div>
-                                                        </button>
+                                {xrayChildren.length > 0 && (
+                                    <div className="flex flex-col gap-1">
+                                        <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--accent-blue)] px-1">
+                                            Вложенные (X-Ray: {xrayChildren.length})
+                                        </div>
+                                        {xrayChildren.map(item => {
+                                            const isSelected = state.selectedIds && state.selectedIds.includes(item.entity.id);
+                                            return (
+                                                <div
+                                                    key={item.entity.id}
+                                                    className={`flex items-center justify-between px-2.5 py-1.5 rounded cursor-pointer text-xs transition-colors border ${isSelected ? 'bg-[var(--accent-blue)]/20 border-[var(--accent-blue)]/50 text-white' : 'bg-black/40 border-[#2a2a2a] hover:border-[#444] text-gray-400'}`}
+                                                    onClick={() => handleSelect(item.entity.id)}
+                                                    onDoubleClick={() => dispatch({ type: 'DIVE_INTO', payload: { id: item.entity.id, name: item.name } })}
+                                                >
+                                                    <div className="flex items-center gap-2 truncate">
+                                                        <div className={`${item.icon} text-gray-500 shrink-0`}></div>
+                                                        <span className="truncate">{item.name}</span>
                                                     </div>
+                                                    <span className="text-[9px] text-[var(--accent-blue)] font-mono">+{item.rel - 1} ур.</span>
                                                 </div>
-
-                                                {/* Статистика и сводка */}
-                                                <div className="px-3 py-1 bg-black/20 flex items-center gap-3 text-[10px] text-gray-400 font-mono">
-                                                    {level.nodes > 0 && <span>{level.nodes} узл.</span>}
-                                                    {level.layers > 0 && <span>{level.layers} сл.</span>}
-                                                    {level.ports > 0 && <span>{level.ports} порт.</span>}
-                                                    {level.links > 0 && <span>{level.links} связ.</span>}
-                                                </div>
-
-                                                {/* Элементы данного уровня */}
-                                                <div className="flex flex-col divide-y divide-[#333]/30">
-                                                    {level.items.map(item => {
-                                                        const isSelected = state.selectedIds && state.selectedIds.includes(item.id);
-                                                        const isCurrentCtx = state.currentContext === item.id;
-                                                        return (
-                                                            <div
-                                                                key={item.id}
-                                                                className={`flex items-center justify-between px-3 py-1.5 cursor-pointer text-xs transition-colors ${isSelected ? 'bg-[var(--accent-blue)]/20 text-white' : 'hover:bg-white/5 text-gray-300'} ${isCurrentCtx ? 'border-l-2 border-l-[var(--accent-blue)] font-medium' : ''}`}
-                                                                onClick={(e) => { e.stopPropagation(); handleSelect(item.id); }}
-                                                                onDoubleClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    dispatch({ type: 'GO_TO_CONTEXT', payload: item.id });
-                                                                }}
-                                                                title={`${item.name} (${item.type}). Двойной клик — войти в контекст`}
-                                                            >
-                                                                <div className="flex items-center gap-2 truncate">
-                                                                    <div className={`${item.icon} text-xs text-gray-400 shrink-0`}></div>
-                                                                    <span className="truncate">{item.name}</span>
-                                                                </div>
-                                                                <span className="text-[9px] uppercase text-gray-500 font-mono shrink-0 ml-2">{item.type}</span>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            );
-                        })()}
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
-            ) : (
-                <div className="flex flex-col overflow-y-auto flex-1 p-2 gap-1 no-scrollbar relative min-h-[200px]">
-                    <div className="absolute left-[19px] top-4 bottom-4 w-px bg-[#333] z-0"></div>
-                    
-                    <div className="flex items-center gap-3 px-2 py-1.5 z-10">
+            );
+        }
+
+        return (
+            <div className="flex flex-col overflow-y-auto flex-1 p-2 gap-1 no-scrollbar relative min-h-[200px]">
+                <div className="absolute left-[19px] top-4 bottom-4 w-px bg-[#333] z-0"></div>
+                
+                <div className="flex items-center gap-3 px-2 py-1.5 z-10">
+                    <div className="w-2.5 h-2.5 rounded-full border-[2px] border-gray-500 bg-[#1f1f1f] shrink-0"></div>
+                    <span className="text-gray-500 text-sm italic">Начало</span>
+                </div>
+
+                {historyLogs.map((log, i) => {
+                    const isLast = i === historyLogs.length - 1;
+                    return (
+                        <div key={i} className={`flex items-center gap-3 px-2 py-2 rounded-lg z-10 transition-colors ${isLast ? 'bg-[var(--accent-blue)]/10' : 'hover:bg-white/5'}`}>
+                            <div className={`w-2.5 h-2.5 rounded-full border-[2px] shrink-0 ${isLast ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)]' : 'border-gray-400 bg-[#1f1f1f]'}`}></div>
+                            <span className={`text-sm ${isLast ? 'text-[var(--accent-blue)] font-medium' : 'text-gray-300'}`}>
+                                {log}
+                            </span>
+                        </div>
+                    );
                         <div className="w-2.5 h-2.5 rounded-full border-[2px] border-gray-500 bg-[#1f1f1f] shrink-0"></div>
                         <span className="text-gray-500 text-sm italic">Начало</span>
                     </div>

@@ -21,8 +21,7 @@ function OutlinerTreeRow({ entity, depth, ctx, visited = new Set() }) {
             <div
                 draggable
                 className={`flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-sm transition-colors border-l-2
-                    ${isSelected ? 'bg-[var(--accent-blue)]/10 text-[var(--accent-blue)]' : 'text-gray-300 hover:bg-white/5'}
-                    ${isCurrentCtx ? 'border-[var(--accent-blue)]' : 'border-transparent'}
+                    ${isCurrentCtx ? 'bg-amber-500/15 text-amber-300 font-semibold border-l-amber-400' : isSelected ? 'bg-[var(--accent-blue)]/10 text-[var(--accent-blue)] border-l-transparent' : 'text-gray-300 hover:bg-white/5 border-l-transparent'}
                     ${isDropTarget ? 'bg-green-500/20 outline outline-1 outline-green-500' : ''}
                 `}
                 style={{ paddingLeft: `${8 + depth * 14}px` }}

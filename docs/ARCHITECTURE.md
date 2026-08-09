@@ -52,10 +52,15 @@ Babel standalone исполняет их в общем глобальном ле
   `HierarchyUtils.toRelativePosition`.
 
 ### Z-Index и Иерархия Рендеринга
-Для корректного сквозного отображения вложенных структур (в т.ч. при включенном режиме X-Ray и погружении в порты) Z-Index элементов на Canvas вычисляется на основе их глубины вложенности:
-`nodeZIndex = (depth * 10) + (isPeek ? 30 : 0) + (isSelected ? 25 : 0) + ...`
-`linkZIndex = isPeekChildLink ? 30 : (isCurrentChild || isPortConnectedLink ? 10 : (isExplicitlyVisible ? 5 : 0))`
-Это гарантирует, что дочерние элементы всегда отрисовываются поверх родительских фреймов и слоев, а соединенные связи активного порта выводятся с 100% яркостью.
+Отрисовка и прозрачность элементов определяется единой функцией `HierarchyUtils.getVisibilityState(entityId, currentContext, xRayDown, xRayUp, ...)`.
+Она рассчитывает относительную глубину сущности `relDepth` от текущего контекста и назначает роль (`context`, `child`, `xray-down`, `xray-up`, `selected-chain`, `peek`, `hidden`), прозрачность и Z-Index:
+- Прямые дети контекста (`child`): `zIndex: 10`, `opacity: 1`
+- X-Ray вглубь (`xray-down`): `zIndex: Math.max(1, 10 - relDepth * 2)`, плавная прозрачность для потомков вплоть до `relDepth <= xRayDown + 1`
+- Предки (`xray-up`): выводятся только при явно включенном просвечивании вверх (`xRayUp > 0`)
+- Парадигма Папок: при `xRayUp === 0` предки скрываются (`hidden`), создавая 100% чистый холст текущей папки
+- Динамические лимиты: максимальные пределы просвечивания `xRayDown` и `xRayUp` рассчитываются вызовом `HierarchyUtils.getMaxRelativeDepths(currentContext, ...)`
+- Peek (Alt+hover): `zIndex: 35`
+- Выделенная цепочка: `zIndex: 30`
 
 ### Подсветка соединенной сети элементов
 При выделении порта или связи активируется косвенное визуальное подсвечивание всего участвующего сегмента сети (`isSelected`), в то время как `selectedIds` содержит ровно 1 явно выбранную сущность (`isExplicitlySelected`). Клики по элементам проверяют `isExplicitlySelected`, что гарантирует сброс подсветки сети при выборе другого элемента.

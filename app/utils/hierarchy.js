@@ -282,6 +282,287 @@ HierarchyUtils.getBreadcrumbPath = (targetId, nodes, layers, ports, links) => {
     return [...breadcrumbs, ...path];
 };
 
+/**
+ * Относительная глубина сущности от заданного контекста.
+ * Положительное число — потомок (1 = прямой ребёнок, 2 = внук и т.д.),
+ * 0 — сама сущность, отрицательное — предок, null — разные ветки.
+ * Слои прозрачны (не инкрементируют глубину), кроме случая когда
+ * запрашиваемая сущность сама является слоем (первый хоп).
+ * Порты приводятся к узлу-владельцу.
+ * @param {string} entityId
+ * @param {string} contextId
+ * @param {Object} nodes
+ * @param {Object} [layers]
+ * @param {Object} [ports]
+ * @param {Object} [links]
+ * @returns {number|null}
+ */
+HierarchyUtils.getRelativeDepth = (entityId, contextId, nodes, layers, ports, links) => {
+    if (!entityId || !contextId) return null;
+    if (entityId === contextId) return 0;
+
+    const safeNodes = nodes || {};
+    const safeLayers = layers || {};
+    const safePorts = ports || {};
+    const safeLinks = (Array.isArray(links) ? links.reduce((a, l) => { if (l && l.id) a[l.id] = l; return a; }, {}) : links) || {};
+
+    // Подъём от fromId к toId с подсчётом хопов.
+    // Первый хоп всегда считается (сущность сама — ребёнок чего-то),
+    // промежуточные слои — прозрачны, промежуточные порты — прозрачны.
+    const walkUp = (fromId, toId) => {
+        // Порт приводим к узлу-владельцу
+        let resolvedFrom = fromId;
+        if (safePorts[resolvedFrom]) resolvedFrom = safePorts[resolvedFrom].nodeId;
+        if (resolvedFrom === toId) return 0;
+
+        let depth = 0;
+        let cId = resolvedFrom;
+        const visited = new Set();
+        let firstHop = true;
+
+        while (cId && cId !== 'root' && !visited.has(cId)) {
+            visited.add(cId);
+
+            let parentId;
+            let isTransparent = false;
+
+            if (safePorts[cId]) {
+                // Порт → узел-владелец: тот же уровень
+                parentId = safePorts[cId].nodeId;
+                isTransparent = true;
+            } else if (safeLinks[cId]) {
+                parentId = safeLinks[cId].context || 'root';
+            } else if (safeLayers[cId]) {
+                parentId = (safeLayers[cId].parentId || 'root');
+                // Слой прозрачен только как промежуточный контейнер, не на первом хопе
+                isTransparent = !firstHop;
+            } else if (safeNodes[cId]) {
+                parentId = (safeNodes[cId].parentId || 'root');
+            } else {
+                break;
+            }
+
+            if (!isTransparent) depth++;
+            firstHop = false;
+
+            // Достигли цели напрямую?
+            if (parentId === toId) return depth;
+            // Родитель — слой, чей parentId = цель? (пропуск слоя)
+            if (safeLayers[parentId] && (safeLayers[parentId].parentId || 'root') === toId) return depth;
+
+            cId = parentId;
+        }
+        // Если цель — root и мы вышли из цикла
+        if (toId === 'root') return depth;
+        return null;
+    };
+
+    // Проверяем, является ли сущность потомком контекста
+    const descDepth = walkUp(entityId, contextId);
+    if (descDepth !== null) return descDepth;
+
+    // Проверяем, является ли сущность предком контекста
+    const ancDepth = walkUp(contextId, entityId);
+    if (ancDepth !== null) return -ancDepth;
+
+    return null; // Разные ветки
+};
+
+/**
+ * Динамический расчет максимальных глубин потомков и предков текущего контекста.
+ * @param {string} contextId
+ * @param {Object} nodes
+ * @param {Object} [layers]
+ * @param {Object} [ports]
+ * @param {Object} [links]
+ * @returns {{ maxDown: number, maxUp: number }}
+ */
+HierarchyUtils.getMaxRelativeDepths = (contextId, nodes, layers, ports, links) => {
+    let maxDown = 0;
+    let maxUp = 0;
+    const safeNodes = nodes || {};
+    const safeLayers = layers || {};
+
+    Object.values(safeNodes).forEach(n => {
+        if (!n || !n.id) return;
+        const rel = HierarchyUtils.getRelativeDepth(n.id, contextId, nodes, layers, ports, links);
+        if (rel !== null) {
+            if (rel > 1) maxDown = Math.max(maxDown, rel - 1);
+            if (rel < 0) maxUp = Math.max(maxUp, Math.abs(rel));
+        }
+    });
+
+    Object.values(safeLayers).forEach(l => {
+        if (!l || !l.id) return;
+        const rel = HierarchyUtils.getRelativeDepth(l.id, contextId, nodes, layers, ports, links);
+        if (rel !== null) {
+            if (rel > 1) maxDown = Math.max(maxDown, rel - 1);
+            if (rel < 0) maxUp = Math.max(maxUp, Math.abs(rel));
+        }
+    });
+
+    return { maxDown, maxUp };
+};
+
+/**
+ * Единая функция видимости: заменяет 13-булевый спагетти в Canvas.js.
+ * Возвращает полный дескриптор видимости для одной сущности.
+ *
+ * @param {string} entityId
+ * @param {string} currentContext
+ * @param {number} xRayDown  — сколько уровней вглубь просвечивать (динамически 0..N)
+ * @param {number} xRayUp    — сколько уровней вверх просвечивать (динамически 0..N)
+ * @param {Object} nodes
+ * @param {Object} layers
+ * @param {Object} ports
+ * @param {Object} links
+ * @param {Object} extras  — { selectedIds, peekNodeId, transitionFromContext, isolatedIds, breadcrumbs }
+ * @returns {{ visible:boolean, opacity:number, interactive:boolean, role:string, zIndex:number, isContextNode:boolean, isParentOfSelected:boolean }}
+ */
+HierarchyUtils.getVisibilityState = (entityId, currentContext, xRayDown, xRayUp, nodes, layers, ports, links, extras) => {
+    const safeNodes = nodes || {};
+    const safeLayers = layers || {};
+    const safePorts = ports || {};
+    const safeLinks = (Array.isArray(links) ? links.reduce((a, l) => { if (l && l.id) a[l.id] = l; return a; }, {}) : links) || {};
+    const selectedIds = (extras && extras.selectedIds) || [];
+    const peekNodeId = extras && extras.peekNodeId;
+    const transitionCtx = extras && extras.transitionFromContext;
+    const isolatedIds = (extras && extras.isolatedIds) || [];
+    const breadcrumbs = (extras && extras.breadcrumbs) || [];
+
+    const HIDDEN = { visible: false, opacity: 0, interactive: false, role: 'hidden', zIndex: 0, isContextNode: false, isParentOfSelected: false };
+
+    // ——— Фильтр изоляции ———
+    if (isolatedIds.length > 0 && !isolatedIds.includes(entityId)) return HIDDEN;
+
+    // ——— Хелпер: «истинный» родительский контекст (пропуск слоёв) ———
+    const getTrueParent = (id) => {
+        const n = safeNodes[id];
+        if (n) {
+            const p = n.parentId || 'root';
+            if (safeLayers[p]) return safeLayers[p].parentId || 'root';
+            return p;
+        }
+        const ly = safeLayers[id];
+        if (ly) return ly.parentId || 'root';
+        const port = safePorts[id];
+        if (port) return getTrueParent(port.nodeId);
+        const lnk = safeLinks[id];
+        if (lnk) return lnk.context || 'root';
+        return 'root';
+    };
+
+    // ——— Относительная глубина ———
+    const relDepth = HierarchyUtils.getRelativeDepth(entityId, currentContext, safeNodes, safeLayers, safePorts, safeLinks);
+
+    // ——— 0. Сам контекст ———
+    if (entityId === currentContext) {
+        return { visible: true, opacity: 1, interactive: true, role: 'context', zIndex: 5, isContextNode: true, isParentOfSelected: false };
+    }
+
+    // ——— 1. Родитель текущего порта-контекста ———
+    if (safePorts[currentContext] && safePorts[currentContext].nodeId === entityId) {
+        return { visible: true, opacity: 1, interactive: true, role: 'port-parent', zIndex: 5, isContextNode: true, isParentOfSelected: false };
+    }
+
+    // ——— 2. Якорь связи-контекста ———
+    if (safeLinks[currentContext]) {
+        const ctxLink = safeLinks[currentContext];
+        const sp = safePorts[ctxLink.sourcePortId];
+        const tp = safePorts[ctxLink.targetPortId];
+        if ((sp && sp.nodeId === entityId) || (tp && tp.nodeId === entityId)) {
+            return { visible: true, opacity: 1, interactive: true, role: 'link-endpoint', zIndex: 5, isContextNode: true, isParentOfSelected: false };
+        }
+    }
+
+    // ——— 3. Связанные узлы порта-контекста ———
+    if (safePorts[currentContext]) {
+        const activePort = safePorts[currentContext];
+        const isConnectedViaLink = Object.values(safeLinks).some(l =>
+            l && ((l.sourcePortId === activePort.id && safePorts[l.targetPortId] && safePorts[l.targetPortId].nodeId === entityId) ||
+                  (l.targetPortId === activePort.id && safePorts[l.sourcePortId] && safePorts[l.sourcePortId].nodeId === entityId))
+        );
+        if (isConnectedViaLink) {
+            return { visible: true, opacity: 1, interactive: true, role: 'port-connected', zIndex: 5, isContextNode: false, isParentOfSelected: false };
+        }
+    }
+
+    // ——— 4. Подсветка выделенной цепочки (сквозная) ———
+    const isExplicitlySelected = selectedIds.includes(entityId);
+    const isConnectedToSelected = !isExplicitlySelected && selectedIds.length > 0 && (() => {
+        const nodeId = safePorts[entityId] ? safePorts[entityId].nodeId : entityId;
+        if (!safeNodes[nodeId]) return false;
+        return Object.values(safeLinks).some(l => {
+            if (!l) return false;
+            const sp = safePorts[l.sourcePortId];
+            const tp = safePorts[l.targetPortId];
+            if (!sp || !tp) return false;
+            if (sp.nodeId !== nodeId && tp.nodeId !== nodeId) return false;
+            return selectedIds.includes(l.id) || selectedIds.includes(sp.id) || selectedIds.includes(tp.id) ||
+                   selectedIds.includes(sp.nodeId) || selectedIds.includes(tp.nodeId);
+        });
+    })();
+
+    if (isExplicitlySelected || isConnectedToSelected) {
+        return { visible: true, opacity: 1, interactive: true, role: 'selected-chain', zIndex: 30, isContextNode: false, isParentOfSelected: false };
+    }
+
+    // ——— 5. Peek (Alt+hover) ———
+    if (peekNodeId) {
+        const peekParent = getTrueParent(entityId);
+        if (peekParent === peekNodeId) {
+            return { visible: true, opacity: 1, interactive: false, role: 'peek', zIndex: 35, isContextNode: false, isParentOfSelected: false };
+        }
+    }
+
+    // ——— 6. Прямой ребёнок текущего контекста (relDepth === 1) ———
+    if (relDepth !== null && relDepth === 1) {
+        // Peek: пока peek активен, все дети кроме peek-источника затухают
+        if (peekNodeId) {
+            if (peekNodeId === entityId) {
+                return { visible: true, opacity: 1, interactive: true, role: 'peek-source', zIndex: 12, isContextNode: false, isParentOfSelected: false };
+            }
+            return { visible: true, opacity: 0.25, interactive: false, role: 'peek-dimmed', zIndex: 10, isContextNode: false, isParentOfSelected: false };
+        }
+
+        // Есть ли у этого узла выделенный ребёнок (пульсация)?
+        const hasSelectedChild = selectedIds.some(sid => {
+            const n = safeNodes[sid];
+            if (!n) return false;
+            const p = n.parentId || 'root';
+            if (safeLayers[p]) return (safeLayers[p].parentId || 'root') === entityId;
+            return p === entityId;
+        });
+
+        return { visible: true, opacity: 1, interactive: true, role: 'child', zIndex: 10, isContextNode: false, isParentOfSelected: hasSelectedChild };
+    }
+
+    // ——— 7. xRayDown: потомки глубже прямых детей ———
+    if (relDepth !== null && relDepth > 1 && relDepth <= xRayDown + 1) {
+        const opacity = Math.max(0.35, 1 - (relDepth - 1) * 0.2);
+        return { visible: true, opacity, interactive: true, role: 'xray-down', zIndex: Math.max(1, 10 - relDepth * 2), isContextNode: false, isParentOfSelected: false };
+    }
+
+    // ——— 8. Предок (только при явном xRayUp > 0) ———
+    if (relDepth !== null && relDepth < 0) {
+        if (xRayUp > 0 && Math.abs(relDepth) <= xRayUp) {
+            const opacity = Math.max(0.5, 1 - Math.abs(relDepth) * 0.25);
+            return { visible: true, opacity, interactive: true, role: 'xray-up', zIndex: 1, isContextNode: false, isParentOfSelected: false };
+        }
+        return HIDDEN;
+    }
+
+    // ——— 9. Хвост перехода (анимация при смене уровня) ———
+    if (transitionCtx) {
+        const transRelDepth = HierarchyUtils.getRelativeDepth(entityId, transitionCtx, safeNodes, safeLayers, safePorts, safeLinks);
+        if (transRelDepth !== null && transRelDepth === 1) {
+            return { visible: true, opacity: 0.5, interactive: false, role: 'transition', zIndex: 2, isContextNode: false, isParentOfSelected: false };
+        }
+    }
+
+    return HIDDEN;
+};
+
 if (typeof window !== 'undefined') window.HierarchyUtils = HierarchyUtils;
 if (typeof module !== 'undefined') module.exports = HierarchyUtils;
 

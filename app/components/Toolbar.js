@@ -174,6 +174,24 @@ function Toolbar() {
                 <div className="icon-scan text-xl"></div>
             </button>
 
+            <button
+                className={`btn w-10 h-10 p-0 rounded-md flex flex-col items-center justify-center transition-colors ${(state.ui?.xRayDown > 0 || state.ui?.xRayUp > 0) ? 'bg-[var(--accent-blue)] text-white border-[var(--accent-blue)]' : 'text-gray-400 hover:text-white'}`}
+                title="X-Ray просвечивание (клик — сброс / вглубь 1)"
+                onClick={() => {
+                    if (state.ui?.xRayDown > 0 || state.ui?.xRayUp > 0) {
+                        dispatch({ type: 'SET_XRAY_DOWN', payload: 0 });
+                        dispatch({ type: 'SET_XRAY_UP', payload: 0 });
+                    } else {
+                        dispatch({ type: 'SET_XRAY_DOWN', payload: 1 });
+                    }
+                }}
+            >
+                <div className="icon-eye text-sm"></div>
+                <span className="text-[9px] font-mono leading-none mt-0.5">
+                    ↓{state.ui?.xRayDown || 0}↑{state.ui?.xRayUp || 0}
+                </span>
+            </button>
+
             <div className="w-full h-px bg-[#333] my-1"></div>
 
             <button

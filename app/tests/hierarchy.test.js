@@ -108,3 +108,67 @@ test('getEntityDepth: точный глобальный уровень влож�
     assert.equal(HierarchyUtils.getEntityDepth('linkPBPB1', dNodes, dLayers, dPorts, dLinks), 1); // Link inside nodeB (level 1)
     assert.equal(HierarchyUtils.getEntityDepth('nodeB2', dNodes, dLayers, dPorts, dLinks), 2); // Child inside linkPBPB1 (level 2)
 });
+
+test('Cross-level connection detection: глубокий узел B2 отслеживает связь с родителем B', () => {
+    const projNodes = {
+        nodeB: { id: 'nodeB', parentId: 'root' },
+        nodeB1: { id: 'nodeB1', parentId: 'nodeB' },
+        nodeB2: { id: 'nodeB2', parentId: 'nodeB1' }
+    };
+    const projPorts = {
+        portB1: { id: 'portB1', nodeId: 'nodeB1' },
+        portB_for_B1: { id: 'portB_for_B1', nodeId: 'nodeB' },
+        portB2: { id: 'portB2', nodeId: 'nodeB2' },
+        portB_for_B2: { id: 'portB_for_B2', nodeId: 'nodeB' }
+    };
+    const projLinks = {
+        linkB2ToB: { id: 'linkB2ToB', sourcePortId: 'portB2', targetPortId: 'portB_for_B2' }
+    };
+
+    const selectedIds = ['nodeB'];
+    const isConnectedToSelectedNode = (nodeId) => {
+        return Object.values(projLinks).some(l => {
+            if (!l) return false;
+            const sPort = projPorts[l.sourcePortId];
+            const tPort = projPorts[l.targetPortId];
+            if (!sPort || !tPort) return false;
+            if (selectedIds.includes(sPort.nodeId) && tPort.nodeId === nodeId) return true;
+            if (selectedIds.includes(tPort.nodeId) && sPort.nodeId === nodeId) return true;
+            return false;
+        });
+    };
+
+    assert.equal(isConnectedToSelectedNode('nodeB2'), true);
+});
+
+test('getRelativeDepth: точно считает относительное расснояние до контекста', () => {
+    const rNodes = {
+        parent: { id: 'parent', parentId: 'root' },
+        child: { id: 'child', parentId: 'parent' },
+        grandchild: { id: 'grandchild', parentId: 'child' },
+        other: { id: 'other', parentId: 'root' }
+    };
+    assert.equal(HierarchyUtils.getRelativeDepth('child', 'parent', rNodes), 1);
+    assert.equal(HierarchyUtils.getRelativeDepth('grandchild', 'parent', rNodes), 2);
+    assert.equal(HierarchyUtils.getRelativeDepth('parent', 'child', rNodes), -1);
+    assert.equal(HierarchyUtils.getRelativeDepth('parent', 'parent', rNodes), 0);
+    assert.equal(HierarchyUtils.getRelativeDepth('other', 'parent', rNodes), null);
+});
+
+test('getVisibilityState: корректно определяет роли и видимость для контекста и X-Ray', () => {
+    const vNodes = {
+        parent: { id: 'parent', parentId: 'root' },
+        child: { id: 'child', parentId: 'parent' },
+        grandchild: { id: 'grandchild', parentId: 'child' }
+    };
+    // Без X-Ray
+    const vNormal = HierarchyUtils.getVisibilityState('grandchild', 'parent', 0, 0, vNodes, {}, {}, {});
+    assert.equal(vNormal.visible, false);
+
+    // С xRayDown = 1 (видно внуков)
+    const vXRay = HierarchyUtils.getVisibilityState('grandchild', 'parent', 1, 0, vNodes, {}, {}, {});
+    assert.equal(vXRay.visible, true);
+    assert.equal(vXRay.role, 'xray-down');
+});
+
+
