@@ -1,434 +1,281 @@
 {
   "formatVersion": 10,
-  "layers": {
-    "layer-0-guide": {
-      "id": "layer-0-guide",
-      "name": "0. Руководство & Быстрый старт (Guide)",
-      "content": "Инструкция по тестированию всех функций и визуальных возможностей редактора Architector",
-      "color": "#e11d48",
-      "position": { "x": -950, "y": -250 },
-      "size": { "w": 550, "h": 520 },
-      "locked": false,
-      "parentId": "root",
-      "snapToGrid": true
-    },
-    "layer-1-containers": {
-      "id": "layer-1-containers",
-      "name": "1. Иерархические Контейнеры (Узлы А, Б)",
-      "content": "Демонстрация многоуровневой вложенности узлов (Уровень 1 -> 2 -> 3) и межуровневых связей",
-      "color": "#0284c7",
-      "position": { "x": -350, "y": -250 },
-      "size": { "w": 640, "h": 540 },
-      "locked": false,
-      "parentId": "root",
-      "snapToGrid": true
-    },
-    "layer-2-special": {
-      "id": "layer-2-special",
-      "name": "2. Специальные Типы & Виджеты (Узлы В, Г, Д)",
-      "content": "Карточка с медиа-контентом, ИИ-Копилот (ai-agent) и стандартные узлы",
-      "color": "#7c3aed",
-      "position": { "x": 330, "y": -250 },
-      "size": { "w": 620, "h": 540 },
-      "locked": false,
-      "parentId": "root",
-      "snapToGrid": true
-    }
-  },
+  "layers": {},
   "nodes": {
-    "node-guide-main": {
-      "id": "node-guide-main",
-      "name": "📖 Инструкция для тестирования функционала",
-      "group": "Инструкция",
-      "content": "### 🧪 Как протестировать все фичи графа:\n\n1. **🔍 Многоуровневое рекурсивное погружение (Dive In):**\n   - **Двойной клик на Узел А / Узел Б:** погружение на Уровень 2 (к Узлам А1, А2, А3, Б1, Б2).\n   - **Двойной клик на Узел Б1:** погружение на Уровень 3 (к Узлам Б1.1 и Б1.2).\n   - **Двойной клик на Порт А1-Выход:** погружение во внутренний контекст порта (`Узел внутри Порта А1`).\n   - **Двойной клик на Связь А->Б:** погружение во внутренний контекст линии (`Узел внутри Связи А-Б`).\n\n2. **⚡ Внутриуровневые и Межуровневые связи:**\n   - **Внутриуровневые связи:** Узел А1 ➔ Узел А2 (внутри А), Узел Б1 ➔ Узел Б2 (внутри Б).\n   - **Межуровневые связи:** Узел А1 (уровень 2) ➔ Узел Б1 (уровень 2), Узел Б1.1 (уровень 3) ➔ Узел А3 (уровень 2).\n\n3. **🖼️ Медиа-карточки и Авто-размер:**\n   - **Узел В:** отображает картинку с авто-подгонкой высоты.\n\n4. **🤖 ИИ-Копилот (AI Agent):**\n   - **Узел Г:** интерактивный чат-ассистент (`type: 'ai-agent'`).\n\n5. **📐 Коллизии и выравнивание слоев:**\n   - Перетащите `Слой 1` за шапку на `Слой 2` — слои аккуратно скользят стык-в-стык без перекрытия.\n   - Кнопка выравнивания в тулбаре строит слои по вертикали.",
-      "color": "#881337",
-      "position": { "x": 30, "y": 80 },
-      "size": { "w": 490, "h": 410 },
-      "parentId": "layer-0-guide",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-a": {
-      "id": "node-a",
-      "name": "📦 Узел А (Контейнер уровня 1)",
-      "group": "Контейнеры",
-      "content": "Контейнер уровня 1. Двойной клик — войти внутрь (содержит Узлы А1, А2, А3).",
-      "color": "#0f172a",
-      "position": { "x": 30, "y": 80 },
-      "size": { "w": 270, "h": 180 },
-      "parentId": "layer-1-containers",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-b": {
-      "id": "node-b",
-      "name": "📦 Узел Б (Контейнер уровня 1)",
-      "group": "Контейнеры",
-      "content": "Контейнер уровня 1. Двойной клик — войти внутрь (содержит Узел Б1 и Узел Б2).",
-      "color": "#0f172a",
-      "position": { "x": 330, "y": 80 },
-      "size": { "w": 270, "h": 180 },
-      "parentId": "layer-1-containers",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-a1": {
-      "id": "node-a1",
-      "name": "🔹 Узел А1",
-      "group": "Уровень 2",
-      "content": "Элемент 2-го уровня в Узле А. Имеет порт с дочерним узлом и межуровневую связь с Узлом Б1.",
-      "color": "#1e293b",
-      "position": { "x": 30, "y": 80 },
-      "size": { "w": 250, "h": 120 },
-      "parentId": "node-a",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-a2": {
-      "id": "node-a2",
-      "name": "🔹 Узел А2",
-      "group": "Уровень 2",
-      "content": "Элемент 2-го уровня в Узле А. Соединен внутриуровневой связью с Узлом А1 и межуровневой с Узлом В.",
-      "color": "#1e293b",
-      "position": { "x": 310, "y": 80 },
-      "size": { "w": 250, "h": 120 },
-      "parentId": "node-a",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-a3": {
-      "id": "node-a3",
-      "name": "🔹 Узел А3",
-      "group": "Уровень 2",
-      "content": "Элемент 2-го уровня в Узле А. Принимает глубокую межуровневую связь с 3-го уровня (Узел Б1.1).",
-      "color": "#1e293b",
-      "position": { "x": 30, "y": 240 },
-      "size": { "w": 250, "h": 120 },
-      "parentId": "node-a",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-b1": {
-      "id": "node-b1",
-      "name": "🌀 Узел Б1 (Контейнер уровня 2)",
-      "group": "Уровень 2",
-      "content": "Контейнер 2-го уровня! Двойной клик погружает на 3-й уровень (к Узлам Б1.1 и Б1.2).",
-      "color": "#0d9488",
-      "position": { "x": 30, "y": 80 },
-      "size": { "w": 260, "h": 140 },
-      "parentId": "node-b",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-b2": {
-      "id": "node-b2",
-      "name": "🔹 Узел Б2",
-      "group": "Уровень 2",
-      "content": "Элемент 2-го уровня в Узле Б. Принимает связь от Узла Б1.",
-      "color": "#1e293b",
-      "position": { "x": 320, "y": 80 },
-      "size": { "w": 240, "h": 120 },
-      "parentId": "node-b",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-b1-1": {
-      "id": "node-b1-1",
-      "name": "✨ Узел Б1.1",
-      "group": "Уровень 3",
-      "content": "Глубокий элемент 3-го уровня! Исходит межуровневая связь на Уровень 2 к Узлу А3.",
-      "color": "#115e59",
-      "position": { "x": 30, "y": 80 },
-      "size": { "w": 240, "h": 110 },
-      "parentId": "node-b1",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-b1-2": {
-      "id": "node-b1-2",
-      "name": "✨ Узел Б1.2",
-      "group": "Уровень 3",
-      "content": "Элемент 3-го уровня. Соединен внутриуровневой связью с Узлом Б1.1.",
-      "color": "#115e59",
-      "position": { "x": 300, "y": 80 },
-      "size": { "w": 240, "h": 110 },
-      "parentId": "node-b1",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-in-port": {
-      "id": "node-in-port",
-      "name": "🔌 Дочерний узел в Порту А1",
-      "group": "Контекст Порта",
-      "content": "Вложенный элемент внутри контекста Порта А1-Выход (parentId = port-a1-out).",
-      "color": "#0284c7",
-      "position": { "x": 30, "y": 30 },
-      "size": { "w": 240, "h": 100 },
-      "parentId": "port-a1-out",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-in-link": {
-      "id": "node-in-link",
-      "name": "⚡ Дочерний узел в Связи А->Б",
-      "group": "Контекст Связи",
-      "content": "Нода-логировщик внутри контекста линии связи между Узлом А и Узлом Б.",
-      "color": "#0d9488",
-      "position": { "x": 30, "y": 30 },
-      "size": { "w": 240, "h": 100 },
-      "parentId": "link-a-to-b",
-      "snapToGrid": true,
-      "shape": "rectangle"
-    },
-    "node-v": {
-      "id": "node-v",
-      "name": "🖼️ Узел В (Медиа-карточка)",
-      "group": "Специальный",
-      "content": "Демонстрация отображения картинок в карточке узла с авто-расчетом высоты.",
-      "color": "#1e1b4b",
-      "position": { "x": 30, "y": 80 },
-      "size": { "w": 260, "h": 170 },
-      "parentId": "layer-2-special",
-      "snapToGrid": true,
+    "node-1786432299374721": {
+      "name": "А",
+      "position": {
+        "x": 690,
+        "y": 690
+      },
+      "size": {
+        "w": 201,
+        "h": 100
+      },
+      "color": "#8f4242",
       "shape": "rectangle",
-      "mediaUrl": "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=200&auto=format&fit=crop&q=60",
-      "mediaHeight": 80
+      "id": "node-1786432299374721",
+      "parentId": "root",
+      "snapToGrid": true
     },
-    "node-g-ai": {
-      "id": "node-g-ai",
-      "name": "💬 Узел Г (ИИ-Ассистент Copilot)",
-      "group": "ИИ-Ассистент",
-      "content": "Виджет встроенного ИИ-копилота type: 'ai-agent'",
-      "color": "#3b0764",
-      "position": { "x": 320, "y": 80 },
-      "size": { "w": 270, "h": 420 },
-      "parentId": "layer-2-special",
-      "snapToGrid": true,
+    "node-1786432310240234": {
+      "name": "Узел Б",
+      "position": {
+        "x": 1200,
+        "y": 690
+      },
+      "size": {
+        "w": 203,
+        "h": 100
+      },
+      "color": "#461eb3",
       "shape": "rectangle",
-      "type": "ai-agent"
+      "id": "node-1786432310240234",
+      "parentId": "root",
+      "snapToGrid": true
     },
-    "node-d": {
-      "id": "node-d",
-      "name": "🔹 Узел Д (Стандартный узел)",
-      "group": "Специальный",
-      "content": "Обычный прямоугольный узел для проверки базового поведения и выделения.",
-      "color": "#1e293b",
-      "position": { "x": 30, "y": 280 },
-      "size": { "w": 260, "h": 120 },
-      "parentId": "layer-2-special",
-      "snapToGrid": true,
-      "shape": "rectangle"
+    "node-1786432321429601": {
+      "name": "Узел В",
+      "position": {
+        "x": 1710,
+        "y": 720
+      },
+      "size": {
+        "w": 203,
+        "h": 100
+      },
+      "color": "#d0b9b9",
+      "shape": "rectangle",
+      "id": "node-1786432321429601",
+      "parentId": "root",
+      "snapToGrid": true
+    },
+    "node-1786432332244662": {
+      "name": "А1",
+      "position": {
+        "x": -150,
+        "y": 120
+      },
+      "size": {
+        "w": 201,
+        "h": 100
+      },
+      "color": "#8f4242",
+      "shape": "rectangle",
+      "id": "node-1786432332244662",
+      "parentId": "node-1786432299374721",
+      "snapToGrid": true
+    },
+    "node-1786432353651494": {
+      "name": "А1_2",
+      "position": {
+        "x": 90,
+        "y": 120
+      },
+      "size": {
+        "w": 202,
+        "h": 100
+      },
+      "color": "#8f4242",
+      "shape": "rectangle",
+      "id": "node-1786432353651494",
+      "parentId": "node-1786432299374721",
+      "snapToGrid": true
+    },
+    "node-1786432367907419": {
+      "name": "А2",
+      "position": {
+        "x": 0,
+        "y": 180
+      },
+      "size": {
+        "w": 201,
+        "h": 100
+      },
+      "color": "#8f4242",
+      "shape": "rectangle",
+      "id": "node-1786432367907419",
+      "parentId": "node-1786432332244662",
+      "snapToGrid": true
+    },
+    "node-1786432385989217": {
+      "name": "А3",
+      "position": {
+        "x": 0,
+        "y": 150
+      },
+      "size": {
+        "w": 201,
+        "h": 100
+      },
+      "color": "#8f4242",
+      "shape": "rectangle",
+      "id": "node-1786432385989217",
+      "parentId": "node-1786432367907419",
+      "snapToGrid": true
+    },
+    "node-1786432391246689": {
+      "name": "А3_2",
+      "position": {
+        "x": 360,
+        "y": 150
+      },
+      "size": {
+        "w": 202,
+        "h": 100
+      },
+      "color": "#8f4242",
+      "shape": "rectangle",
+      "id": "node-1786432391246689",
+      "parentId": "node-1786432367907419",
+      "snapToGrid": true
+    },
+    "node-1786432463216909": {
+      "name": "Б1",
+      "position": {
+        "x": 30,
+        "y": 210
+      },
+      "size": {
+        "w": 201,
+        "h": 100
+      },
+      "color": "#461eb3",
+      "shape": "rectangle",
+      "id": "node-1786432463216909",
+      "parentId": "node-1786432310240234",
+      "snapToGrid": true
     }
   },
   "ports": {
-    "port-a-out": {
-      "id": "port-a-out",
-      "nodeId": "node-a",
+    "port-1786432401071358": {
+      "id": "port-1786432401071358",
+      "nodeId": "node-1786432385989217",
       "type": "output",
+      "position": 0.4384615384615381,
       "edge": "right",
-      "position": 0.5,
-      "name": "Порт Выход А",
-      "color": "#38bdf8"
+      "color": "#9e2424"
     },
-    "port-b-in": {
-      "id": "port-b-in",
-      "nodeId": "node-b",
-      "type": "input",
+    "port-1786432402849746": {
+      "id": "port-1786432402849746",
+      "nodeId": "node-1786432391246689",
+      "type": "output",
+      "position": 0.47692307692307623,
       "edge": "left",
-      "position": 0.5,
-      "name": "Порт Вход Б",
-      "color": "#38bdf8"
+      "color": "#9e2424"
     },
-    "port-b-out": {
-      "id": "port-b-out",
-      "nodeId": "node-b",
+    "port-1786432475073347": {
+      "id": "port-1786432475073347",
+      "nodeId": "node-1786432463216909",
       "type": "output",
-      "edge": "right",
-      "position": 0.5,
-      "name": "Порт Выход Б",
-      "color": "#0d9488"
+      "position": 0.4121145837066284,
+      "edge": "top",
+      "color": "#bd0aae"
     },
-    "port-a1-out": {
-      "id": "port-a1-out",
-      "nodeId": "node-a1",
+    "port-1786432476049378": {
+      "id": "port-1786432476049378",
+      "nodeId": "node-1786432310240234",
       "type": "output",
-      "edge": "right",
-      "position": 0.5,
-      "name": "Порт А1-Выход",
-      "color": "#38bdf8"
-    },
-    "port-a2-in": {
-      "id": "port-a2-in",
-      "nodeId": "node-a2",
-      "type": "input",
-      "edge": "left",
-      "position": 0.5,
-      "name": "Порт А2-Вход",
-      "color": "#38bdf8"
-    },
-    "port-a2-out": {
-      "id": "port-a2-out",
-      "nodeId": "node-a2",
-      "type": "output",
+      "position": 0.46337889966869833,
       "edge": "bottom",
-      "position": 0.5,
-      "name": "Порт А2-Межуровневый",
-      "color": "#e11d48"
+      "color": "#bd0aae"
     },
-    "port-a3-in": {
-      "id": "port-a3-in",
-      "nodeId": "node-a3",
-      "type": "input",
-      "edge": "right",
-      "position": 0.5,
-      "name": "Порт А3-Приемник",
-      "color": "#a855f7"
-    },
-    "port-b1-in": {
-      "id": "port-b1-in",
-      "nodeId": "node-b1",
-      "type": "input",
-      "edge": "left",
-      "position": 0.5,
-      "name": "Порт Б1-Вход",
-      "color": "#38bdf8"
-    },
-    "port-b1-out": {
-      "id": "port-b1-out",
-      "nodeId": "node-b1",
+    "port-1786432487905515": {
+      "id": "port-1786432487905515",
+      "nodeId": "node-1786432310240234",
       "type": "output",
+      "position": 0.47822974920649824,
       "edge": "right",
-      "position": 0.5,
-      "name": "Порт Б1-Выход",
-      "color": "#0d9488"
+      "color": "#22509b"
     },
-    "port-b2-in": {
-      "id": "port-b2-in",
-      "nodeId": "node-b2",
+    "port-1786432489308967": {
+      "id": "port-1786432489308967",
+      "nodeId": "node-1786432321429601",
       "type": "input",
       "edge": "left",
-      "position": 0.5,
-      "name": "Порт Б2-Приемник",
-      "color": "#0d9488"
-    },
-    "port-b1-1-out": {
-      "id": "port-b1-1-out",
-      "nodeId": "node-b1-1",
-      "type": "output",
-      "edge": "left",
-      "position": 0.5,
-      "name": "Порт Б1.1-Выход",
-      "color": "#a855f7"
-    },
-    "port-b1-2-in": {
-      "id": "port-b1-2-in",
-      "nodeId": "node-b1-2",
-      "type": "input",
-      "edge": "left",
-      "position": 0.5,
-      "name": "Порт Б1.2-Вход",
-      "color": "#115e59"
-    },
-    "port-v-in": {
-      "id": "port-v-in",
-      "nodeId": "node-v",
-      "type": "input",
-      "edge": "left",
-      "position": 0.5,
-      "name": "Порт В-Вход",
-      "color": "#e11d48"
-    },
-    "port-d-in": {
-      "id": "port-d-in",
-      "nodeId": "node-d",
-      "type": "input",
-      "edge": "left",
-      "position": 0.5,
-      "name": "Порт Д-Вход",
-      "color": "#0d9488"
+      "position": 0.4,
+      "name": "Новый порт",
+      "color": "#3160aa"
     }
   },
   "links": {
-    "link-a-to-b": {
-      "id": "link-a-to-b",
-      "sourcePortId": "port-a-out",
-      "targetPortId": "port-b-in",
-      "name": "Связь Узел А -> Узел Б",
-      "color": "#38bdf8",
-      "linkStyle": "bezier",
-      "context": "layer-1-containers"
-    },
-    "link-a1-to-a2": {
-      "id": "link-a1-to-a2",
-      "sourcePortId": "port-a1-out",
-      "targetPortId": "port-a2-in",
-      "name": "Внутриуровневая связь А1 -> А2",
-      "color": "#38bdf8",
-      "linkStyle": "bezier",
-      "context": "node-a"
-    },
-    "link-a1-to-b1": {
-      "id": "link-a1-to-b1",
-      "sourcePortId": "port-a1-out",
-      "targetPortId": "port-b1-in",
-      "name": "Межуровневая связь Узел А1 -> Узел Б1",
-      "color": "#f59e0b",
+    "link-1786432407244422": {
+      "id": "link-1786432407244422",
+      "name": "Связь 1786432407244422",
+      "context": "node-1786432367907419",
+      "sourcePortId": "port-1786432401071358",
+      "targetPortId": "port-1786432402849746",
       "linkStyle": "orthogonal",
-      "context": "layer-1-containers"
+      "color": "#ce1c1c"
     },
-    "link-b1-to-b2": {
-      "id": "link-b1-to-b2",
-      "sourcePortId": "port-b1-out",
-      "targetPortId": "port-b2-in",
-      "name": "Внутриуровневая связь Б1 -> Б2",
-      "color": "#0d9488",
+    "link-1786432477529870": {
+      "id": "link-1786432477529870",
+      "name": "Связь 1786432477529870",
+      "context": "node-1786432310240234",
+      "sourcePortId": "port-1786432476049378",
+      "targetPortId": "port-1786432475073347",
       "linkStyle": "orthogonal",
-      "context": "node-b"
+      "color": "#7f37d7"
     },
-    "link-b1-1-to-b1-2": {
-      "id": "link-b1-1-to-b1-2",
-      "sourcePortId": "port-b1-1-out",
-      "targetPortId": "port-b1-2-in",
-      "name": "Связь 3-го уровня Б1.1 -> Б1.2",
-      "color": "#115e59",
-      "linkStyle": "bezier",
-      "context": "node-b1"
-    },
-    "link-b1-1-to-a3": {
-      "id": "link-b1-1-to-a3",
-      "sourcePortId": "port-b1-1-out",
-      "targetPortId": "port-a3-in",
-      "name": "Межуровневая связь Б1.1 (Ур 3) -> А3 (Ур 2)",
-      "color": "#a855f7",
+    "link-1786432489315606": {
+      "id": "link-1786432489315606",
+      "name": "Связь 1786432489315606",
+      "context": "root",
+      "sourcePortId": "port-1786432487905515",
+      "targetPortId": "port-1786432489308967",
       "linkStyle": "orthogonal",
-      "context": "layer-1-containers"
-    },
-    "link-a2-to-v": {
-      "id": "link-a2-to-v",
-      "sourcePortId": "port-a2-out",
-      "targetPortId": "port-v-in",
-      "name": "Межуровневая связь Узел А2 -> Узел В",
-      "color": "#e11d48",
-      "linkStyle": "orthogonal",
-      "context": "root"
-    },
-    "link-b-to-d": {
-      "id": "link-b-to-d",
-      "sourcePortId": "port-b-out",
-      "targetPortId": "port-d-in",
-      "name": "Связь Узел Б -> Узел Д",
-      "color": "#0d9488",
-      "linkStyle": "bezier",
-      "context": "root"
+      "color": "#cda8a8"
     }
   },
   "canvas": {
-    "offset": { "x": 450, "y": 250 },
-    "zoom": 0.75
+    "offset": {
+      "x": 32.03246577983407,
+      "y": -310.00971659919014
+    },
+    "zoom": 0.8500000000000001
   },
   "currentContext": "root",
   "breadcrumbs": [
-    { "id": "root", "name": "Главный холст" }
+    {
+      "id": "root",
+      "name": "Главный холст"
+    }
   ],
-  "cameraByContext": {}
+  "cameraByContext": {
+    "root": {
+      "offset": {
+        "x": -30,
+        "y": -50
+      },
+      "zoom": 0.65
+    },
+    "node-1786432299374721": {
+      "offset": {
+        "x": -30,
+        "y": -50
+      },
+      "zoom": 0.65
+    },
+    "node-1786432332244662": {
+      "offset": {
+        "x": -30,
+        "y": -50
+      },
+      "zoom": 0.65
+    },
+    "node-1786432367907419": {
+      "offset": {
+        "x": -30,
+        "y": -50
+      },
+      "zoom": 0.65
+    },
+    "node-1786432310240234": {
+      "offset": {
+        "x": -30,
+        "y": -50
+      },
+      "zoom": 0.65
+    }
+  }
 }

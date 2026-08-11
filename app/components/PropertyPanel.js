@@ -409,6 +409,39 @@ function PropertyPanel() {
                     <input type="text" className="input-field" value={selectedNode.name || ''} onChange={(e) => handleChange('name', e.target.value)} />
                 </div>
                 <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Значок узла</label>
+                    <div className="flex gap-2 items-center">
+                        <select 
+                            className="input-field cursor-pointer bg-black/50 flex-1"
+                            value={selectedNode.icon || ''}
+                            onChange={(e) => handleChange('icon', e.target.value)}
+                        >
+                            <option value="">Без значка</option>
+                            <option value="icon-box">📦 Куб / Объект</option>
+                            <option value="icon-folder">📁 Папка</option>
+                            <option value="icon-database">🗄️ База данных</option>
+                            <option value="icon-server">🖥️ Сервер</option>
+                            <option value="icon-cpu">⚡ Процессор</option>
+                            <option value="icon-globe">🌐 Сеть / Интернет</option>
+                            <option value="icon-layers">📚 Слой / Модуль</option>
+                            <option value="icon-file">📄 Документ / Файл</option>
+                            <option value="icon-code">💻 Код / Скрипт</option>
+                            <option value="icon-bot">🤖 ИИ / Бот</option>
+                            <option value="icon-shield">🛡️ Безопасность</option>
+                            <option value="icon-zap">⚡ Событие</option>
+                        </select>
+                        {selectedNode.icon && (
+                            <div className="w-8 h-8 rounded border border-[#444] bg-black/40 flex items-center justify-center text-amber-400 shrink-0">
+                                {selectedNode.icon.startsWith('icon-') ? (
+                                    <div className={`${selectedNode.icon} text-base`}></div>
+                                ) : (
+                                    <span className="text-sm">{selectedNode.icon}</span>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+                <div className="flex flex-col gap-1.5">
                     <label className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Группа</label>
                     <input type="text" list="existing-groups" className="input-field" placeholder="Название группы..." value={selectedNode.group || ''} onChange={(e) => handleChange('group', e.target.value)} />
                     <datalist id="existing-groups">

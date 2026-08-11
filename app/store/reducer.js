@@ -163,6 +163,7 @@ const defaultState = {
             aiAgentOpen: false,
             xRayDown: 0,
             xRayUp: 0,
+            xRayNodes: {},
             peekNodeId: null,
             transitionFromContext: null,
         aiAgentSettings: {
@@ -249,6 +250,7 @@ const getInitialState = () => {
                     ...(parsed.ui || {}),
                     xRayDown: (parsed.ui && typeof parsed.ui.xRayDown === 'number') ? Math.max(0, parsed.ui.xRayDown) : 0,
                     xRayUp: (parsed.ui && typeof parsed.ui.xRayUp === 'number') ? Math.max(0, parsed.ui.xRayUp) : 0,
+                    xRayNodes: (parsed.ui && typeof parsed.ui.xRayNodes === 'object' && parsed.ui.xRayNodes !== null) ? parsed.ui.xRayNodes : {},
                     aiAgentSettings: (() => {
                         const base = { ...defaultState.ui.aiAgentSettings, ...((parsed.ui && parsed.ui.aiAgentSettings) || {}) };
                         // Миграция: если ключ ещё в основном стейте — переносим в изолированное хранилище
@@ -943,6 +945,64 @@ const reducer = (state, action) => {
         case 'SET_XRAY_UP': {
             const val = Math.max(0, typeof action.payload === 'number' ? action.payload : 0);
             return { ...state, ui: { ...state.ui, xRayUp: val } };
+        }
+        case 'SET_NODE_XRAY_DOWN': {
+            const { nodeId, down } = action.payload || {};
+            if (!nodeId) return state;
+            const val = Math.max(0, typeof down === 'number' ? down : 0);
+            const currentObj = state.ui.xRayNodes?.[nodeId] || { down: 0, up: 0 };
+            const nextSeq = (state.ui?.xRaySeq || 0) + 1;
+
+            let newXRayNodes = {
+                ...state.ui.xRayNodes
+            };
+
+            const updatedObj = { ...currentObj, down: val, updatedAt: Date.now(), seq: nextSeq };
+            newXRayNodes[nodeId] = updatedObj;
+
+            return {
+                ...state,
+                ui: {
+                    ...state.ui,
+                    xRaySeq: nextSeq,
+                    xRayNodes: newXRayNodes
+                }
+            };
+        }
+        case 'SET_NODE_XRAY_UP': {
+            const { nodeId, up } = action.payload || {};
+            if (!nodeId) return state;
+            const val = Math.max(0, typeof up === 'number' ? up : 0);
+            const currentObj = state.ui.xRayNodes?.[nodeId] || { down: 0, up: 0 };
+            const nextSeq = (state.ui?.xRaySeq || 0) + 1;
+
+            let newXRayNodes = {
+                ...state.ui.xRayNodes
+            };
+
+            const updatedObj = { ...currentObj, up: val, updatedAt: Date.now(), seq: nextSeq };
+            newXRayNodes[nodeId] = updatedObj;
+
+            return {
+                ...state,
+                ui: {
+                    ...state.ui,
+                    xRaySeq: nextSeq,
+                    xRayNodes: newXRayNodes
+                }
+            };
+        }
+        case 'SET_XRAY_LEVEL': {
+            const val = Math.max(0, typeof action.payload === 'number' ? action.payload : 0);
+            return {
+                ...state,
+                ui: {
+                    ...state.ui,
+                    xRayDown: val,
+                    xRayUp: val,
+                    xRayNodes: val === 0 ? {} : state.ui.xRayNodes
+                }
+            };
         }
         case 'TOGGLE_UI': {
             return {

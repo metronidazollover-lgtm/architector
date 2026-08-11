@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Тотальный аудит механик навигации - Architector</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-color: #e2e8f0;
+            --text-muted: #94a3b8;
+            --accent-blue: #38bdf8;
+            --accent-amber: #fbbf24;
+            --accent-red: #f87171;
+            --accent-green: #4ade80;
+            --border-color: #334155;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            margin: 0;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 15px;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        h2 {
+            font-size: 1.5rem;
+            margin-top: 40px;
+            color: var(--accent-blue);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+
+        h3 {
+            font-size: 1.2rem;
+            margin-top: 25px;
+            color: #f1f5f9;
+        }
+
+        p {
+            color: var(--text-muted);
+            font-size: 1.05rem;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+            margin: 20px 0;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background-color: var(--card-bg);
+            text-align: left;
+            font-size: 0.95rem;
+        }
+
+        th {
+            background-color: #0f172a;
+            color: #38bdf8;
+            padding: 14px 16px;
+            font-weight: 600;
+            border-bottom: 2px solid var(--border-color);
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-color);
+            color: #cbd5e1;
+        }
+
+        tr:hover {
+            background-color: rgba(255, 255, 255, 0.03);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .badge-blue { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+        .badge-amber { background: rgba(251, 191, 36, 0.15); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.3); }
+        .badge-red { background: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3); }
+
+        .conflict-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-left: 4px solid var(--accent-red);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .conflict-card.warning {
+            border-left-color: var(--accent-amber);
+        }
+
+        .conflict-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .conflict-location {
+            font-size: 0.9rem;
+            color: var(--accent-blue);
+            margin-bottom: 8px;
+        }
+
+        ul {
+            padding-left: 20px;
+        }
+
+        li {
+            margin-bottom: 8px;
+            color: #cbd5e1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📋 Тотальный аудит механик навигации, погружения и X-Ray</h1>
+        <p>Проведен тотальный аудит механик <strong>навигации, погружения (Dive-In), выделения (Selection) и X-Ray просвечивания</strong> в приложении <strong>Architector</strong>.</p>
+
+        <h2>1. 🔍 Покликный аудит элементов управления (Инвентаризация событий)</h2>
+
+        <h3>📁 A. Узлы (Node.js)</h3>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Элемент / Жест</th>
+                        <th>Событие</th>
+                        <th>Вызываемый Action / Функция</th>
+                        <th>Изменение состояния</th>
+                        <th>Визуальный результат</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Заголовок / Тело узла</strong></td>
+                        <td>MouseDown (ЛКМ)</td>
+                        <td>SET_SELECTED</td>
+                        <td>selectedIds = [node.id]</td>
+                        <td>Появляется светящаяся рамка вокруг узла (цвет data.color), панель свойств открывается справа.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Заголовок / Тело узла</strong></td>
+                        <td>Shift + MouseDown (ЛКМ)</td>
+                        <td>TOGGLE_SELECTED</td>
+                        <td>Добавление/удаление node.id из selectedIds</td>
+                        <td>Массовое выделение узлов.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Тело узла</strong></td>
+                        <td>DoubleClick (ЛКМ)</td>
+                        <td>DIVE_INTO</td>
+                        <td>currentContext = node.id, сброс selectedIds</td>
+                        <td>Камера плавно фокусируется на содержимом узла, внешние объекты скрываются.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Кнопка «Папка» (📁 N)</strong></td>
+                        <td>Click (ЛКМ)</td>
+                        <td>DIVE_INTO</td>
+                        <td>currentContext = node.id</td>
+                        <td>Вход внутрь узла-контейнера.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Стрелочка ↑ (X-Ray Up)</strong></td>
+                        <td>Click (ЛКМ)</td>
+                        <td>SET_NODE_XRAY_UP</td>
+                        <td>увеличение xRayNodes.up</td>
+                        <td>Просвечиваются предки узла вверх по иерархии (появляются полупрозрачные карточки).</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Стрелочка ↓ (X-Ray Down)</strong></td>
+                        <td>Click (ЛКМ)</td>
+                        <td>SET_NODE_XRAY_DOWN</td>
+                        <td>увеличение xRayNodes.down</td>
+                        <td>Просвечиваются вложенные потомки узла без смены текущего контекста.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Alt + Наведение</strong></td>
+                        <td>MouseMove</td>
+                        <td>SET_UI ({ peekNodeId })</td>
+                        <td>peekNodeId = data.id</td>
+                        <td><strong>Peek-режим:</strong> Начинка узла просвечивается поверх холста в full-size, остальные затухают.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Отпускание Alt / Увод мыши</strong></td>
+                        <td>KeyUp / MouseLeave</td>
+                        <td>SET_UI ({ peekNodeId: null })</td>
+                        <td>peekNodeId = null</td>
+                        <td>Возврат к обычному виду.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Уголок изменения размера</strong></td>
+                        <td>MouseDown (ЛКМ)</td>
+                        <td>UPDATE_NODE -> COMMIT_HISTORY</td>
+                        <td>node.size = {w, h}</td>
+                        <td>Узел меняет габариты, отключение авто-размера для ширины.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>🎨 B. Слои (Layer.js)</h3>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Элемент / Жест</th>
+                        <th>Событие</th>
+                        <th>Вызываемый Action / Функция</th>
+                        <th>Изменение состояния</th>
+                        <th>Визуальный результат</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Шапка слоя</strong></td>
+                        <td>MouseDown (ЛКМ)</td>
+                        <td>SET_SELECTED + MOVE_SELECTED</td>
+                        <td>selectedIds = [layer.id], layers.position</td>
+                        <td>Слой выделяется и перетаскивается. Если слой заблокирован, его ноды едут вместе с ним.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Тело слоя</strong></td>
+                        <td>Click (ЛКМ)</td>
+                        <td>SET_SELECTED</td>
+                        <td>selectedIds = [layer.id]</td>
+                        <td>Слой выделяется на холсте.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Кнопка Сетки в шапке</strong></td>
+                        <td>Click (ЛКМ)</td>
+                        <td>UPDATE_LAYER + MASS_UPDATE</td>
+                        <td>GeometryUtils.getSmartPlacement</td>
+                        <td>Ноды внутри слоя автоматически расставляются без перекрытий.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Кнопка Замка в шапке</strong></td>
+                        <td>Click (ЛКМ)</td>
+                        <td>UPDATE_LAYER</td>
+                        <td>layers.locked = !locked</td>
+                        <td>Фиксация географических узлов при перемещении слоя.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>🧭 C. Адресная строка навигации (Scope Banner в Canvas.js)</h3>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Элемент</th>
+                        <th>Событие</th>
+                        <th>Вызываемый Action</th>
+                        <th>Изменение состояния</th>
+                        <th>Визуальный результат</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Кнопка «Назад по истории» (←)</strong></td>
+                        <td>Click (или Ctrl+[)</td>
+                        <td>NAV_BACK</td>
+                        <td>currentContext = pastEntry.id</td>
+                        <td>Камера возвращается к предыдущему посещенному контексту.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Кнопка «Вперед по истории» (→)</strong></td>
+                        <td>Click (или Ctrl+])</td>
+                        <td>NAV_FORWARD</td>
+                        <td>currentContext = futureEntry.id</td>
+                        <td>Переход вперед по истории посещенных экранов.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Крошка пути (Breadcrumb)</strong></td>
+                        <td>Click</td>
+                        <td>NAVIGATE_TO(index)</td>
+                        <td>currentContext = breadcrumbs[index].id</td>
+                        <td>Переход на выбранный уровень иерархии (восстановление камеры).</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Кнопка «Наверх (Esc)»</strong></td>
+                        <td>Click</td>
+                        <td>NAVIGATE_TO(length - 2)</td>
+                        <td>currentContext = parentId</td>
+                        <td>Подъем на 1 уровень вверх к родителю.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>🛠️ D. Левая панель инструментов (Toolbar.js)</h3>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Кнопка</th>
+                        <th>Событие</th>
+                        <th>Вызываемый Action</th>
+                        <th>Изменение состояния</th>
+                        <th>Визуальный результат</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Обозреватель проекта (☰)</strong></td>
+                        <td>Click</td>
+                        <td>TOGGLE_UI('libraryOpen')</td>
+                        <td>ui.libraryOpen = !libraryOpen</td>
+                        <td>Открывается/закрывается левая боковая панель.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Добавить узел (➕)</strong></td>
+                        <td>Click</td>
+                        <td>ADD_NODE</td>
+                        <td>nodes[newId], selectedIds = [newId]</td>
+                        <td>Создается узел в центре текущего экрана.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Добавить слой (🥞)</strong></td>
+                        <td>Click</td>
+                        <td>ADD_LAYER</td>
+                        <td>layers[newId]</td>
+                        <td>Создается новый фрейм-слой.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Выровнять слои</strong></td>
+                        <td>Click</td>
+                        <td>ALIGN_LAYERS</td>
+                        <td>GeometryUtils.alignLayers</td>
+                        <td>Слои выстраиваются по вертикали с шагом 90px.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Добавить порт (⭕)</strong></td>
+                        <td>Click</td>
+                        <td>SET_MODE('add-port')</td>
+                        <td>interactionMode = 'add-port'</td>
+                        <td>На узлах появляется зеленый пунктирный оверлей привязки портов.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Изоляция (🔍)</strong></td>
+                        <td>Click</td>
+                        <td>SET_ISOLATED</td>
+                        <td>isolatedIds = selectedIds</td>
+                        <td>Все невыделенные объекты скрываются с холста.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Глобальный X-Ray (👁️)</strong></td>
+                        <td>Click</td>
+                        <td>SET_XRAY_LEVEL(0 / 1)</td>
+                        <td>ui.xRayDown, ui.xRayUp</td>
+                        <td>Включает/отключает просвечивание на 1 уровень для всего проекта.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>📚 E. Боковая панель Библиотеки (Library.js / OutlinerTree.js)</h3>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Вкладка / Элемент</th>
+                        <th>Событие</th>
+                        <th>Вызываемый Action</th>
+                        <th>Изменение состояния</th>
+                        <th>Визуальный результат</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Дерево (Outliner): Строка</strong></td>
+                        <td>Click (ЛКМ)</td>
+                        <td>handleSelect -> GO_TO_CONTEXT + CENTER_ON_ENTITY</td>
+                        <td>currentContext = parentId, selectedIds = [id]</td>
+                        <td>Камера летит к объекту, контекст переключается на его родителя.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Дерево (Outliner): Строка</strong></td>
+                        <td>DoubleClick</td>
+                        <td>DIVE_INTO</td>
+                        <td>currentContext = entity.id</td>
+                        <td>Погружение внутрь узла/слоя.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Дерево (Outliner): Drag & Drop</strong></td>
+                        <td>DragStart / Drop</td>
+                        <td>REPARENT_ENTITY</td>
+                        <td>entity.parentId = targetId</td>
+                        <td>Перевложение объекта без сдвига в мировых координатах.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Уровни: Секция X-Ray</strong></td>
+                        <td>Click ↑ / ↓</td>
+                        <td>SET_XRAY_UP / SET_XRAY_DOWN</td>
+                        <td>ui.xRayUp++, ui.xRayDown++</td>
+                        <td>Шаговое увеличение глубины просвечивания.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>⌨️ F. Клавиатурные хоткеи и жесты (Canvas.js)</h3>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Клавиша / Жест</th>
+                        <th>Вызываемый Action / Функция</th>
+                        <th>Поведение и приоритет</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Delete / Backspace</strong></td>
+                        <td>DELETE_SELECTED</td>
+                        <td>Удаление всех выделенных узлов, слоев, портов и связей.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Escape</strong></td>
+                        <td>SET_MODE -> SET_SELECTED -> NAVIGATE_TO</td>
+                        <td><strong>Трехуровневый сброс:</strong> 1) Сброс режима порта -> 2) Сброс выделения -> 3) Выход на уровень вверх.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Ctrl + [ / Ctrl + ]</strong></td>
+                        <td>NAV_BACK / NAV_FORWARD</td>
+                        <td>Навигация по истории прошлых экранов.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Ctrl + C / Ctrl + V</strong></td>
+                        <td>SET_CLIPBOARD / ADD_NODE</td>
+                        <td>Копирование и вставка узла со сдвигом (+30px, +30px).</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Ctrl + Z / Ctrl + Y</strong></td>
+                        <td>UNDO / REDO</td>
+                        <td>Откат/повтор изменений с авто-прыжком камеры в контекст правки.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Wheel (Колесико мыши)</strong></td>
+                        <td>SET_CANVAS</td>
+                        <td>Зумирование относительно курсора мыши (от 0.1x до 5.0x).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h2>2. 🚨 ВЫЯВЛЕННЫЕ КОНФЛИКТЫ И СТРАННОСТИ В ЛОГИКЕ</h2>
+
+        <div class="conflict-card">
+            <div class="conflict-title">🔴 Конфликт №1: Глобальный X-Ray перекрывает и блокирует поузельный сброс X-Ray</div>
+            <div class="conflict-location">Локация: app/utils/hierarchy.js (getVisibilityState, строки 561-601)</div>
+            <p><strong>Суть проблемы:</strong> В алгоритме видимости проверка Глобального X-Ray (блок 7a) исполняется РАНО, чем поузельный X-Ray (блок 7b). Если включить глобальный X-Ray (L1), а затем нажать стрелочку ↓ на конкретном узле для его скрытия, узел не скроется, так как глобальное правило перехватывает видимость первее.</p>
+        </div>
+
+        <div class="conflict-card">
+            <div class="conflict-title">🔴 Конфликт №2: Сброс X-Ray на Toolbar принудительно выбивает пользователя на Главный холст</div>
+            <div class="conflict-location">Локация: app/store/reducer.js (SET_XRAY_LEVEL, строки 995-1018)</div>
+            <p><strong>Суть проблемы:</strong> В редюсере зашит жесткий сброс контекста при val === 0. Если нажать кнопку L1 на Toolbar во вложенной папке для выключения просвечивания, вас мгновенно выбьет из папки назад на Главный холст (root).</p>
+        </div>
+
+        <div class="conflict-card">
+            <div class="conflict-title">🔴 Конфликт №3: Пропадание рамки Слоя при погружении в него через Хлебные крошки или Outliner</div>
+            <div class="conflict-location">Локация: app/components/Canvas.js (строка 444) и app/utils/hierarchy.js</div>
+            <p><strong>Суть проблемы:</strong> При currentContext === layerId проверка в Canvas layerParentContext !== state.currentContext возвращает true. Когда вы погружаетесь в Слой, сам фрейм слоя перестает рендериться, а его ноды остаются висеть в пустом пространстве без заглавной рамки.</p>
+        </div>
+
+        <div class="conflict-card warning">
+            <div class="conflict-title">🟡 Конфликт №4: Рассинхрон одинарного и двойного клика в OutlinerTree</div>
+            <div class="conflict-location">Локация: app/components/OutlinerTree.js (строки 28-36) и app/components/Library.js</div>
+            <p><strong>Суть проблемы:</strong> Одинарный клик вызывает handleSelect, который переключает контекст на родителя объекта, а двойной клик вызывает DIVE_INTO внутрь объекта. Попытка просто выделить объект в дереве одинарным кликом сопряжена с неожиданным переключением текущей папки.</p>
+        </div>
+
+        <div class="conflict-card warning">
+            <div class="conflict-title">🟡 Конфликт №5: Блокировка зума холста при скролле внутри AI-чата и текстовых полей</div>
+            <div class="conflict-location">Локация: app/components/Canvas.js (обработчик wheel, строки 149-156)</div>
+            <p><strong>Суть проблемы:</strong> Проверка scrollable.scrollHeight > scrollable.clientHeight блокирует событие зума холста, даже когда внутренний скролл докручен до самого конца.</p>
+        </div>
+
+        <h2>3. 🎯 РЕКОМЕНДАЦИИ ПО ИСПРАВЛЕНИЮ И ОПТИМИЗАЦИИ</h2>
+        <ul>
+            <li><strong>Приоритет X-Ray:</strong> В HierarchyUtils.getVisibilityState дать локальному конфигу узла xRayNodes[nodeId].down === 0 приоритет над глобальным xRayDown.</li>
+            <li><strong>Сохранение контекста при выключении X-Ray:</strong> Убрать авто-выталкивание в root из редюсера SET_XRAY_LEVEL.</li>
+            <li><strong>Видимость слоя-контейнера:</strong> Разрешить рендер рамки слоя при layer.id === state.currentContext.</li>
+            <li><strong>Оптимизация OutlinerTree:</strong> На одинарный клик в дереве навесить исключительно SET_SELECTED + CENTER_ON_ENTITY без вызова GO_TO_CONTEXT.</li>
+        </ul>
+    </div>
+</body>
+</html>

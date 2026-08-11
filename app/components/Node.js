@@ -1,5 +1,6 @@
 function Node({ data, isContextNode, isParentOfSelected }) {
     const { state, dispatch } = useStore();
+    const [isXRayHovered, setIsXRayHovered] = React.useState(false);
 
     const isConnectedToSelectedLink = React.useMemo(() => {
         return Object.values(state.links || {}).some(l => {
@@ -236,24 +237,110 @@ function Node({ data, isContextNode, isParentOfSelected }) {
         >
             <div className="px-3 py-2 border-b border-[#333] bg-black/20 rounded-t-lg flex items-center justify-between text-sm font-medium z-10 shrink-0">
                 <div className="flex items-center gap-2 text-[#eee] overflow-hidden">
-                    <div className={childrenStats.total > 0 ? "icon-folder w-4 h-4 text-amber-400" : "icon-box w-4 h-4 text-gray-400"}></div>
+                    {data.icon && (
+                        data.icon.startsWith('icon-') ? (
+                            <div className={`${data.icon} w-4 h-4 text-amber-400 shrink-0`}></div>
+                        ) : (
+                            <span className="text-xs shrink-0">{data.icon}</span>
+                        )
+                    )}
                     <span className="truncate">{data.name}</span>
                 </div>
-                {childrenStats.total > 0 && (
-                    <button
-                        className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-semibold hover:bg-amber-500 hover:text-white transition-colors shrink-0 cursor-pointer"
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onDoubleClick={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            dispatch({ type: 'DIVE_INTO', payload: { id: data.id, name: data.name } });
-                        }}
-                        title={`Папка с объектами (${childrenStats.nodeCount} узл, ${childrenStats.layerCount} сл). Клик — открыть папку`}
-                    >
-                        <div className="icon-folder text-xs"></div>
-                        <span>📁 {childrenStats.total}</span>
-                    </button>
-                )}
+                 {childrenStats.total > 0 && (() => {
+                    const H = window.HierarchyUtils;
+                    const maxDepths = H ? H.getMaxRelativeDepths(data.id, state.nodes, state.layers, state.ports, state.links) : { maxDown: 10, maxUp: 10 };
+                    const nodeXRay = state.ui?.xRayNodes?.[data.id];
+                    const effective = H && H.getEffectiveNodeXRay 
+                        ? H.getEffectiveNodeXRay(data.id, state.currentContext, state.ui?.xRayDown || 0, state.ui?.xRayUp || 0, state.nodes, state.layers, state.ports, state.links, state.ui?.xRayNodes)
+                        : { down: (typeof nodeXRay?.down === 'number' ? nodeXRay.down : (state.ui?.xRayDown || 0)), up: (typeof nodeXRay?.up === 'number' ? nodeXRay.up : (state.ui?.xRayUp || 0)), isOwn: typeof nodeXRay?.down === 'number' };
+                    
+                    const currentDown = effective.down;
+                    const currentUp = effective.up;
+                    const maxUp = maxDepths.maxUp;
+                    const maxDown = maxDepths.maxDown;
+                    const isXRayActive = currentDown > 0 || currentUp > 0;
+
+                    return (
+                        <div 
+                            className="relative flex items-center shrink-0 z-20 transition-all duration-200"
+                            onMouseEnter={() => setIsXRayHovered(true)}
+                            onMouseLeave={() => setIsXRayHovered(false)}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                        >
+                            {/* Стрелочка ВВЕРХ (X-Ray Up / предки) слева */}
+                            <button
+                                className={`flex items-center justify-center rounded text-[10px] font-bold transition-all duration-200 cursor-pointer overflow-hidden ${
+                                    isXRayHovered 
+                                        ? 'w-5 h-5 opacity-100 scale-100 mr-1 border' 
+                                        : 'w-0 h-5 opacity-0 scale-75 mr-0 border-0 pointer-events-none'
+                                } ${
+                                    currentUp > 0 
+                                        ? 'bg-amber-500/30 text-amber-300 border-amber-500/60 shadow-[0_0_8px_rgba(245,158,11,0.4)]' 
+                                        : 'bg-black/50 text-gray-300 border-white/10 hover:bg-amber-500/30 hover:text-amber-300'
+                                } ${maxUp === 0 ? 'pointer-events-none opacity-30' : ''}`}
+                                disabled={maxUp === 0}
+                                title={maxUp === 0 ? 'Нет внешних уровней предков' : `X-Ray Наверх (предки): ${currentUp}/${maxUp}. Клик — просветить предков`}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    const nextUp = (currentUp + 1) > maxUp ? 0 : currentUp + 1;
+                                    dispatch({ type: 'SET_NODE_XRAY_UP', payload: { nodeId: data.id, up: nextUp } });
+                                }}
+                            >
+                                ↑
+                            </button>
+
+                            {/* Главная кнопка папки (DIVE INTO) по центру */}
+                            <button
+                                className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-semibold transition-all duration-150 shrink-0 cursor-pointer ${
+                                    isXRayActive
+                                        ? 'bg-amber-500/30 text-amber-200 border-amber-500/60 shadow-[0_0_10px_rgba(245,158,11,0.4)]'
+                                        : 'bg-amber-500/20 text-amber-300 border-amber-500/30 hover:bg-amber-500 hover:text-white'
+                                }`}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    dispatch({ type: 'DIVE_INTO', payload: { id: data.id, name: data.name } });
+                                }}
+                                title={`Папка с объектами (${childrenStats.nodeCount} узл, ${childrenStats.layerCount} сл). Клик — открыть папку`}
+                            >
+                                <div className="icon-folder text-xs"></div>
+                                <span>{childrenStats.total}</span>
+                            </button>
+
+                            {/* Стрелочка ВНИЗ (X-Ray Down / потомки) справа */}
+                            <button
+                                className={`flex items-center justify-center rounded text-[10px] font-bold transition-all duration-200 cursor-pointer overflow-hidden ${
+                                    isXRayHovered 
+                                        ? 'w-5 h-5 opacity-100 scale-100 ml-1 border' 
+                                        : 'w-0 h-5 opacity-0 scale-75 ml-0 border-0 pointer-events-none'
+                                } ${
+                                    currentDown > 0 
+                                        ? 'bg-[var(--accent-blue)]/30 text-[var(--accent-blue)] border-[var(--accent-blue)]/60 shadow-[0_0_8px_rgba(56,189,248,0.4)]' 
+                                        : 'bg-black/50 text-gray-300 border-white/10 hover:bg-[var(--accent-blue)]/30 hover:text-[var(--accent-blue)]'
+                                } ${maxDown === 0 ? 'pointer-events-none opacity-30' : ''}`}
+                                disabled={maxDown === 0}
+                                title={maxDown === 0 ? 'Нет вложенных уровней потомков' : `X-Ray Вглубь (потомки): ${currentDown}/${maxDown}. Клик — просветить потомков`}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    let nextDown;
+                                    if (effective.isOwn && nodeXRay?.down === 0) {
+                                        nextDown = 1;
+                                    } else if (!effective.isOwn && currentDown > 0) {
+                                        // Если статус унаследован от предка и потомки уже видны — первый клик мгновенно сворачивает ветку!
+                                        nextDown = 0;
+                                    } else if (currentDown >= maxDown) {
+                                        nextDown = 0;
+                                    } else {
+                                        nextDown = currentDown + 1;
+                                    }
+                                    dispatch({ type: 'SET_NODE_XRAY_DOWN', payload: { nodeId: data.id, down: nextDown } });
+                                }}
+                            >
+                                ↓
+                            </button>
+                        </div>
+                    );
+                })()}
             </div>
             <div className={`flex-1 flex flex-col overflow-hidden transition-opacity duration-300 ${zoom < 0.4 ? 'opacity-0 hidden' : 'opacity-100'}`}>
                 {data.type === 'ai-agent' ? (

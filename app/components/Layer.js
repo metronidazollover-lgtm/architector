@@ -199,10 +199,12 @@ function Layer({ data }) {
         }
     };
 
+    const isCurrentContext = data.id === state.currentContext;
+
     return (
         <div
             className={`absolute flex flex-col transition-all duration-200 border-2 rounded-xl pointer-events-auto
-                ${isSelected ? 'z-0 shadow-lg' : '-z-10 shadow-sm'}
+                ${isCurrentContext ? 'z-0 shadow-[0_0_50px_rgba(251,191,36,0.25)] ring-4 ring-amber-400/40' : isSelected ? 'z-0 shadow-lg' : '-z-10 shadow-sm'}
             `}
             style={{
                 left: absPos.x,

@@ -171,4 +171,89 @@ test('getVisibilityState: корректно определяет роли и в
     assert.equal(vXRay.role, 'xray-down');
 });
 
+test('Inter-level link visibility: отрисовка связи происходит ТОЛЬКО когда видны оба узла', () => {
+    const nodes = {
+        nLevel1: { id: 'nLevel1', parentId: 'root' },
+        nLevel2: { id: 'nLevel2', parentId: 'nLevel1' },
+        nLevel3: { id: 'nLevel3', parentId: 'nLevel2' }
+    };
+    const ports = {
+        pLevel1: { id: 'pLevel1', nodeId: 'nLevel1' },
+        pLevel3: { id: 'pLevel3', nodeId: 'nLevel3' }
+    };
+    const links = {
+        crossLink: { id: 'crossLink', sourcePortId: 'pLevel1', targetPortId: 'pLevel3' }
+    };
+
+    // 1. В контексте nLevel1 без X-Ray: nLevel1 виден, nLevel3 скрыт -> обоим концам нельзя отрисовывать связь
+    const vis1_normal = HierarchyUtils.getVisibilityState('nLevel1', 'nLevel1', 0, 0, nodes, {}, ports, links);
+    const vis3_normal = HierarchyUtils.getVisibilityState('nLevel3', 'nLevel1', 0, 0, nodes, {}, ports, links);
+    assert.equal(vis1_normal.visible, true);
+    assert.equal(vis3_normal.visible, false);
+    const bothVisible_normal = vis1_normal.visible && vis3_normal.visible;
+    assert.equal(bothVisible_normal, false, 'Связь не должна отображаться, когда один из узлов скрыт');
+
+    // 2. В контексте nLevel1 с xRayDown = 1 (видимость узлов до глубины 2 от контекста): nLevel1 и nLevel3 оба видны -> связь отображается
+    const vis1_xray = HierarchyUtils.getVisibilityState('nLevel1', 'nLevel1', 1, 0, nodes, {}, ports, links);
+    const vis3_xray = HierarchyUtils.getVisibilityState('nLevel3', 'nLevel1', 1, 0, nodes, {}, ports, links);
+    assert.equal(vis1_xray.visible, true);
+    assert.equal(vis3_xray.visible, true);
+    const bothVisible_xray = vis1_xray.visible && vis3_xray.visible;
+    assert.equal(bothVisible_xray, true, 'Связь отображается, когда оба уровня (и оба узла) видны на холсте');
+
+    // 3. Контекст установлен в порт pLevel1 (клик по порту с двойным контуром): оба узла (parent и connected) видны
+    const vis1_portCtx = HierarchyUtils.getVisibilityState('nLevel1', 'pLevel1', 0, 0, nodes, {}, ports, links);
+    const vis3_portCtx = HierarchyUtils.getVisibilityState('nLevel3', 'pLevel1', 0, 0, nodes, {}, ports, links);
+    assert.equal(vis1_portCtx.visible, true);
+    assert.equal(vis1_portCtx.role, 'port-parent');
+    assert.equal(vis3_portCtx.visible, true);
+    assert.equal(vis3_portCtx.role, 'port-connected');
+    const bothVisible_portCtx = vis1_portCtx.visible && vis3_portCtx.visible;
+    assert.equal(bothVisible_portCtx, true, 'Связь отображается при клике на порт с двойным контуром');
+});
+
+test('Selective per-node X-Ray: просвечивание работает избирательно для конкретного узла', () => {
+    const selNodes = {
+        nodeA: { id: 'nodeA', parentId: 'root' },
+        nodeA_child: { id: 'nodeA_child', parentId: 'nodeA' },
+        nodeB: { id: 'nodeB', parentId: 'root' },
+        nodeB_child: { id: 'nodeB_child', parentId: 'nodeB' }
+    };
+
+    // 1. Без X-Ray: потомки обоих узлов скрыты
+    const vA_child_init = HierarchyUtils.getVisibilityState('nodeA_child', 'root', 0, 0, selNodes, {}, {}, {});
+    const vB_child_init = HierarchyUtils.getVisibilityState('nodeB_child', 'root', 0, 0, selNodes, {}, {}, {});
+    assert.equal(vA_child_init.visible, false);
+    assert.equal(vB_child_init.visible, false);
+
+    // 2. Включаем X-Ray ТОЛЬКО на nodeA
+    const extras = { xRayNodes: { nodeA: { down: 1, up: 0 } } };
+    const vA_child_sel = HierarchyUtils.getVisibilityState('nodeA_child', 'root', 0, 0, selNodes, {}, {}, {}, extras);
+    const vB_child_sel = HierarchyUtils.getVisibilityState('nodeB_child', 'root', 0, 0, selNodes, {}, {}, {}, extras);
+
+    assert.equal(vA_child_sel.visible, true, 'Потомок nodeA должен быть виден');
+    assert.equal(vA_child_sel.role, 'xray-down');
+    assert.equal(vB_child_sel.visible, false, 'Потомок nodeB должен оставаться скрытым');
+});
+
+test('Layer X-Ray visibility: вложенные слои становятся видимыми при включении X-Ray на родителе', () => {
+    const nodes = {
+        nodeParent: { id: 'nodeParent', parentId: 'root' }
+    };
+    const layers = {
+        layerInner: { id: 'layerInner', parentId: 'nodeParent' }
+    };
+
+    // 1. Без X-Ray узел-родитель не просвечивается, слой скрыт
+    const visInit = HierarchyUtils.getVisibilityState('layerInner', 'root', 0, 0, nodes, layers, {}, {});
+    assert.equal(visInit.visible, false, 'Слой вложенного уровня скрыт без X-Ray');
+
+    // 2. Включаем X-Ray на ноде (down: 1)
+    const extras = { xRayNodes: { nodeParent: { down: 1, up: 0 } } };
+    const visXRay = HierarchyUtils.getVisibilityState('layerInner', 'root', 0, 0, nodes, layers, {}, {}, extras);
+    assert.equal(visXRay.visible, true, 'Вложенный слой отображается в режиме X-Ray');
+    assert.equal(visXRay.role, 'xray-down');
+});
+
+
 

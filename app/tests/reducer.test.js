@@ -724,12 +724,61 @@ test('LOAD_STATE: demo_project.json проходит валидацию и ко�
 
     const s = reducer(defaultState, { type: 'LOAD_STATE', payload: demoJson });
 
-    assert.ok(s.layers['layer-1-containers'], 'Слой контейнеров загрузился');
-    assert.ok(s.nodes['node-a'], 'Узел А загрузился');
-    assert.ok(s.nodes['node-b1-1'], 'Узел Б1.1 3-го уровня загрузился');
-    assert.ok(s.ports['port-a-out'], 'Порт А-Выход загрузился');
-    assert.ok(s.links['link-a-to-b'], 'Связь А->Б загрузилась');
+    assert.ok(s.nodes['node-1786432299374721'], 'Узел А загрузился');
+    assert.ok(s.nodes['node-1786432310240234'], 'Узел Б загрузился');
+    assert.ok(s.nodes['node-1786432367907419'], 'Узел А2 3-го уровня загрузился');
+    assert.ok(s.ports['port-1786432401071358'], 'Порт загрузился');
+    assert.ok(s.links['link-1786432407244422'], 'Связь загрузилась');
     assert.equal(s.formatVersion, 10);
+});
+
+test('SET_XRAY_LEVEL: единая установка уровня просвечивания xRayDown и xRayUp без выбивания контекста', () => {
+    let s = reducer(defaultState, { type: 'SET_XRAY_LEVEL', payload: 2 });
+    assert.equal(s.ui.xRayDown, 2);
+    assert.equal(s.ui.xRayUp, 2);
+
+    // Погружаемся в некоторый узел
+    s = reducer(s, { type: 'DIVE_INTO', payload: { id: 'nodeA', name: 'A' } });
+    assert.equal(s.currentContext, 'nodeA');
+
+    // При сбросе рентгена в L0 текущий контекст сохраняется, пользователь не выбивается в root
+    s = reducer(s, { type: 'SET_XRAY_LEVEL', payload: 0 });
+    assert.equal(s.ui.xRayDown, 0);
+    assert.equal(s.ui.xRayUp, 0);
+    assert.equal(s.currentContext, 'nodeA');
+});
+
+test('SET_NODE_XRAY_DOWN / SET_NODE_XRAY_UP: динамический приоритет рентгена (Last Action Wins)', () => {
+    const H = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof global !== 'undefined' && global.HierarchyUtils) || require('../utils/hierarchy.js');
+
+    // Иерархия: nodeA -> nodeA1 -> nodeA2
+    let s = {
+        ...defaultState,
+        nodes: {
+            nodeA: { id: 'nodeA', name: 'A', parentId: 'root', position: { x: 0, y: 0 } },
+            nodeA1: { id: 'nodeA1', name: 'A1', parentId: 'nodeA', position: { x: 10, y: 10 } },
+            nodeA2: { id: 'nodeA2', name: 'A2', parentId: 'nodeA1', position: { x: 20, y: 20 } }
+        }
+    };
+
+    // 1. Главный узел nodeA просвечивает на 2 уровня вглубь -> nodeA2 виден
+    s = reducer(s, { type: 'SET_NODE_XRAY_DOWN', payload: { nodeId: 'nodeA', down: 2 } });
+    let visA2 = H.getVisibilityState('nodeA2', 'root', 0, 0, s.nodes, s.layers, s.ports, s.links, { xRayNodes: s.ui.xRayNodes });
+    assert.equal(visA2.visible, true, 'nodeA2 виден благодаря nodeA (down=2)');
+
+    // 2. Локальный узел nodeA1 делает сброс down=0 -> свежая команда nodeA1 скрывает nodeA2
+    s = reducer(s, { type: 'SET_NODE_XRAY_DOWN', payload: { nodeId: 'nodeA1', down: 0 } });
+    visA2 = H.getVisibilityState('nodeA2', 'root', 0, 0, s.nodes, s.layers, s.ports, s.links, { xRayNodes: s.ui.xRayNodes });
+    assert.equal(visA2.visible, false, 'nodeA2 скрылся из-за более свежей команды nodeA1 (down=0)');
+
+    // 3. Повторный клик на главный узел nodeA (down=3) -> главный узел перехватывает управление, nodeA2 снова виден
+    s = reducer(s, { type: 'SET_NODE_XRAY_DOWN', payload: { nodeId: 'nodeA', down: 3 } });
+    visA2 = H.getVisibilityState('nodeA2', 'root', 0, 0, s.nodes, s.layers, s.ports, s.links, { xRayNodes: s.ui.xRayNodes });
+    assert.equal(visA2.visible, true, 'nodeA2 снова виден, так как команда nodeA (seq) новее');
+
+    // 4. Проверка синхронизации видимой глубины getEffectiveNodeXRay для кнопки nodeA1
+    const effA1 = H.getEffectiveNodeXRay('nodeA1', 'root', 0, 0, s.nodes, s.layers, s.ports, s.links, s.ui.xRayNodes);
+    assert.equal(effA1.down, 2, 'nodeA1 подсвечивается с актуальной унаследованной глубиной');
 });
 
 

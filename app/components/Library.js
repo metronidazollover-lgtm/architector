@@ -26,28 +26,6 @@ function Library() {
     if (!state.ui.libraryOpen) return null;
 
     const handleSelect = (id) => {
-        let targetContext = 'root';
-        if (nodes[id]) {
-            targetContext = nodes[id].parentId || 'root';
-        } else if (layers && layers[id]) {
-            targetContext = layers[id].parentId || 'root';
-        } else if (ports[id]) {
-            const portNode = nodes[ports[id].nodeId];
-            if (portNode) targetContext = portNode.parentId || 'root';
-        } else {
-            const link = links ? links[id] : null;
-            if (link) targetContext = link.context || 'root';
-        }
-
-        // Если вычисленный контекст является слоем, нам нужен его родитель (так как слои - это просто визуальные фреймы)
-        if (layers && layers[targetContext]) {
-            targetContext = layers[targetContext].parentId || 'root';
-        }
-
-        if (state.currentContext !== targetContext) {
-            dispatch({ type: 'GO_TO_CONTEXT', payload: targetContext });
-        }
-
         dispatch({ type: 'SET_SELECTED', payload: id });
         dispatch({ type: 'CENTER_ON_ENTITY', payload: id });
     };
@@ -157,38 +135,6 @@ function Library() {
         return acc;
     }, {});
 
-    return (
-        <div className="absolute left-4 top-4 w-[350px] glass-panel rounded-xl flex flex-col max-h-[calc(100vh-2rem)] z-40 shadow-2xl overflow-hidden border-[#444] transition-all duration-300" data-file="components/Library.js">
-            <div className="p-3 border-b border-[#333] flex items-center gap-4 bg-[#1f1f1f]">
-                <button 
-                    className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'objects' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
-                    onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'objects' })}
-                >
-                    Объекты
-                </button>
-                <button 
-                    className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'levels' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
-                    onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'levels' })}
-                >
-                    Уровни
-                </button>
-                <button 
-                    className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'history' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
-                    onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'history' })}
-                >
-                    История
-                </button>
-                
-                {activeTab === 'history' && (
-                    <div className="ml-auto flex gap-1">
-                        <button 
-                            className={`p-1 rounded text-sm transition-colors ${past.length === 0 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-white/10 hover:text-white'}`}
-                            onClick={() => dispatch({ type: 'UNDO' })}
-                            disabled={past.length === 0}
-                            title="Шаг назад"
-                        >
-                            <div className="icon-undo-2"></div>
-                        </button>
     const renderContent = () => {
         if (activeTab === 'objects') {
             return (
@@ -346,6 +292,8 @@ function Library() {
             const maxDepths = H ? H.getMaxRelativeDepths(state.currentContext, nodes, layers, ports, links) : { maxDown: 10, maxUp: 10 };
             const currentDown = state.ui?.xRayDown || 0;
             const currentUp = state.ui?.xRayUp || 0;
+            const maxUp = maxDepths.maxUp;
+            const maxDown = maxDepths.maxDown;
 
             const currCtx = state.currentContext || 'root';
             const directChildren = [];
@@ -364,6 +312,9 @@ function Library() {
                 if (!l) return;
                 const rel = H ? H.getRelativeDepth(l.id, currCtx, nodes, layers, ports, links) : null;
                 if (rel === 1) directChildren.push({ entity: l, type: 'layer', name: l.name, icon: 'icon-layers' });
+                else if (rel !== null && rel > 1 && rel <= currentDown + 1) {
+                    xrayChildren.push({ entity: l, type: 'layer', name: l.name, rel, icon: 'icon-layers' });
+                }
             });
 
             return (
@@ -383,51 +334,51 @@ function Library() {
                             </button>
                         </div>
 
-                        {/* Вглубь (xRayDown) */}
-                        <div className="flex items-center justify-between bg-black/30 px-2.5 py-1.5 rounded border border-white/5">
-                            <span className="text-xs text-gray-400">Вглубь (потомки):</span>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    className="w-5 h-5 flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-xs font-bold text-gray-300 disabled:opacity-30"
-                                    disabled={currentDown <= 0}
-                                    onClick={() => dispatch({ type: 'SET_XRAY_DOWN', payload: currentDown - 1 })}
-                                >
-                                    −
-                                </button>
-                                <span className="text-xs font-mono font-semibold text-[var(--accent-blue)] min-w-[75px] text-center">
-                                    {maxDepths.maxDown === 0 ? '0 (нет)' : currentDown === 0 ? `0 / ${maxDepths.maxDown} ур.` : `${currentDown} из ${maxDepths.maxDown}`}
+                        <div className="flex items-center gap-2">
+                            {/* Кнопка "Наверх (предки)" со стрелкой ВВЕРХ */}
+                            <div className="flex-1 flex items-center justify-between bg-black/30 px-2.5 py-1.5 rounded border border-white/5">
+                                <span className="text-xs text-gray-400 flex items-center gap-1">
+                                    <span>Наверх:</span>
                                 </span>
-                                <button
-                                    className="w-5 h-5 flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-xs font-bold text-gray-300 disabled:opacity-30"
-                                    disabled={currentDown >= maxDepths.maxDown}
-                                    onClick={() => dispatch({ type: 'SET_XRAY_DOWN', payload: currentDown + 1 })}
-                                >
-                                    +
-                                </button>
+                                <div className="flex items-center gap-1.5">
+                                    <span className="text-xs font-mono font-semibold text-amber-400">
+                                        {maxUp === 0 ? '0' : `${currentUp}/${maxUp}`}
+                                    </span>
+                                    <button
+                                        className={`w-6 h-6 flex items-center justify-center rounded transition-all text-xs font-bold ${currentUp > 0 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-[0_0_8px_rgba(245,158,11,0.3)]' : 'bg-white/10 text-gray-300 hover:bg-white/20'} disabled:opacity-30 disabled:hover:bg-white/10`}
+                                        disabled={maxUp === 0}
+                                        title={maxUp === 0 ? 'Нет уровней наверху' : `Просвечивание предков (${currentUp} из ${maxUp} ур.)`}
+                                        onClick={() => {
+                                            const nextUp = (currentUp + 1) > maxUp ? 0 : currentUp + 1;
+                                            dispatch({ type: 'SET_XRAY_UP', payload: nextUp });
+                                        }}
+                                    >
+                                        ↑
+                                    </button>
+                                </div>
                             </div>
-                        </div>
 
-                        {/* Наверх (xRayUp) */}
-                        <div className="flex items-center justify-between bg-black/30 px-2.5 py-1.5 rounded border border-white/5">
-                            <span className="text-xs text-gray-400">Наверх (предки):</span>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    className="w-5 h-5 flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-xs font-bold text-gray-300 disabled:opacity-30"
-                                    disabled={currentUp <= 0}
-                                    onClick={() => dispatch({ type: 'SET_XRAY_UP', payload: currentUp - 1 })}
-                                >
-                                    −
-                                </button>
-                                <span className="text-xs font-mono font-semibold text-amber-400 min-w-[75px] text-center">
-                                    {maxDepths.maxUp === 0 ? '0 (нет)' : currentUp === 0 ? `0 / ${maxDepths.maxUp} ур.` : `${currentUp} из ${maxDepths.maxUp}`}
+                            {/* Кнопка "Вглубь (потомки)" со стрелкой ВНИЗ */}
+                            <div className="flex-1 flex items-center justify-between bg-black/30 px-2.5 py-1.5 rounded border border-white/5">
+                                <span className="text-xs text-gray-400 flex items-center gap-1">
+                                    <span>Вглубь:</span>
                                 </span>
-                                <button
-                                    className="w-5 h-5 flex items-center justify-center rounded bg-white/10 hover:bg-white/20 text-xs font-bold text-gray-300 disabled:opacity-30"
-                                    disabled={currentUp >= maxDepths.maxUp}
-                                    onClick={() => dispatch({ type: 'SET_XRAY_UP', payload: currentUp + 1 })}
-                                >
-                                    +
-                                </button>
+                                <div className="flex items-center gap-1.5">
+                                    <span className="text-xs font-mono font-semibold text-[var(--accent-blue)]">
+                                        {maxDown === 0 ? '0' : `${currentDown}/${maxDown}`}
+                                    </span>
+                                    <button
+                                        className={`w-6 h-6 flex items-center justify-center rounded transition-all text-xs font-bold ${currentDown > 0 ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)] border border-[var(--accent-blue)]/40 shadow-[0_0_8px_rgba(56,189,248,0.3)]' : 'bg-white/10 text-gray-300 hover:bg-white/20'} disabled:opacity-30 disabled:hover:bg-white/10`}
+                                        disabled={maxDown === 0}
+                                        title={maxDown === 0 ? 'Нет уровней внизу' : `Просвечивание потомков (${currentDown} из ${maxDown} ур.)`}
+                                        onClick={() => {
+                                            const nextDown = (currentDown + 1) > maxDown ? 0 : currentDown + 1;
+                                            dispatch({ type: 'SET_XRAY_DOWN', payload: nextDown });
+                                        }}
+                                    >
+                                        ↓
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -513,23 +464,47 @@ function Library() {
                             </span>
                         </div>
                     );
-                        <div className="w-2.5 h-2.5 rounded-full border-[2px] border-gray-500 bg-[#1f1f1f] shrink-0"></div>
-                        <span className="text-gray-500 text-sm italic">Начало</span>
-                    </div>
+                })}
+            </div>
+        );
+    };
 
-                    {historyLogs.map((log, i) => {
-                        const isLast = i === historyLogs.length - 1;
-                        return (
-                            <div key={i} className={`flex items-center gap-3 px-2 py-2 rounded-lg z-10 transition-colors ${isLast ? 'bg-[var(--accent-blue)]/10' : 'hover:bg-white/5'}`}>
-                                <div className={`w-2.5 h-2.5 rounded-full border-[2px] shrink-0 ${isLast ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)]' : 'border-gray-400 bg-[#1f1f1f]'}`}></div>
-                                <span className={`text-sm ${isLast ? 'text-[var(--accent-blue)] font-medium' : 'text-gray-300'}`}>
-                                    {log}
-                                </span>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
+    return (
+        <div className="absolute left-4 top-4 w-[350px] glass-panel rounded-xl flex flex-col max-h-[calc(100vh-2rem)] z-40 shadow-2xl overflow-hidden border-[#444] transition-all duration-300" data-file="components/Library.js">
+            <div className="p-3 border-b border-[#333] flex items-center gap-4 bg-[#1f1f1f]">
+                <button 
+                    className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'objects' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
+                    onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'objects' })}
+                >
+                    Объекты
+                </button>
+                <button 
+                    className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'levels' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
+                    onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'levels' })}
+                >
+                    Уровни
+                </button>
+                <button 
+                    className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'history' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
+                    onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'history' })}
+                >
+                    История
+                </button>
+                
+                {activeTab === 'history' && (
+                    <div className="ml-auto flex gap-1">
+                        <button 
+                            className={`p-1 rounded text-sm transition-colors ${past.length === 0 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-white/10 hover:text-white'}`}
+                            onClick={() => dispatch({ type: 'UNDO' })}
+                            disabled={past.length === 0}
+                            title="Шаг назад"
+                        >
+                            <div className="icon-undo-2"></div>
+                        </button>
+                    </div>
+                )}
+            </div>
+            {renderContent()}
         </div>
     );
 }

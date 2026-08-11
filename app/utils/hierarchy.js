@@ -382,22 +382,35 @@ HierarchyUtils.getMaxRelativeDepths = (contextId, nodes, layers, ports, links) =
     let maxUp = 0;
     const safeNodes = nodes || {};
     const safeLayers = layers || {};
+    const isContainer = Boolean(safeNodes[contextId] || safeLayers[contextId]);
 
     Object.values(safeNodes).forEach(n => {
-        if (!n || !n.id) return;
+        if (!n || !n.id || n.id === contextId) return;
         const rel = HierarchyUtils.getRelativeDepth(n.id, contextId, nodes, layers, ports, links);
         if (rel !== null) {
-            if (rel > 1) maxDown = Math.max(maxDown, rel - 1);
-            if (rel < 0) maxUp = Math.max(maxUp, Math.abs(rel));
+            if (rel > 0) {
+                const depthVal = isContainer ? rel : (rel > 1 ? rel - 1 : 0);
+                if (depthVal > maxDown) maxDown = depthVal;
+            }
+            if (rel < 0) {
+                const upVal = Math.abs(rel);
+                if (upVal > maxUp) maxUp = upVal;
+            }
         }
     });
 
     Object.values(safeLayers).forEach(l => {
-        if (!l || !l.id) return;
+        if (!l || !l.id || l.id === contextId) return;
         const rel = HierarchyUtils.getRelativeDepth(l.id, contextId, nodes, layers, ports, links);
         if (rel !== null) {
-            if (rel > 1) maxDown = Math.max(maxDown, rel - 1);
-            if (rel < 0) maxUp = Math.max(maxUp, Math.abs(rel));
+            if (rel > 0) {
+                const depthVal = isContainer ? rel : (rel > 1 ? rel - 1 : 0);
+                if (depthVal > maxDown) maxDown = depthVal;
+            }
+            if (rel < 0) {
+                const upVal = Math.abs(rel);
+                if (upVal > maxUp) maxUp = upVal;
+            }
         }
     });
 
@@ -537,15 +550,90 @@ HierarchyUtils.getVisibilityState = (entityId, currentContext, xRayDown, xRayUp,
         return { visible: true, opacity: 1, interactive: true, role: 'child', zIndex: 10, isContextNode: false, isParentOfSelected: hasSelectedChild };
     }
 
+    const xRayNodes = (extras && extras.xRayNodes) || {};
+
     // ——— 7. xRayDown: потомки глубже прямых детей ———
-    if (relDepth !== null && relDepth > 1 && relDepth <= xRayDown + 1) {
-        const opacity = Math.max(0.35, 1 - (relDepth - 1) * 0.2);
-        return { visible: true, opacity, interactive: true, role: 'xray-down', zIndex: Math.max(1, 10 - relDepth * 2), isContextNode: false, isParentOfSelected: false };
+    if (relDepth !== null && relDepth > 1) {
+        let isXRayVisible = false;
+        let effectiveDepth = relDepth;
+
+        // Поузельный X-Ray (селективный, динамический приоритет по свежести команды)
+        let candidates = [];
+        if (Object.keys(xRayNodes).length > 0) {
+            let cur = entityId;
+            let pathFromContext = [];
+            while (cur && cur !== currentContext && cur !== 'root') {
+                const p = getTrueParent(cur);
+                if (!p || p === cur) break;
+                pathFromContext.unshift(p);
+                cur = p;
+            }
+
+            for (const ancId of pathFromContext) {
+                const cfg = xRayNodes[ancId];
+                if (cfg) {
+                    const depthFromAnc = HierarchyUtils.getRelativeDepth(entityId, ancId, safeNodes, safeLayers, safePorts, safeLinks);
+                    if (depthFromAnc !== null && depthFromAnc > 0) {
+                        candidates.push({
+                            ancId,
+                            cfg,
+                            depth: depthFromAnc,
+                            seq: typeof cfg.seq === 'number' ? cfg.seq : (cfg.updatedAt || 0)
+                        });
+                    }
+                }
+            }
+        }
+
+        if (candidates.length > 0) {
+            // Сортируем кандидатов по свежести действия (кто последний взаимодействовал, тот и доминирует)
+            candidates.sort((a, b) => b.seq - a.seq);
+            const dominant = candidates[0];
+            if (dominant && dominant.cfg) {
+                isXRayVisible = (dominant.cfg.down > 0 && dominant.depth <= dominant.cfg.down);
+                effectiveDepth = dominant.depth;
+            }
+        } else if (xRayDown > 0 && relDepth <= xRayDown + 1) {
+            // Глобальный X-Ray (применяется, если для узла нет явного поузельного переопределения)
+            isXRayVisible = true;
+        }
+
+        if (isXRayVisible) {
+            const opacity = Math.max(0.35, 1 - (effectiveDepth - 1) * 0.2);
+            return { visible: true, opacity, interactive: true, role: 'xray-down', zIndex: Math.max(1, 10 - effectiveDepth * 2), isContextNode: false, isParentOfSelected: false };
+        }
     }
 
-    // ——— 8. Предок (только при явном xRayUp > 0) ———
+    // ——— 8. Предок (только при явном xRayUp > 0 или поузельном X-Ray) ———
     if (relDepth !== null && relDepth < 0) {
+        let isUpVisible = false;
         if (xRayUp > 0 && Math.abs(relDepth) <= xRayUp) {
+            isUpVisible = true;
+        } else if (Object.keys(xRayNodes).length > 0) {
+            let candidates = [];
+            for (const [nodeId, cfg] of Object.entries(xRayNodes)) {
+                if (cfg) {
+                    const depthFromEnt = HierarchyUtils.getRelativeDepth(nodeId, entityId, safeNodes, safeLayers, safePorts, safeLinks);
+                    if (depthFromEnt !== null && depthFromEnt > 0) {
+                        candidates.push({
+                            nodeId,
+                            cfg,
+                            depth: depthFromEnt,
+                            seq: typeof cfg.seq === 'number' ? cfg.seq : (cfg.updatedAt || 0)
+                        });
+                    }
+                }
+            }
+            if (candidates.length > 0) {
+                candidates.sort((a, b) => b.seq - a.seq);
+                const dominant = candidates[0];
+                if (dominant && dominant.cfg && dominant.cfg.up > 0 && dominant.depth <= dominant.cfg.up) {
+                    isUpVisible = true;
+                }
+            }
+        }
+
+        if (isUpVisible) {
             const opacity = Math.max(0.5, 1 - Math.abs(relDepth) * 0.25);
             return { visible: true, opacity, interactive: true, role: 'xray-up', zIndex: 1, isContextNode: false, isParentOfSelected: false };
         }
@@ -561,6 +649,69 @@ HierarchyUtils.getVisibilityState = (entityId, currentContext, xRayDown, xRayUp,
     }
 
     return HIDDEN;
+};
+
+/**
+ * Расчет эффективного видимого состояния X-Ray для конкретного узла с учетом унаследованной проницаемости от предков.
+ */
+HierarchyUtils.getEffectiveNodeXRay = (nodeId, currentContext, xRayDown, xRayUp, nodes, layers, ports, links, xRayNodes = {}) => {
+    let candidates = [];
+
+    // Собираем сам узел и всех его предков
+    let cur = nodeId;
+    while (cur && cur !== 'root') {
+        const cfg = xRayNodes && xRayNodes[cur];
+        if (cfg) {
+            const depth = (cur === nodeId) ? 0 : HierarchyUtils.getRelativeDepth(nodeId, cur, nodes, layers, ports, links);
+            if (depth !== null && depth >= 0) {
+                candidates.push({
+                    ancId: cur,
+                    cfg,
+                    depth,
+                    seq: typeof cfg.seq === 'number' ? cfg.seq : (cfg.updatedAt || 0)
+                });
+            }
+        }
+        if (cur === currentContext) break;
+        const p = (nodes && nodes[cur]?.parentId) || (layers && layers[cur]?.parentId) || 'root';
+        if (!p || p === cur) break;
+        cur = p;
+    }
+
+    if (candidates.length > 0) {
+        // Выбираем самую свежую команду по seq
+        candidates.sort((a, b) => b.seq - a.seq);
+        const dominant = candidates[0];
+        if (dominant.ancId === nodeId) {
+            return {
+                down: Math.max(0, dominant.cfg.down || 0),
+                up: Math.max(0, dominant.cfg.up || 0),
+                isOwn: true
+            };
+        } else {
+            const remDown = Math.max(0, (dominant.cfg.down || 0) - dominant.depth);
+            return {
+                down: remDown,
+                up: Math.max(0, dominant.cfg.up || 0),
+                isOwn: false
+            };
+        }
+    }
+
+    let globalDown = 0;
+    if (xRayDown > 0) {
+        const depthFromCtx = HierarchyUtils.getRelativeDepth(nodeId, currentContext, nodes, layers, ports, links);
+        if (depthFromCtx !== null && depthFromCtx >= 0) {
+            const globalRem = (xRayDown + 1) - depthFromCtx;
+            if (globalRem > 0) globalDown = globalRem - 1;
+        }
+    }
+
+    return {
+        down: Math.max(0, globalDown),
+        up: Math.max(0, xRayUp || 0),
+        isOwn: false
+    };
 };
 
 if (typeof window !== 'undefined') window.HierarchyUtils = HierarchyUtils;

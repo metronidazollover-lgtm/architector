@@ -26,12 +26,41 @@ function Canvas() {
                     peekNodeId: state.ui?.peekNodeId,
                     transitionFromContext: state.ui?.transitionFromContext,
                     isolatedIds: state.isolatedIds,
-                    breadcrumbs: state.breadcrumbs
+                    breadcrumbs: state.breadcrumbs,
+                    xRayNodes: state.ui?.xRayNodes
                 }
             );
         });
         return result;
-    }, [state.nodes, state.layers, state.ports, state.links, state.currentContext, state.ui?.xRayDown, state.ui?.xRayUp, state.selectedIds, state.ui?.peekNodeId, state.ui?.transitionFromContext, state.isolatedIds, state.breadcrumbs]);
+    }, [state.nodes, state.layers, state.ports, state.links, state.currentContext, state.ui?.xRayDown, state.ui?.xRayUp, state.ui?.xRayNodes, state.selectedIds, state.ui?.peekNodeId, state.ui?.transitionFromContext, state.isolatedIds, state.breadcrumbs]);
+
+    const layerVisibility = React.useMemo(() => {
+        const H = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof global !== 'undefined' && global.HierarchyUtils) || null;
+        if (!H || !H.getVisibilityState) return {};
+        const result = {};
+        Object.values(state.layers || {}).forEach(layer => {
+            if (!layer || !layer.id) return;
+            result[layer.id] = H.getVisibilityState(
+                layer.id,
+                state.currentContext || 'root',
+                state.ui?.xRayDown || 0,
+                state.ui?.xRayUp || 0,
+                state.nodes,
+                state.layers,
+                state.ports,
+                state.links,
+                {
+                    selectedIds: state.selectedIds,
+                    peekNodeId: state.ui?.peekNodeId,
+                    transitionFromContext: state.ui?.transitionFromContext,
+                    isolatedIds: state.isolatedIds,
+                    breadcrumbs: state.breadcrumbs,
+                    xRayNodes: state.ui?.xRayNodes
+                }
+            );
+        });
+        return result;
+    }, [state.nodes, state.layers, state.ports, state.links, state.currentContext, state.ui?.xRayDown, state.ui?.xRayUp, state.ui?.xRayNodes, state.selectedIds, state.ui?.peekNodeId, state.ui?.transitionFromContext, state.isolatedIds, state.breadcrumbs]);
 
     // Используем Ref для актуального стейта камеры, чтобы не переподключать слушатель wheel каждый кадр
     const cameraRef = React.useRef({ zoom, offset });
@@ -146,11 +175,18 @@ function Canvas() {
 
     React.useEffect(() => {
         const handleWheel = (e) => {
-            // Если мы крутим колесико над панелью со скроллом (например, внутри узла или чата), не зумим холст
+            // Если мы крутим колесико над панелью со скроллом (например, внутри узла или чата):
             const scrollable = e.target.closest('.overflow-y-auto');
             if (scrollable && scrollable.scrollHeight > scrollable.clientHeight) {
-                // Если скролл достигнут края, можно позволить зум, но лучше просто оставить скролл
-                return;
+                const isScrollingUp = e.deltaY < 0;
+                const isScrollingDown = e.deltaY > 0;
+                const atTop = scrollable.scrollTop <= 0;
+                const atBottom = Math.abs(scrollable.scrollTop + scrollable.clientHeight - scrollable.scrollHeight) <= 2;
+
+                // Блокируем зум холста ТОЛЬКО если контейнер может прокрутиться дальше в направлении движения
+                if ((isScrollingUp && !atTop) || (isScrollingDown && !atBottom)) {
+                    return;
+                }
             }
 
             e.preventDefault(); // Блокируем стандартную прокрутку страницы
@@ -437,18 +473,24 @@ function Canvas() {
                 {/* Render ALL Layers */}
                 {state.layers && Object.values(state.layers).map((layer, idx) => {
                     if (!layer || !layer.id) return null;
-                    if (state.isolatedIds.length > 0 && !state.isolatedIds.includes(layer.id)) return null;
+                    const vis = layerVisibility[layer.id];
+                    if (!vis || !vis.visible) return null;
 
-                    const layerParentContext = layer.parentId || 'root';
-                    // Слой отображается strictly если он относится к текущему контексту
-                    if (layerParentContext !== state.currentContext) {
-                        return null;
-                    }
+                    const isDimmed = vis.role === 'ancestor-ghost' || vis.role === 'transition';
+                    const isHighlightedContext = vis.role === 'context';
 
                     return (
                         <div
                             key={layer.id || `layer-${idx}`}
-                            style={{ zIndex: 2 }}
+                            className={`
+                                ${isDimmed ? 'opacity-20 pointer-events-none grayscale blur-[2px]' : ''}
+                                ${vis.role === 'xray-down' || vis.role === 'xray-up' ? 'pointer-events-auto' : ''}
+                            `}
+                            style={{
+                                zIndex: isHighlightedContext ? 0 : (vis.zIndex || 2),
+                                opacity: vis.opacity,
+                                pointerEvents: vis.interactive ? 'auto' : 'none'
+                            }}
                         >
                             <Layer data={layer} />
                         </div>
@@ -478,18 +520,17 @@ function Canvas() {
 
                     const isTheContextItself = link.id === state.currentContext;
                     const isBreadcrumbAncestor = (state.breadcrumbs || []).some(b => b && b.id === link.id);
-                    const currCtx = state.currentContext;
-                    const isConnectedToCurrentNodeContext = (sPort.nodeId === currCtx || tPort.nodeId === currCtx);
-                    const isConnectedToCurrentPortContext = (link.sourcePortId === currCtx || link.targetPortId === currCtx);
 
                     const bothNodesVisible = sNodeVis && sNodeVis.visible && tNodeVis && tNodeVis.visible;
 
-                    if (!bothNodesVisible && !isTheContextItself && !isBreadcrumbAncestor && !isLinkSelected && !isConnectedToCurrentNodeContext && !isConnectedToCurrentPortContext) {
+                    // Межуровневая связь отрисовывается ТОЛЬКО если на холсте одновременно видны ОБА её узла
+                    // (или сама связь является контекстом/предком)
+                    if (!bothNodesVisible && !isTheContextItself && !isBreadcrumbAncestor) {
                         return null;
                     }
 
-                    const opacity = (bothNodesVisible || isTheContextItself || isBreadcrumbAncestor || isLinkSelected || isConnectedToCurrentNodeContext || isConnectedToCurrentPortContext) ? 1 : 0.15;
-                    const pointerEvents = (bothNodesVisible || isTheContextItself || isLinkSelected) ? 'auto' : 'none';
+                    const opacity = 1;
+                    const pointerEvents = 'auto';
 
                     return (
                         <div key={link.id || `link-${idx}`} style={{ opacity, pointerEvents }}>
