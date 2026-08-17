@@ -295,7 +295,7 @@ function Port({ data, nodeData }) {
         <div
             className={`absolute w-3 h-3 border border-gray-400 rounded-full transform -translate-x-1/2 -translate-y-1/2 transition-all duration-200
                 ${isPending ? 'bg-yellow-400 ring-2 ring-yellow-400 z-30' : 'z-20'}
-                ${isSelected && !isPending ? 'ring-1 ring-white scale-[3] !z-50' : ringClasses}
+                ${isSelected && !isPending ? 'ring-1 ring-white scale-[2.1] !z-50' : ringClasses}
                 cursor-crosshair
             `}
             style={{ 

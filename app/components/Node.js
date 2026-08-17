@@ -73,22 +73,21 @@ function Node({ data, isContextNode, isParentOfSelected }) {
         if (isPeeked) dispatch({ type: 'SET_UI', payload: { peekNodeId: null } });
     };
 
+    const [showToolbar, setShowToolbar] = React.useState(false);
+
+    React.useEffect(() => {
+        if (!isExplicitlySelected) {
+            setShowToolbar(false);
+            setActivePopover(null);
+        }
+    }, [isExplicitlySelected]);
+
     const handleMouseDown = (e) => {
         // Разрешаем панорамирование колесиком (1) на любом узле
         if (e.button === 1) return;
 
         e.stopPropagation();
         if (e.button !== 0) return; // Only left click
-
-        if (e.shiftKey) {
-            dispatch({ type: 'TOGGLE_SELECTED', payload: data.id });
-            return; // Не перетаскиваем при Shift-клике
-        } else {
-            if (!isExplicitlySelected) {
-                dispatch({ type: 'SET_SELECTED', payload: data.id });
-            }
-        }
-
 
         const startX = e.clientX;
         const startY = e.clientY;
@@ -100,7 +99,21 @@ function Node({ data, isContextNode, isParentOfSelected }) {
         let cumulativeDy = 0;
 
         const handleMouseMove = (moveEvent) => {
-            hasMoved = true;
+            const distMoved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
+            if (distMoved > 3) {
+                if (!hasMoved) {
+                    hasMoved = true;
+                    // При начале перетаскивания скрываем панель
+                    setShowToolbar(false);
+                    setActivePopover(null);
+                    if (!isExplicitlySelected) {
+                        dispatch({ type: 'SET_SELECTED', payload: data.id });
+                    }
+                }
+            }
+
+            if (!hasMoved) return;
+
             const totalDx = (moveEvent.clientX - startX) / zoom;
             const totalDy = (moveEvent.clientY - startY) / zoom;
 
@@ -131,11 +144,24 @@ function Node({ data, isContextNode, isParentOfSelected }) {
         const handleMouseUp = () => {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
+
             if (hasMoved) {
+                // Было перетаскивание: фиксируем историю, панель НЕ открываем
+                setShowToolbar(false);
                 dispatch({
                     type: 'COMMIT_HISTORY',
                     payload: { snapshot: initialSnapshot, logMessage: `Перемещен узел: ${data.name}` }
                 });
+            } else {
+                // Одиночный клик (нажали и отпустили без сдвига)
+                if (e.shiftKey) {
+                    dispatch({ type: 'TOGGLE_SELECTED', payload: data.id });
+                } else {
+                    if (!isExplicitlySelected) {
+                        dispatch({ type: 'SET_SELECTED', payload: data.id });
+                    }
+                    setShowToolbar(true);
+                }
             }
         };
 
@@ -210,6 +236,119 @@ function Node({ data, isContextNode, isParentOfSelected }) {
         }
     };
 
+    const [isNodeHovered, setIsNodeHovered] = React.useState(false);
+    const [isEditingName, setIsEditingName] = React.useState(false);
+    const [tempName, setTempName] = React.useState(data.name || '');
+    const nameInitialSnapshotRef = React.useRef(null);
+    const nameInitialValueRef = React.useRef('');
+    const nameTextareaRef = React.useRef(null);
+    const [isEditingContent, setIsEditingContent] = React.useState(false);
+    const [tempContent, setTempContent] = React.useState(data.content || '');
+    const contentInitialSnapshotRef = React.useRef(null);
+    const contentInitialValueRef = React.useRef('');
+    const contentTextareaRef = React.useRef(null);
+    const [activePopover, setActivePopover] = React.useState(null); // 'color' | 'media' | 'layer' | 'group' | 'icon' | null
+    const [copiedId, setCopiedId] = React.useState(false);
+    const toolbarRef = React.useRef(null);
+
+    React.useLayoutEffect(() => {
+        if (isEditingName && nameTextareaRef.current) {
+            nameTextareaRef.current.style.height = 'auto';
+            nameTextareaRef.current.style.height = `${nameTextareaRef.current.scrollHeight}px`;
+        }
+    }, [isEditingName, tempName]);
+
+    React.useLayoutEffect(() => {
+        if (isEditingContent && contentTextareaRef.current) {
+            contentTextareaRef.current.style.height = 'auto';
+            contentTextareaRef.current.style.height = `${contentTextareaRef.current.scrollHeight}px`;
+        }
+    }, [isEditingContent, tempContent]);
+
+    React.useEffect(() => {
+        setTempName(data.name || '');
+    }, [data.name]);
+
+    React.useEffect(() => {
+        setTempContent(data.content || '');
+    }, [data.content]);
+
+    // Закрытие всплывающих поповеров при клике вне тулбара
+    React.useEffect(() => {
+        if (!activePopover) return;
+        const handleOutsideClick = (e) => {
+            if (toolbarRef.current && !toolbarRef.current.contains(e.target)) {
+                setActivePopover(null);
+            }
+        };
+        window.addEventListener('mousedown', handleOutsideClick);
+        return () => window.removeEventListener('mousedown', handleOutsideClick);
+    }, [activePopover]);
+
+    const handleCopyId = (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(data.id);
+        setCopiedId(true);
+        setTimeout(() => setCopiedId(false), 1500);
+    };
+
+    const handleUpdateField = (field, value) => {
+        dispatch({
+            type: 'UPDATE_NODE',
+            payload: { id: data.id, updates: { [field]: value } }
+        });
+    };
+
+    const handleLayerChange = (targetLayerId) => {
+        if (targetLayerId !== 'root' && state.layers && state.layers[targetLayerId]) {
+            const targetLayer = state.layers[targetLayerId];
+            const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(
+                [data], targetLayer, state.nodes
+            );
+            dispatch({ type: 'UPDATE_LAYER', payload: { id: targetLayerId, updates: { size: newLayerSize } } });
+            dispatch({ type: 'UPDATE_NODE', payload: {
+                id: data.id,
+                updates: updatesById[data.id] || { parentId: targetLayerId, position: { x: 40, y: 90 } }
+            }});
+        } else {
+            dispatch({ type: 'REPARENT_ENTITY', payload: { id: data.id, newParentId: 'root' } });
+        }
+        setActivePopover(null);
+    };
+
+    const isAIAgent = data.type === 'ai-agent';
+
+    const COLOR_PRESETS = [
+        '#1a1a1a', '#0f172a', '#1e293b', '#14532d', 
+        '#064e3b', '#1e3a8a', '#312e81', '#581c87', 
+        '#701a75', '#7f1d1d', '#78350f', '#134e4a',
+        '#27272a', '#3f3f46'
+    ];
+
+    const ICON_PRESETS = [
+        { id: '', label: 'Без значка', icon: null },
+        { id: 'icon-box', label: 'Куб', icon: 'icon-box' },
+        { id: 'icon-folder', label: 'Папка', icon: 'icon-folder' },
+        { id: 'icon-database', label: 'БД', icon: 'icon-database' },
+        { id: 'icon-server', label: 'Сервер', icon: 'icon-server' },
+        { id: 'icon-cpu', label: 'Процессор', icon: 'icon-cpu' },
+        { id: 'icon-globe', label: 'Сеть', icon: 'icon-globe' },
+        { id: 'icon-layers', label: 'Слой', icon: 'icon-layers' },
+        { id: 'icon-file', label: 'Файл', icon: 'icon-file' },
+        { id: 'icon-code', label: 'Код', icon: 'icon-code' },
+        { id: 'icon-bot', label: 'ИИ Бот', icon: 'icon-bot' },
+        { id: 'icon-shield', label: 'Защита', icon: 'icon-shield' },
+        { id: 'icon-zap', label: 'Событие', icon: 'icon-zap' },
+        { id: 'icon-tag', label: 'Тег', icon: 'icon-tag' },
+        { id: 'icon-bookmark', label: 'Закладка', icon: 'icon-bookmark' },
+        { id: 'icon-cloud', label: 'Облако', icon: 'icon-cloud' },
+        { id: 'icon-lock', label: 'Замок', icon: 'icon-lock' },
+        { id: 'icon-activity', label: 'Пульс', icon: 'icon-activity' },
+        { id: 'icon-settings', label: 'Опции', icon: 'icon-settings' }
+    ];
+
+    const EMOJI_PRESETS = ['📦', '📁', '🗄️', '🖥️', '⚡', '🌐', '📚', '📄', '💻', '🤖', '🛡️', '⚙️', '🎯', '🚀', '💡', '🏷️', '🔗', '🔔', '⭐', '📌'];
+
     return (
         <div
             className={`absolute flex flex-col cursor-move transition-all duration-200 glass-panel rounded-lg border
@@ -231,22 +370,107 @@ function Node({ data, isContextNode, isParentOfSelected }) {
             }}
             onMouseDown={handleMouseDown}
             onDoubleClick={handleDoubleClick}
+            onMouseEnter={() => setIsNodeHovered(true)}
+            onMouseLeave={() => {
+                setIsNodeHovered(false);
+                handlePeekLeave();
+            }}
             onMouseMove={handlePeekMove}
-            onMouseLeave={handlePeekLeave}
             data-file="components/Node.js"
         >
-            <div className="px-3 py-2 border-b border-[#333] bg-black/20 rounded-t-lg flex items-center justify-between text-sm font-medium z-10 shrink-0">
-                <div className="flex items-center gap-2 text-[#eee] overflow-hidden">
+            {/* Шапка узла с инлайн-редактированием имени */}
+            <div className="px-3 py-2 border-b border-[#333] bg-black/20 rounded-t-lg flex items-start justify-between text-sm font-medium z-10 shrink-0 gap-2">
+                <div className="flex items-start gap-2 text-[#eee] flex-1 min-w-0">
                     {data.icon && (
                         data.icon.startsWith('icon-') ? (
-                            <div className={`${data.icon} w-4 h-4 text-amber-400 shrink-0`}></div>
+                            <div className={`${data.icon} w-4 h-4 text-amber-400 shrink-0 mt-0.5`}></div>
                         ) : (
-                            <span className="text-xs shrink-0">{data.icon}</span>
+                            <span className="text-xs shrink-0 mt-0.5">{data.icon}</span>
                         )
                     )}
-                    <span className="truncate">{data.name}</span>
+                    {isEditingName ? (
+                        <textarea
+                            ref={nameTextareaRef}
+                            value={tempName}
+                            rows={1}
+                            autoFocus
+                            className="bg-black/90 text-white px-1.5 py-0.5 rounded border border-[var(--accent-blue)] text-sm font-medium w-full outline-none resize-none font-sans break-all whitespace-pre-wrap leading-snug custom-scrollbar overflow-hidden"
+                            style={{ minHeight: '26px' }}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                                const nextName = e.target.value;
+                                setTempName(nextName);
+                                dispatch({
+                                    type: 'UPDATE_NODE',
+                                    payload: {
+                                        id: data.id,
+                                        updates: { name: nextName },
+                                        skipHistory: true
+                                    }
+                                });
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    setIsEditingName(false);
+                                    if (tempName.trim() !== nameInitialValueRef.current && nameInitialSnapshotRef.current) {
+                                        dispatch({
+                                            type: 'COMMIT_HISTORY',
+                                            payload: {
+                                                snapshot: nameInitialSnapshotRef.current,
+                                                logMessage: `Изменено имя узла: ${tempName.trim() || data.id}`
+                                            }
+                                        });
+                                    }
+                                } else if (e.key === 'Escape') {
+                                    const prev = nameInitialValueRef.current;
+                                    setTempName(prev);
+                                    dispatch({
+                                        type: 'UPDATE_NODE',
+                                        payload: {
+                                            id: data.id,
+                                            updates: { name: prev },
+                                            skipHistory: true
+                                        }
+                                    });
+                                    setIsEditingName(false);
+                                }
+                            }}
+                            onBlur={() => {
+                                setIsEditingName(false);
+                                if (tempName.trim() !== nameInitialValueRef.current && nameInitialSnapshotRef.current) {
+                                    dispatch({
+                                        type: 'COMMIT_HISTORY',
+                                        payload: {
+                                            snapshot: nameInitialSnapshotRef.current,
+                                            logMessage: `Изменено имя узла: ${tempName.trim() || data.id}`
+                                        }
+                                    });
+                                }
+                            }}
+                        />
+                    ) : (
+                        <span 
+                            className="break-all whitespace-pre-wrap leading-snug cursor-text hover:text-white hover:underline transition-colors select-none font-medium flex-1"
+                            title="Кликните, чтобы переименовать узел"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (!isEditingName) {
+                                    nameInitialSnapshotRef.current = { nodes: state.nodes, layers: state.layers, ports: state.ports, links: state.links };
+                                    nameInitialValueRef.current = data.name || '';
+                                    setIsEditingName(true);
+                                }
+                            }}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                        >
+                            {data.name}
+                        </span>
+                    )}
                 </div>
-                 {childrenStats.total > 0 && (() => {
+
+                {/* X-Ray / Folders Badge */}
+                {childrenStats.total > 0 && (() => {
                     const H = window.HierarchyUtils;
                     const maxDepths = H ? H.getMaxRelativeDepths(data.id, state.nodes, state.layers, state.ports, state.links) : { maxDown: 10, maxUp: 10 };
                     const nodeXRay = state.ui?.xRayNodes?.[data.id];
@@ -326,7 +550,6 @@ function Node({ data, isContextNode, isParentOfSelected }) {
                                     if (effective.isOwn && nodeXRay?.down === 0) {
                                         nextDown = 1;
                                     } else if (!effective.isOwn && currentDown > 0) {
-                                        // Если статус унаследован от предка и потомки уже видны — первый клик мгновенно сворачивает ветку!
                                         nextDown = 0;
                                     } else if (currentDown >= maxDown) {
                                         nextDown = 0;
@@ -342,27 +565,375 @@ function Node({ data, isContextNode, isParentOfSelected }) {
                     );
                 })()}
             </div>
+
+            {/* Встроенная мини-панель инструментов (Quick Action Strip) - отображается только при явном одиночном клике */}
+            {showToolbar && isExplicitlySelected && (
+                <div 
+                    ref={toolbarRef}
+                    className="relative px-2 py-1 bg-black/60 border-b border-[#333]/70 flex items-center justify-between text-xs z-20 transition-all duration-150"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                >
+                    <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+                        {/* 1. Цвет узла */}
+                        <button
+                            className={`p-1 rounded hover:bg-white/10 transition-colors flex items-center justify-center ${
+                                activePopover === 'color' ? 'bg-white/20 text-[var(--accent-blue)]' : 'text-gray-300'
+                            }`}
+                            title="Цвет узла"
+                            onClick={() => setActivePopover(activePopover === 'color' ? null : 'color')}
+                        >
+                            <div className="w-3.5 h-3.5 rounded-full border border-white/40" style={{ backgroundColor: data.color || '#1a1a1a' }}></div>
+                        </button>
+
+                        {/* 2. Медиа URL */}
+                        <button
+                            className={`p-1 rounded hover:bg-white/10 transition-colors flex items-center justify-center ${
+                                activePopover === 'media' ? 'bg-white/20 text-[var(--accent-blue)]' : (data.mediaUrl ? 'text-[var(--accent-blue)]' : 'text-gray-300')
+                            }`}
+                            title="Прикрепить изображение"
+                            onClick={() => setActivePopover(activePopover === 'media' ? null : 'media')}
+                        >
+                            <div className="icon-image text-xs"></div>
+                        </button>
+
+                        {/* 3. Слой */}
+                        <button
+                            className={`p-1 rounded hover:bg-white/10 transition-colors flex items-center justify-center ${
+                                activePopover === 'layer' ? 'bg-white/20 text-[var(--accent-blue)]' : (data.parentId && data.parentId !== 'root' ? 'text-amber-400' : 'text-gray-300')
+                            }`}
+                            title="Назначить на слой"
+                            onClick={() => setActivePopover(activePopover === 'layer' ? null : 'layer')}
+                        >
+                            <div className="icon-layers text-xs"></div>
+                        </button>
+
+                        {/* 4. Группа */}
+                        <button
+                            className={`p-1 rounded hover:bg-white/10 transition-colors flex items-center justify-center ${
+                                activePopover === 'group' ? 'bg-white/20 text-[var(--accent-blue)]' : (data.group ? 'text-purple-400' : 'text-gray-300')
+                            }`}
+                            title={data.group ? `Группа: ${data.group}` : 'Назначить группу'}
+                            onClick={() => setActivePopover(activePopover === 'group' ? null : 'group')}
+                        >
+                            <div className="icon-tag text-xs"></div>
+                        </button>
+
+                        {/* 5. Привязка к сетке */}
+                        <button
+                            className={`p-1 rounded hover:bg-white/10 transition-colors flex items-center justify-center ${
+                                data.snapToGrid ? 'text-[var(--accent-blue)]' : 'text-gray-500'
+                            }`}
+                            title={data.snapToGrid ? 'Привязка к сетке: Вкл' : 'Привязка к сетке: Выкл'}
+                            onClick={() => handleUpdateField('snapToGrid', !data.snapToGrid)}
+                        >
+                            <div className="icon-layout-grid text-xs"></div>
+                        </button>
+
+                        {/* 6. Значок узла */}
+                        <button
+                            className={`p-1 rounded hover:bg-white/10 transition-colors flex items-center justify-center ${
+                                activePopover === 'icon' ? 'bg-white/20 text-[var(--accent-blue)]' : (data.icon ? 'text-amber-400' : 'text-gray-300')
+                            }`}
+                            title="Выбрать значок узла"
+                            onClick={() => setActivePopover(activePopover === 'icon' ? null : 'icon')}
+                        >
+                            <div className="icon-smile text-xs"></div>
+                        </button>
+
+                        {/* 7. Копировать ID */}
+                        <button
+                            className={`p-1 rounded hover:bg-white/10 transition-colors flex items-center justify-center ${
+                                copiedId ? 'text-green-400' : 'text-gray-300'
+                            }`}
+                            title={copiedId ? 'ID скопирован!' : `Копировать ID: ${data.id}`}
+                            onClick={handleCopyId}
+                        >
+                            <div className={`text-xs ${copiedId ? 'icon-check text-green-400' : 'icon-copy'}`}></div>
+                        </button>
+                    </div>
+
+                    {/* 8. Удалить узел */}
+                    <button
+                        className="p-1 rounded hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition-colors flex items-center justify-center shrink-0"
+                        title="Удалить узел"
+                        onClick={() => {
+                            if (window.confirm(`Удалить узел "${data.name}"?`)) {
+                                dispatch({ type: 'REMOVE_NODE', payload: data.id });
+                            }
+                        }}
+                    >
+                        <div className="icon-trash text-xs"></div>
+                    </button>
+
+                    {/* === ВСПЛЫВАЮЩИЕ ПОПОВЕРЫ МИНИ-ПАНЕЛИ === */}
+
+                    {/* Поповер: ЦВЕТ */}
+                    {activePopover === 'color' && (
+                        <div className="absolute left-2 top-8 w-60 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-lg p-3 shadow-2xl z-50 flex flex-col gap-2.5">
+                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Цвет фона узла</div>
+                            <div className="grid grid-cols-7 gap-1.5">
+                                {COLOR_PRESETS.map((c) => (
+                                    <button
+                                        key={c}
+                                        className={`w-6 h-6 rounded-md border transition-all ${
+                                            (data.color || '#1a1a1a').toLowerCase() === c.toLowerCase()
+                                                ? 'border-white scale-110 shadow-md ring-2 ring-[var(--accent-blue)]'
+                                                : 'border-white/20 hover:scale-105 hover:border-white/60'
+                                        }`}
+                                        style={{ backgroundColor: c }}
+                                        onClick={() => handleUpdateField('color', c)}
+                                    />
+                                ))}
+                            </div>
+                            <div className="flex items-center gap-2 pt-1 border-t border-white/10">
+                                <span className="text-[11px] text-gray-400">Свой цвет:</span>
+                                <input
+                                    type="color"
+                                    className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0"
+                                    value={data.color || '#1a1a1a'}
+                                    onChange={(e) => handleUpdateField('color', e.target.value)}
+                                />
+                                <span className="text-[10px] font-mono text-gray-400 flex-1 truncate">{data.color || '#1a1a1a'}</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Поповер: МЕДИА (КАРТИНКА) */}
+                    {activePopover === 'media' && (
+                        <div className="absolute left-2 top-8 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-lg p-3 shadow-2xl z-50 flex flex-col gap-2.5">
+                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Изображение / Картинка</div>
+                            <input
+                                type="text"
+                                placeholder="https://example.com/image.png"
+                                className="input-field text-xs py-1"
+                                value={data.mediaUrl || ''}
+                                onChange={(e) => handleUpdateField('mediaUrl', e.target.value)}
+                            />
+                            {data.mediaUrl && (
+                                <div className="flex flex-col gap-1">
+                                    <div className="flex justify-between text-[11px] text-gray-400">
+                                        <span>Высота:</span>
+                                        <span>{data.mediaHeight || 150}px</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="50"
+                                        max="600"
+                                        step="10"
+                                        value={data.mediaHeight || 150}
+                                        onChange={(e) => handleUpdateField('mediaHeight', parseInt(e.target.value))}
+                                        className="accent-[var(--accent-blue)]"
+                                    />
+                                    <button
+                                        className="btn text-xs py-1 text-red-400 border-red-500/30 hover:bg-red-500/20 mt-1"
+                                        onClick={() => handleUpdateField('mediaUrl', '')}
+                                    >
+                                        Удалить картинку
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Поповер: НАЗНАЧЕНИЕ НА СЛОЙ */}
+                    {activePopover === 'layer' && (
+                        <div className="absolute left-2 top-8 w-60 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-lg p-2.5 shadow-2xl z-50 flex flex-col gap-1.5 max-h-56 overflow-y-auto no-scrollbar">
+                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider px-1">Назначить на слой</div>
+                            <button
+                                className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-xs transition-colors ${
+                                    (!data.parentId || data.parentId === 'root')
+                                        ? 'bg-[var(--accent-blue)]/30 text-white font-medium border border-[var(--accent-blue)]/50'
+                                        : 'text-gray-300 hover:bg-white/10'
+                                }`}
+                                onClick={() => handleLayerChange('root')}
+                            >
+                                <div className="icon-layout-grid text-gray-400"></div>
+                                <span>Главный холст (Root)</span>
+                            </button>
+                            {state.layers && Object.values(state.layers).map((layer) => (
+                                <button
+                                    key={layer.id}
+                                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-xs transition-colors ${
+                                        data.parentId === layer.id
+                                            ? 'bg-[var(--accent-blue)]/30 text-white font-medium border border-[var(--accent-blue)]/50'
+                                            : 'text-gray-300 hover:bg-white/10'
+                                    }`}
+                                    onClick={() => handleLayerChange(layer.id)}
+                                >
+                                    <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: layer.color || '#0284c7' }}></div>
+                                    <span className="truncate flex-1">{layer.name || layer.id}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Поповер: ГРУППА */}
+                    {activePopover === 'group' && (
+                        <div className="absolute left-2 top-8 w-56 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-lg p-3 shadow-2xl z-50 flex flex-col gap-2">
+                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Группа узла</div>
+                            <input
+                                type="text"
+                                list={`groups-${data.id}`}
+                                placeholder="Название группы..."
+                                className="input-field text-xs py-1"
+                                value={data.group || ''}
+                                onChange={(e) => handleUpdateField('group', e.target.value)}
+                            />
+                            <datalist id={`groups-${data.id}`}>
+                                {Array.from(new Set(Object.values(state.nodes || {}).map(n => n.group).filter(Boolean))).map(g => (
+                                 <option key={g} value={g} />
+                                ))}
+                            </datalist>
+                        </div>
+                    )}
+
+                    {/* Поповер: ЗНАЧОК УЗЛА */}
+                    {activePopover === 'icon' && (
+                        <div className="absolute left-2 top-8 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-lg p-3 shadow-2xl z-50 flex flex-col gap-2.5 max-h-60 overflow-y-auto no-scrollbar">
+                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Значок узла</div>
+                            <div className="grid grid-cols-5 gap-1.5">
+                                {ICON_PRESETS.map((item) => (
+                                    <button
+                                        key={item.id}
+                                        className={`h-8 rounded border flex items-center justify-center transition-all ${
+                                            data.icon === item.id
+                                                ? 'bg-[var(--accent-blue)]/30 border-[var(--accent-blue)] text-white'
+                                                : 'bg-black/30 border-white/10 text-gray-300 hover:bg-white/10 hover:text-white'
+                                        }`}
+                                        title={item.label}
+                                        onClick={() => {
+                                            handleUpdateField('icon', item.id);
+                                            setActivePopover(null);
+                                        }}
+                                    >
+                                        {item.icon ? <div className={`${item.icon} text-sm`}></div> : <span className="text-[10px] text-gray-400">∅</span>}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider pt-1 border-t border-white/10">Эмодзи</div>
+                            <div className="grid grid-cols-5 gap-1.5">
+                                {EMOJI_PRESETS.map((emoji) => (
+                                    <button
+                                        key={emoji}
+                                        className={`h-8 rounded border flex items-center justify-center text-sm transition-all ${
+                                            data.icon === emoji
+                                                ? 'bg-[var(--accent-blue)]/30 border-[var(--accent-blue)] text-white'
+                                                : 'bg-black/30 border-white/10 hover:bg-white/10'
+                                        }`}
+                                        onClick={() => {
+                                            handleUpdateField('icon', emoji);
+                                            setActivePopover(null);
+                                        }}
+                                    >
+                                        {emoji}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Тело узла с инлайн-редактированием описания (Content) */}
             <div className={`flex-1 flex flex-col overflow-hidden transition-opacity duration-300 ${zoom < 0.4 ? 'opacity-0 hidden' : 'opacity-100'}`}>
                 {data.type === 'ai-agent' ? (
                     <AIAgentNodeContent nodeId={data.id} />
                 ) : showPreview ? (
                     <NodePreview nodeId={data.id} />
                 ) : (
-                    <div className="flex-1 overflow-y-auto no-scrollbar p-2.5 flex flex-col gap-2.5 pointer-events-none z-10">
+                    <div 
+                        className={`flex-1 p-2.5 flex flex-col gap-2.5 cursor-text select-text z-10 ${data.userResized ? 'overflow-y-auto custom-scrollbar' : 'overflow-hidden'}`}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isEditingContent) {
+                                contentInitialSnapshotRef.current = { nodes: state.nodes, layers: state.layers, ports: state.ports, links: state.links };
+                                contentInitialValueRef.current = data.content || '';
+                                setIsEditingContent(true);
+                            }
+                        }}
+                    >
                         {data.mediaUrl && (
                             <img 
                                 src={data.mediaUrl} 
                                 alt="media" 
-                                className="w-full object-contain rounded border border-[#444] bg-black/50 shrink-0" 
+                                className="w-full object-contain rounded border border-[#444] bg-black/50 shrink-0 pointer-events-none" 
                                 style={{ height: data.mediaHeight || 150 }}
                                 onLoad={handleImageLoad}
                                 onError={(e) => e.target.style.display = 'none'}
                             />
                         )}
-                        {data.content && (
-                            <div className="text-sm text-gray-200 whitespace-pre-wrap break-words">
-                                {data.content}
-                            </div>
+                        {isEditingContent ? (
+                            <textarea
+                                ref={contentTextareaRef}
+                                value={tempContent}
+                                autoFocus
+                                className={`w-full flex-1 bg-black/80 text-gray-200 p-2 rounded border border-[var(--accent-blue)] text-sm outline-none resize-none font-sans break-all whitespace-pre-wrap leading-snug ${data.userResized ? 'custom-scrollbar' : 'overflow-hidden'}`}
+                                style={{ minHeight: '50px' }}
+                                placeholder="Введите описание или текст узла..."
+                                onClick={(e) => e.stopPropagation()}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onChange={(e) => {
+                                    const nextVal = e.target.value;
+                                    setTempContent(nextVal);
+                                    dispatch({
+                                        type: 'UPDATE_NODE',
+                                        payload: {
+                                            id: data.id,
+                                            updates: { content: nextVal },
+                                            skipHistory: true
+                                        }
+                                    });
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                                        setIsEditingContent(false);
+                                        if (tempContent !== contentInitialValueRef.current && contentInitialSnapshotRef.current) {
+                                            dispatch({
+                                                type: 'COMMIT_HISTORY',
+                                                payload: {
+                                                    snapshot: contentInitialSnapshotRef.current,
+                                                    logMessage: `Изменено описание узла: ${data.name || data.id}`
+                                                }
+                                            });
+                                        }
+                                    } else if (e.key === 'Escape') {
+                                        const prev = contentInitialValueRef.current;
+                                        setTempContent(prev);
+                                        dispatch({
+                                            type: 'UPDATE_NODE',
+                                            payload: {
+                                                id: data.id,
+                                                updates: { content: prev },
+                                                skipHistory: true
+                                            }
+                                        });
+                                        setIsEditingContent(false);
+                                    }
+                                }}
+                                onBlur={() => {
+                                    setIsEditingContent(false);
+                                    if (tempContent !== contentInitialValueRef.current && contentInitialSnapshotRef.current) {
+                                        dispatch({
+                                            type: 'COMMIT_HISTORY',
+                                            payload: {
+                                                snapshot: contentInitialSnapshotRef.current,
+                                                logMessage: `Изменено описание узла: ${data.name || data.id}`
+                                            }
+                                        });
+                                    }
+                                }}
+                            />
+                        ) : (
+                            data.content ? (
+                                <div className="text-sm text-gray-200 whitespace-pre-wrap break-all">
+                                    {data.content}
+                                </div>
+                            ) : (
+                                <div className="text-xs text-gray-500 italic py-1 opacity-50 hover:opacity-90 transition-opacity select-none">
+                                    Кликните, чтобы добавить описание...
+                                </div>
+                            )
                         )}
                     </div>
                 )}

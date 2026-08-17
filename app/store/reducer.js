@@ -105,7 +105,8 @@ const calculateNodeSize = (name, content, mediaUrl, mediaHeight) => {
 
     // Width scales with text length from 200 up to A4 width (794px)
     const maxA4Width = 794;
-    let w = baseW + textLength * 0.5;
+    const nameEstimatedW = safeName.length > 0 ? Math.round(safeName.length * 9.5 + 75) : 0;
+    let w = Math.max(baseW + textLength * 0.5, nameEstimatedW);
     if (w > maxA4Width) w = maxA4Width;
 
     // If there is an image, make sure width is at least 300px
@@ -113,13 +114,18 @@ const calculateNodeSize = (name, content, mediaUrl, mediaHeight) => {
         w = 300;
     }
 
+    // Calculate height needed for header if name wraps to multiple lines at this width `w`
+    const nameCharsPerLine = Math.max(10, Math.floor((w - 75) / 9.5));
+    const nameLines = estimateWrappedLines(safeName, nameCharsPerLine);
+    const headerHeight = Math.max(33, 13 + nameLines * 20);
+
     // Calculate height needed to fit text vertically at this width `w`
     // Padding-X is 10px on each side (total 20px). Using 8.5px average character width.
     const charsPerLine = Math.max(12, Math.floor((w - 20) / 8.5));
     const estimatedLines = estimateWrappedLines(safeContent, charsPerLine);
     const textMinH = estimatedLines * 20;
 
-    let h = 33 + 20; // Header (33px: py-2*2 + font-14px + border-1px + 1px запас) + Padding-Y (20px total: 10px top + 10px bottom)
+    let h = headerHeight + 20; // Dynamic header height + Padding-Y (20px total: 10px top + 10px bottom)
     if (mediaUrl) {
         h += (mediaHeight || 150);
     }
