@@ -87,7 +87,7 @@ test('getEntityDepth: точный глобальный уровень влож�
         nodeA: { id: 'nodeA', parentId: 'root' },
         nodeB: { id: 'nodeB', parentId: 'root' },
         nodeB1: { id: 'nodeB1', parentId: 'nodeB' },
-        nodeB2: { id: 'nodeB2', parentId: 'linkPBPB1' }
+        nodeB2: { id: 'nodeB2', parentId: 'nodeB1' }
     };
     const dLayers = {
         layer1: { id: 'layer1', parentId: 'nodeB' }
@@ -106,7 +106,7 @@ test('getEntityDepth: точный глобальный уровень влож�
     assert.equal(HierarchyUtils.getEntityDepth('portPB', dNodes, dLayers, dPorts, dLinks), 1);
     assert.equal(HierarchyUtils.getEntityDepth('portPB1', dNodes, dLayers, dPorts, dLinks), 1);
     assert.equal(HierarchyUtils.getEntityDepth('linkPBPB1', dNodes, dLayers, dPorts, dLinks), 1); // Link inside nodeB (level 1)
-    assert.equal(HierarchyUtils.getEntityDepth('nodeB2', dNodes, dLayers, dPorts, dLinks), 2); // Child inside linkPBPB1 (level 2)
+    assert.equal(HierarchyUtils.getEntityDepth('nodeB2', dNodes, dLayers, dPorts, dLinks), 2); // Child inside nodeB1 (level 2)
 });
 
 test('Cross-level connection detection: глубокий узел B2 отслеживает связь с родителем B', () => {
@@ -200,16 +200,6 @@ test('Inter-level link visibility: отрисовка связи происхо�
     assert.equal(vis3_xray.visible, true);
     const bothVisible_xray = vis1_xray.visible && vis3_xray.visible;
     assert.equal(bothVisible_xray, true, 'Связь отображается, когда оба уровня (и оба узла) видны на холсте');
-
-    // 3. Контекст установлен в порт pLevel1 (клик по порту с двойным контуром): оба узла (parent и connected) видны
-    const vis1_portCtx = HierarchyUtils.getVisibilityState('nLevel1', 'pLevel1', 0, 0, nodes, {}, ports, links);
-    const vis3_portCtx = HierarchyUtils.getVisibilityState('nLevel3', 'pLevel1', 0, 0, nodes, {}, ports, links);
-    assert.equal(vis1_portCtx.visible, true);
-    assert.equal(vis1_portCtx.role, 'port-parent');
-    assert.equal(vis3_portCtx.visible, true);
-    assert.equal(vis3_portCtx.role, 'port-connected');
-    const bothVisible_portCtx = vis1_portCtx.visible && vis3_portCtx.visible;
-    assert.equal(bothVisible_portCtx, true, 'Связь отображается при клике на порт с двойным контуром');
 });
 
 test('Selective per-node X-Ray: просвечивание работает избирательно для конкретного узла', () => {

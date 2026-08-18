@@ -34,7 +34,7 @@ const GeometryUtils = {
 
         const padding = 20;
         const startX = padding;
-        const startY = 90; // Отступ под шапку слоя (вернули к 90)
+        const startY = Math.max(90, (layer.fontSize ? Math.round(layer.fontSize * 2.5 + 45) : 90)); // Отступ под шапку слоя
 
         let layerW = layer.size?.w || 600;
         let layerH = layer.size?.h || 400;

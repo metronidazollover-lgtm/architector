@@ -13,10 +13,9 @@ const HierarchyUtils = {
      * @param {string} id
      * @param {Object<string, NodeEntity>} nodes
      * @param {?Object<string, LayerEntity>} layers
-     * @param {?Object<string, PortEntity>} [ports]
      * @returns {Point}
      */
-    getAbsolutePosition: (id, nodes, layers, ports = null) => {
+    getAbsolutePosition: (id, nodes, layers) => {
 
         let generation = _absCache && _absCache.get(nodes);
         if (generation && generation.layersRef === layers) {
@@ -40,23 +39,6 @@ const HierarchyUtils = {
                 current = nodes[parentId];
             } else if (layers && layers[parentId]) {
                 current = layers[parentId];
-            } else if (ports && ports[parentId]) {
-                const port = ports[parentId];
-                const ownerNode = nodes[port.nodeId];
-                if (ownerNode) {
-                    const geom = typeof window !== 'undefined' ? window.GeometryUtils : null;
-                    if (geom && geom.getPortAbsolutePosition) {
-                        const ownerAbs = HierarchyUtils.getAbsolutePosition(ownerNode.id, nodes, layers, ports);
-                        const portAbs = geom.getPortAbsolutePosition(port, ownerNode, ownerAbs);
-                        x += portAbs.x;
-                        y += portAbs.y;
-                    } else {
-                        const ownerAbs = HierarchyUtils.getAbsolutePosition(ownerNode.id, nodes, layers, ports);
-                        x += ownerAbs.x;
-                        y += ownerAbs.y;
-                    }
-                }
-                break;
             } else {
                 break;
             }
@@ -74,12 +56,11 @@ const HierarchyUtils = {
      * @param {string} newParentId
      * @param {Object<string, NodeEntity>} nodes
      * @param {?Object<string, LayerEntity>} layers
-     * @param {?Object<string, PortEntity>} [ports]
      * @returns {Point}
      */
-    toRelativePosition: (absPos, newParentId, nodes, layers, ports = null) => {
+    toRelativePosition: (absPos, newParentId, nodes, layers) => {
         if (!newParentId || newParentId === 'root') return { x: absPos.x, y: absPos.y };
-        const parentAbs = HierarchyUtils.getAbsolutePosition(newParentId, nodes, layers, ports);
+        const parentAbs = HierarchyUtils.getAbsolutePosition(newParentId, nodes, layers);
         return { x: absPos.x - parentAbs.x, y: absPos.y - parentAbs.y };
     },
 
@@ -160,12 +141,6 @@ const HierarchyUtils = {
                 } else if (safeNodes[pId]) {
                     depth++;
                     pId = safeNodes[pId].parentId;
-                } else if (safePorts[pId]) {
-                    depth++;
-                    pId = safePorts[pId].nodeId;
-                } else if (safeLinks[pId]) {
-                    depth++;
-                    pId = safeLinks[pId].context;
                 } else {
                     break;
                 }
@@ -180,14 +155,14 @@ const HierarchyUtils = {
      * Является ли candidateId потомком (или самим) ancestorId по цепочке parentId.
      * Защита от циклов при перевложении.
      */
-    isDescendantOf: (candidateId, ancestorId, nodes, layers, ports = null, links = null) => {
+    isDescendantOf: (candidateId, ancestorId, nodes, layers) => {
         if (candidateId === ancestorId) return true;
-        let current = (nodes && nodes[candidateId]) || (layers && layers[candidateId]) || (ports && ports[candidateId]) || (links && links[candidateId]);
+        let current = (nodes && nodes[candidateId]) || (layers && layers[candidateId]);
         const visited = new Set();
         while (current && !visited.has(current.id)) {
             visited.add(current.id);
             if (current.parentId === ancestorId) return true;
-            current = (nodes && nodes[current.parentId]) || (layers && layers[current.parentId]) || (ports && ports[current.parentId]) || (links && links[current.parentId]) || null;
+            current = (nodes && nodes[current.parentId]) || (layers && layers[current.parentId]) || null;
         }
         return false;
     },
@@ -252,23 +227,12 @@ HierarchyUtils.getBoundaryLinks = (contextId, nodes, layers, ports, links) => {
     return result;
 };
 
-HierarchyUtils.getBreadcrumbPath = (targetId, nodes, layers, ports, links) => {
+HierarchyUtils.getBreadcrumbPath = (targetId, nodes, layers) => {
     const breadcrumbs = [{ id: 'root', name: 'Главный холст' }];
     if (!targetId || targetId === 'root') return breadcrumbs;
 
-    let effectiveId = targetId;
-    if (ports && ports[targetId]) {
-        effectiveId = ports[targetId].nodeId;
-    } else if (links && links[targetId]) {
-        const link = links[targetId];
-        const sp = ports ? ports[link.sourcePortId] : null;
-        effectiveId = sp ? sp.nodeId : 'root';
-    }
-
-    if (!effectiveId || effectiveId === 'root') return breadcrumbs;
-
     const path = [];
-    let current = nodes[effectiveId] || (layers && layers[effectiveId]);
+    let current = nodes && nodes[targetId];
     const visited = new Set();
 
     while (current && current.id !== 'root' && !visited.has(current.id)) {
@@ -276,7 +240,7 @@ HierarchyUtils.getBreadcrumbPath = (targetId, nodes, layers, ports, links) => {
         path.unshift({ id: current.id, name: current.name || current.id });
         const parentId = current.parentId;
         if (!parentId || parentId === 'root') break;
-        current = nodes[parentId] || (layers && layers[parentId]);
+        current = (nodes && nodes[parentId]) || (layers && layers[parentId]);
     }
 
     return [...breadcrumbs, ...path];
@@ -304,11 +268,10 @@ HierarchyUtils.getRelativeDepth = (entityId, contextId, nodes, layers, ports, li
     const safeNodes = nodes || {};
     const safeLayers = layers || {};
     const safePorts = ports || {};
-    const safeLinks = (Array.isArray(links) ? links.reduce((a, l) => { if (l && l.id) a[l.id] = l; return a; }, {}) : links) || {};
 
     // Подъём от fromId к toId с подсчётом хопов.
     // Первый хоп всегда считается (сущность сама — ребёнок чего-то),
-    // промежуточные слои — прозрачны, промежуточные порты — прозрачны.
+    // промежуточные слои — прозрачны.
     const walkUp = (fromId, toId) => {
         // Порт приводим к узлу-владельцу
         let resolvedFrom = fromId;
@@ -326,13 +289,7 @@ HierarchyUtils.getRelativeDepth = (entityId, contextId, nodes, layers, ports, li
             let parentId;
             let isTransparent = false;
 
-            if (safePorts[cId]) {
-                // Порт → узел-владелец: тот же уровень
-                parentId = safePorts[cId].nodeId;
-                isTransparent = true;
-            } else if (safeLinks[cId]) {
-                parentId = safeLinks[cId].context || 'root';
-            } else if (safeLayers[cId]) {
+            if (safeLayers[cId]) {
                 parentId = (safeLayers[cId].parentId || 'root');
                 // Слой прозрачен только как промежуточный контейнер, не на первом хопе
                 isTransparent = !firstHop;
@@ -382,7 +339,7 @@ HierarchyUtils.getMaxRelativeDepths = (contextId, nodes, layers, ports, links) =
     let maxUp = 0;
     const safeNodes = nodes || {};
     const safeLayers = layers || {};
-    const isContainer = Boolean(safeNodes[contextId] || safeLayers[contextId]);
+    const isContainer = Boolean(safeNodes[contextId]);
 
     Object.values(safeNodes).forEach(n => {
         if (!n || !n.id || n.id === contextId) return;
@@ -473,34 +430,7 @@ HierarchyUtils.getVisibilityState = (entityId, currentContext, xRayDown, xRayUp,
         return { visible: true, opacity: 1, interactive: true, role: 'context', zIndex: 5, isContextNode: true, isParentOfSelected: false };
     }
 
-    // ——— 1. Родитель текущего порта-контекста ———
-    if (safePorts[currentContext] && safePorts[currentContext].nodeId === entityId) {
-        return { visible: true, opacity: 1, interactive: true, role: 'port-parent', zIndex: 5, isContextNode: true, isParentOfSelected: false };
-    }
-
-    // ——— 2. Якорь связи-контекста ———
-    if (safeLinks[currentContext]) {
-        const ctxLink = safeLinks[currentContext];
-        const sp = safePorts[ctxLink.sourcePortId];
-        const tp = safePorts[ctxLink.targetPortId];
-        if ((sp && sp.nodeId === entityId) || (tp && tp.nodeId === entityId)) {
-            return { visible: true, opacity: 1, interactive: true, role: 'link-endpoint', zIndex: 5, isContextNode: true, isParentOfSelected: false };
-        }
-    }
-
-    // ——— 3. Связанные узлы порта-контекста ———
-    if (safePorts[currentContext]) {
-        const activePort = safePorts[currentContext];
-        const isConnectedViaLink = Object.values(safeLinks).some(l =>
-            l && ((l.sourcePortId === activePort.id && safePorts[l.targetPortId] && safePorts[l.targetPortId].nodeId === entityId) ||
-                  (l.targetPortId === activePort.id && safePorts[l.sourcePortId] && safePorts[l.sourcePortId].nodeId === entityId))
-        );
-        if (isConnectedViaLink) {
-            return { visible: true, opacity: 1, interactive: true, role: 'port-connected', zIndex: 5, isContextNode: false, isParentOfSelected: false };
-        }
-    }
-
-    // ——— 4. Подсветка выделенной цепочки (сквозная) ———
+    // ——— 1. Подсветка выделенной цепочки (сквозная) ———
     const isExplicitlySelected = selectedIds.includes(entityId);
     const isConnectedToSelected = !isExplicitlySelected && selectedIds.length > 0 && (() => {
         const nodeId = safePorts[entityId] ? safePorts[entityId].nodeId : entityId;

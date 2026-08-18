@@ -40,7 +40,7 @@ function App() {
           <Canvas />
           <Toolbar />
           <Library />
-          <PropertyPanel />
+          <ContextActionBar />
         </div>
       </StoreProvider>
     );

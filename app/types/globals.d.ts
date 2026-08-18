@@ -19,11 +19,9 @@ declare function Port(props: any): any;
 declare function Canvas(props: any): any;
 declare function Toolbar(props: any): any;
 declare function Library(props: any): any;
-declare function PropertyPanel(props: any): any;
+declare function ContextActionBar(props: any): any;
 declare function AIAgentNodeContent(props: any): any;
 declare function NodePreview(props: any): any;
-
-declare function MiniMap(props: any): any;
 declare function OutlinerTreeRow(props: any): any;
 declare function OutlinerTree(props: any): any;
 

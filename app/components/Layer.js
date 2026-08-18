@@ -221,13 +221,19 @@ function Layer({ data }) {
                 className="px-4 py-3 rounded-t-xl flex flex-col justify-center text-sm cursor-move z-10 shrink-0 select-none"
                 style={{
                     backgroundColor: data.color ? `${data.color}40` : 'rgba(0,0,0,0.4)',
-                    borderBottom: `2px solid ${isSelected ? (data.color || '#444') : (data.color ? `${data.color}40` : '#333')}`
+                    borderBottom: `2px solid ${isSelected ? (data.color || '#444') : (data.color ? `${data.color}40` : '#333')}`,
+                    fontFamily: data.fontFamily || 'inherit'
                 }}
                 onMouseDown={handleMouseDown}
             >
                 <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 font-bold text-[#eee] text-base overflow-hidden">
-                        <span className="truncate">{data.name}</span>
+                        <span 
+                            className="truncate"
+                            style={{ fontSize: data.fontSize ? `${Math.max(14, Math.round(data.fontSize * 1.15))}px` : undefined }}
+                        >
+                            {data.name}
+                        </span>
                     </div>
                     <div className="flex gap-1">
                         <button 
@@ -255,7 +261,10 @@ function Layer({ data }) {
                     </div>
                 </div>
                 {data.content && (
-                    <div className="text-xs text-gray-300 mt-1 line-clamp-2 leading-tight opacity-80">
+                    <div 
+                        className="text-xs text-gray-300 mt-1 line-clamp-2 leading-tight opacity-80"
+                        style={{ fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
+                    >
                         {data.content}
                     </div>
                 )}

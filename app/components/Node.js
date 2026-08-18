@@ -379,7 +379,10 @@ function Node({ data, isContextNode, isParentOfSelected }) {
             data-file="components/Node.js"
         >
             {/* Шапка узла с инлайн-редактированием имени */}
-            <div className="px-3 py-2 border-b border-[#333] bg-black/20 rounded-t-lg flex items-start justify-between text-sm font-medium z-10 shrink-0 gap-2">
+            <div 
+                className="px-3 py-2 border-b border-[#333] bg-black/20 rounded-t-lg flex items-start justify-between text-sm font-medium z-10 shrink-0 gap-2"
+                style={{ fontFamily: data.fontFamily || 'inherit', fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
+            >
                 <div className="flex items-start gap-2 text-[#eee] flex-1 min-w-0">
                     {data.icon && (
                         data.icon.startsWith('icon-') ? (
@@ -395,7 +398,7 @@ function Node({ data, isContextNode, isParentOfSelected }) {
                             rows={1}
                             autoFocus
                             className="bg-black/90 text-white px-1.5 py-0.5 rounded border border-[var(--accent-blue)] text-sm font-medium w-full outline-none resize-none font-sans break-all whitespace-pre-wrap leading-snug custom-scrollbar overflow-hidden"
-                            style={{ minHeight: '26px' }}
+                            style={{ minHeight: '26px', fontFamily: data.fontFamily || 'inherit', fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
                             onClick={(e) => e.stopPropagation()}
                             onMouseDown={(e) => e.stopPropagation()}
                             onChange={(e) => {
@@ -453,6 +456,7 @@ function Node({ data, isContextNode, isParentOfSelected }) {
                     ) : (
                         <span 
                             className="break-all whitespace-pre-wrap leading-snug cursor-text hover:text-white hover:underline transition-colors select-none font-medium flex-1"
+                            style={{ fontFamily: data.fontFamily || 'inherit', fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
                             title="Кликните, чтобы переименовать узел"
                             onClick={(e) => {
                                 e.stopPropagation();
@@ -869,7 +873,7 @@ function Node({ data, isContextNode, isParentOfSelected }) {
                                 value={tempContent}
                                 autoFocus
                                 className={`w-full flex-1 bg-black/80 text-gray-200 p-2 rounded border border-[var(--accent-blue)] text-sm outline-none resize-none font-sans break-all whitespace-pre-wrap leading-snug ${data.userResized ? 'custom-scrollbar' : 'overflow-hidden'}`}
-                                style={{ minHeight: '50px' }}
+                                style={{ minHeight: '50px', fontFamily: data.fontFamily || 'inherit', fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
                                 placeholder="Введите описание или текст узла..."
                                 onClick={(e) => e.stopPropagation()}
                                 onMouseDown={(e) => e.stopPropagation()}
@@ -926,7 +930,10 @@ function Node({ data, isContextNode, isParentOfSelected }) {
                             />
                         ) : (
                             data.content ? (
-                                <div className="text-sm text-gray-200 whitespace-pre-wrap break-all">
+                                <div 
+                                    className="text-sm text-gray-200 whitespace-pre-wrap break-all leading-snug"
+                                    style={{ fontFamily: data.fontFamily || 'inherit', fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
+                                >
                                     {data.content}
                                 </div>
                             ) : (

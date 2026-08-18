@@ -43,11 +43,16 @@ test('DIVE_INTO: сохраняет камеру покидаемого конт
     assert.deepEqual(s1.selectedIds, []);
 });
 
-test('DIVE_INTO: порт перенаправляет контекст в узел-владелец', () => {
+test('DIVE_INTO: игнорирует попытку погружения в порты, слои и связи', () => {
     const s0 = makeState();
-    const s1 = reducer(s0, { type: 'DIVE_INTO', payload: { id: 'portB', name: 'Порт: output' } });
-    assert.equal(s1.currentContext, 'nodeB');
-    assert.deepEqual(s1.breadcrumbs.map(b => b.id), ['root', 'nodeA', 'nodeB']);
+    const sPort = reducer(s0, { type: 'DIVE_INTO', payload: { id: 'portB', name: 'Порт: output' } });
+    assert.equal(sPort.currentContext, 'root');
+
+    const sLayer = reducer(s0, { type: 'DIVE_INTO', payload: { id: 'layerL', name: 'Layer' } });
+    assert.equal(sLayer.currentContext, 'root');
+
+    const sLink = reducer(s0, { type: 'DIVE_INTO', payload: { id: 'linkBC', name: 'Link' } });
+    assert.equal(sLink.currentContext, 'root');
 });
 
 
@@ -178,9 +183,9 @@ test('DIVE_INTO с keepCamera не трогает камеру', () => {
 
 
 
-// === GO_TO_CONTEXT: поддержка layers/ports/links ===
+// === GO_TO_CONTEXT: поддержка nodes и root ===
 
-test('GO_TO_CONTEXT строит путь через layers (не только nodes)', () => {
+test('GO_TO_CONTEXT строит путь для узлов внутри слоев', () => {
     let s = makeState();
     // nodeD.parentId = 'layerL', layerL.parentId = 'root'
     // GO_TO_CONTEXT на nodeD должен найти путь
@@ -192,25 +197,13 @@ test('GO_TO_CONTEXT строит путь через layers (не только n
     assert.ok(ids.includes('nodeD'), 'nodeD должен быть в breadcrumbs');
 });
 
-test('GO_TO_CONTEXT на порт строит путь через node-владелец', () => {
+test('GO_TO_CONTEXT игнорирует вызовы на порт или связь', () => {
     let s = makeState();
-    // portB.nodeId = 'nodeB', nodeB.parentId = 'nodeA'
-    s = reducer(s, { type: 'GO_TO_CONTEXT', payload: 'portB' });
-    assert.equal(s.currentContext, 'nodeB');
-    const ids = s.breadcrumbs.map(b => b.id);
-    assert.ok(ids.includes('root'), 'root должен быть');
-    assert.ok(ids.includes('nodeA'), 'nodeA должен быть (предок nodeB)');
-    assert.ok(ids.includes('nodeB'), 'nodeB должен быть (владелец порта)');
-});
+    const sPort = reducer(s, { type: 'GO_TO_CONTEXT', payload: 'portB' });
+    assert.equal(sPort.currentContext, 'root');
 
-test('GO_TO_CONTEXT на связь строит путь через source-узел', () => {
-    let s = makeState();
-    // linkBC.sourcePortId = 'portB' → nodeB.parentId = 'nodeA'
-    s = reducer(s, { type: 'GO_TO_CONTEXT', payload: 'linkBC' });
-    assert.equal(s.currentContext, 'nodeB');
-    const ids = s.breadcrumbs.map(b => b.id);
-    assert.ok(ids.includes('root'), 'root должен быть');
-    assert.ok(ids.includes('nodeB'), 'nodeB должен быть');
+    const sLink = reducer(s, { type: 'GO_TO_CONTEXT', payload: 'linkBC' });
+    assert.equal(sLink.currentContext, 'root');
 });
 
 test('Auto-sizing: empty/short text nodes and long text nodes aspect ratio', () => {
@@ -481,8 +474,10 @@ test('LOAD_STATE: отдельные ноды автоматически ото�
     const layer = s1.layers.L1;
 
     const gap = 30;
-    const overlapX = nOutside.position.x < layer.position.x + layer.size.w + gap && nOutside.position.x + 200 + gap > layer.position.x;
-    const overlapY = nOutside.position.y < layer.position.y + layer.size.h + gap && nOutside.position.y + 100 + gap > layer.position.y;
+    const nW = (nOutside.size && nOutside.size.w) || 200;
+    const nH = (nOutside.size && nOutside.size.h) || 80;
+    const overlapX = nOutside.position.x < layer.position.x + layer.size.w + gap && nOutside.position.x + nW + gap > layer.position.x;
+    const overlapY = nOutside.position.y < layer.position.y + layer.size.h + gap && nOutside.position.y + nH + gap > layer.position.y;
 
     assert.ok(!(overlapX && overlapY), `Свободная нода должна быть вне зоны слоя + 30px: ${JSON.stringify(nOutside.position)}`);
 });
@@ -733,7 +728,7 @@ test('LOAD_STATE: demo_project.json проходит валидацию и ко�
 });
 
 test('SET_XRAY_LEVEL: единая установка уровня просвечивания xRayDown и xRayUp без выбивания контекста', () => {
-    let s = reducer(defaultState, { type: 'SET_XRAY_LEVEL', payload: 2 });
+    let s = reducer(makeState(), { type: 'SET_XRAY_LEVEL', payload: 2 });
     assert.equal(s.ui.xRayDown, 2);
     assert.equal(s.ui.xRayUp, 2);
 
@@ -779,6 +774,62 @@ test('SET_NODE_XRAY_DOWN / SET_NODE_XRAY_UP: динамический приор
     // 4. Проверка синхронизации видимой глубины getEffectiveNodeXRay для кнопки nodeA1
     const effA1 = H.getEffectiveNodeXRay('nodeA1', 'root', 0, 0, s.nodes, s.layers, s.ports, s.links, s.ui.xRayNodes);
     assert.equal(effA1.down, 2, 'nodeA1 подсвечивается с актуальной унаследованной глубиной');
+});
+
+// === ТИПОГРАФИКА: Индивидуальное и массовое назначение шрифтов и размеров ===
+
+test('Typography: индивидуальная установка fontFamily и fontSize для всех типов сущностей', () => {
+    let s = makeState();
+    
+    // 1. Узел
+    s = reducer(s, { type: 'UPDATE_NODE', payload: { id: 'nodeA', updates: { fontFamily: 'Montserrat, sans-serif', fontSize: 18 } } });
+    assert.equal(s.nodes.nodeA.fontFamily, 'Montserrat, sans-serif');
+    assert.equal(s.nodes.nodeA.fontSize, 18);
+
+    // 2. Слой
+    s = reducer(s, { type: 'UPDATE_LAYER', payload: { id: 'layerL', updates: { fontFamily: 'Fira Code, monospace', fontSize: 16 } } });
+    assert.equal(s.layers.layerL.fontFamily, 'Fira Code, monospace');
+    assert.equal(s.layers.layerL.fontSize, 16);
+
+    // 3. Порт
+    s = reducer(s, { type: 'UPDATE_PORT', payload: { id: 'portB', updates: { fontFamily: 'Roboto, sans-serif', fontSize: 12 } } });
+    assert.equal(s.ports.portB.fontFamily, 'Roboto, sans-serif');
+    assert.equal(s.ports.portB.fontSize, 12);
+
+    // 4. Связь
+    s = reducer(s, { type: 'UPDATE_LINK', payload: { id: 'linkBC', updates: { fontFamily: 'JetBrains Mono, monospace', fontSize: 14 } } });
+    assert.equal(s.links.linkBC.fontFamily, 'JetBrains Mono, monospace');
+    assert.equal(s.links.linkBC.fontSize, 14);
+});
+
+test('Typography: MASS_UPDATE применяет шрифт и размер ко всем выбранным сущностям без создания жестких связей', () => {
+    let s = makeState();
+    
+    // Массово применяем шрифт и размер к nodeA, layerL, portB, linkBC
+    s = reducer(s, { 
+        type: 'MASS_UPDATE', 
+        payload: { 
+            ids: ['nodeA', 'layerL', 'portB', 'linkBC'], 
+            updates: { fontFamily: 'Playfair Display, serif', fontSize: 20 } 
+        } 
+    });
+
+    assert.equal(s.nodes.nodeA.fontFamily, 'Playfair Display, serif');
+    assert.equal(s.nodes.nodeA.fontSize, 20);
+    assert.equal(s.layers.layerL.fontFamily, 'Playfair Display, serif');
+    assert.equal(s.layers.layerL.fontSize, 20);
+    assert.equal(s.ports.portB.fontFamily, 'Playfair Display, serif');
+    assert.equal(s.ports.portB.fontSize, 20);
+    assert.equal(s.links.linkBC.fontFamily, 'Playfair Display, serif');
+    assert.equal(s.links.linkBC.fontSize, 20);
+
+    // Последующее ручное изменение на nodeA меняет только nodeA (приоритет индивидуального редактирования)
+    s = reducer(s, { type: 'UPDATE_NODE', payload: { id: 'nodeA', updates: { fontFamily: 'Courier New, monospace', fontSize: 12 } } });
+    assert.equal(s.nodes.nodeA.fontFamily, 'Courier New, monospace');
+    assert.equal(s.nodes.nodeA.fontSize, 12);
+    // Остальные сущности сохранили свои значения
+    assert.equal(s.layers.layerL.fontFamily, 'Playfair Display, serif');
+    assert.equal(s.layers.layerL.fontSize, 20);
 });
 
 

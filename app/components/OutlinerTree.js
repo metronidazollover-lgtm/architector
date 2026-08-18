@@ -28,7 +28,7 @@ function OutlinerTreeRow({ entity, depth, ctx, visited = new Set() }) {
                 onClick={() => onSelect(entity.id)}
                 onDoubleClick={(e) => {
                     e.stopPropagation();
-                    if (state.nodes[entity.id] || (state.layers && state.layers[entity.id])) {
+                    if (state.nodes[entity.id]) {
                         dispatch({ type: 'DIVE_INTO', payload: { id: entity.id, name: entity.name } });
                     } else {
                         dispatch({ type: 'SET_SELECTED', payload: entity.id });
@@ -85,13 +85,6 @@ function OutlinerTree({ onSelect }) {
     const H = window.HierarchyUtils;
 
     const childrenOf = (parentId) => {
-        const isPort = !!(state.ports && state.ports[parentId]);
-        if (isPort) {
-            return [
-                ...Object.values(state.layers || {}).filter(l => l && l.parentId === parentId),
-                ...Object.values(state.nodes).filter(n => n && n.parentId === parentId)
-            ];
-        }
         const isNode = !!(state.nodes && state.nodes[parentId]);
         const nodePorts = isNode ? Object.values(state.ports || {}).filter(p => p && p.nodeId === parentId) : [];
         return [

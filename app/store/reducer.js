@@ -94,19 +94,21 @@ const estimateWrappedLines = (text, charsPerLine) => {
     return totalLines;
 };
 
-const calculateNodeSize = (name, content, mediaUrl, mediaHeight) => {
+const calculateNodeSize = (name, content, mediaUrl, mediaHeight, fontSize, fontFamily) => {
     const safeName = name || '';
     const safeContent = content || '';
     const textLength = safeName.length + safeContent.length;
+    const fSize = fontSize || 14;
 
     // Base dimensions for empty node
     const baseW = 200;
-    const baseH = 100;
+    const baseH = Math.max(70, Math.round(fSize * 2.5 + 40));
 
     // Width scales with text length from 200 up to A4 width (794px)
     const maxA4Width = 794;
-    const nameEstimatedW = safeName.length > 0 ? Math.round(safeName.length * 9.5 + 75) : 0;
-    let w = Math.max(baseW + textLength * 0.5, nameEstimatedW);
+    const nameCharW = (fSize / 14) * 9.5;
+    const nameEstimatedW = safeName.length > 0 ? Math.round(safeName.length * nameCharW + 75) : 0;
+    let w = Math.max(baseW + textLength * 0.5 * (fSize / 14), nameEstimatedW);
     if (w > maxA4Width) w = maxA4Width;
 
     // If there is an image, make sure width is at least 300px
@@ -115,15 +117,17 @@ const calculateNodeSize = (name, content, mediaUrl, mediaHeight) => {
     }
 
     // Calculate height needed for header if name wraps to multiple lines at this width `w`
-    const nameCharsPerLine = Math.max(10, Math.floor((w - 75) / 9.5));
+    const nameCharsPerLine = Math.max(8, Math.floor((w - 75) / nameCharW));
     const nameLines = estimateWrappedLines(safeName, nameCharsPerLine);
-    const headerHeight = Math.max(33, 13 + nameLines * 20);
+    const nameLineHeight = Math.round(fSize * 1.35);
+    const headerHeight = Math.max(Math.round(fSize * 1.4 + 14), 12 + nameLines * nameLineHeight);
 
     // Calculate height needed to fit text vertically at this width `w`
-    // Padding-X is 10px on each side (total 20px). Using 8.5px average character width.
-    const charsPerLine = Math.max(12, Math.floor((w - 20) / 8.5));
+    // Padding-X is 10px on each side (total 20px). Using scaled average character width.
+    const bodyCharW = (fSize / 14) * 7.8;
+    const charsPerLine = Math.max(8, Math.floor((w - 20) / bodyCharW));
     const estimatedLines = estimateWrappedLines(safeContent, charsPerLine);
-    const textMinH = estimatedLines * 20;
+    const textMinH = estimatedLines * nameLineHeight;
 
     let h = headerHeight + 20; // Dynamic header height + Padding-Y (20px total: 10px top + 10px bottom)
     if (mediaUrl) {
@@ -136,8 +140,13 @@ const calculateNodeSize = (name, content, mediaUrl, mediaHeight) => {
         h += 10; // Gap (10px)
     }
 
-    // Apply minimum height constraint
-    if (h < baseH) h = baseH;
+    // Apply minimum height constraint for empty nodes
+    if (!safeContent && !mediaUrl && h < baseH) {
+        h = baseH;
+    }
+    if (h < 53) {
+        h = 53;
+    }
 
     return {
         w: Math.round(w),
@@ -319,10 +328,7 @@ const pushNavEntry = (state) => {
 
 const contextExists = (state, id) =>
     id === 'root' ||
-    !!state.nodes[id] ||
-    !!state.ports[id] ||
-    !!(state.layers && state.layers[id]) ||
-    !!(state.links && state.links[id]);
+    !!(state.nodes && state.nodes[id]);
 
 const reducer = (state, action) => {
     switch (action.type) {
@@ -336,7 +342,7 @@ const reducer = (state, action) => {
                 const node = nodes[id];
                 if (node) {
                     const size = node.type !== 'ai-agent'
-                        ? calculateNodeSize(node.name, node.content, node.mediaUrl, node.mediaHeight)
+                        ? calculateNodeSize(node.name, node.content, node.mediaUrl, node.mediaHeight, node.fontSize, node.fontFamily)
                         : node.size;
                     nodes[id] = {
                         ...node,
@@ -494,7 +500,7 @@ const reducer = (state, action) => {
             
             const nodeData = { ...action.payload, id, parentId, snapToGrid: true };
             if (nodeData.type !== 'ai-agent') {
-                nodeData.size = calculateNodeSize(nodeData.name, nodeData.content, nodeData.mediaUrl, nodeData.mediaHeight);
+                nodeData.size = calculateNodeSize(nodeData.name, nodeData.content, nodeData.mediaUrl, nodeData.mediaHeight, nodeData.fontSize, nodeData.fontFamily);
             } else if (!nodeData.size) {
                 nodeData.size = { w: 380, h: 480 };
             }
@@ -535,12 +541,12 @@ const reducer = (state, action) => {
             const updatedNode = { ...oldNode, ...updates };
             
             // Контентные поля, при изменении которых size пересчитывается заново (userResized сбрасывается)
-            const isContentChange = 'content' in updates || 'mediaUrl' in updates || 'mediaHeight' in updates;
+            const isContentChange = 'content' in updates || 'mediaUrl' in updates || 'mediaHeight' in updates || 'fontSize' in updates;
             // Косметические поля (name, color и т.д.) — не сбрасывают userResized
-            const isSizeRelevant = isContentChange || 'name' in updates;
+            const isSizeRelevant = isContentChange || 'name' in updates || 'fontFamily' in updates;
             
             if (updatedNode.type !== 'ai-agent' && isSizeRelevant) {
-                const autoSize = calculateNodeSize(updatedNode.name, updatedNode.content, updatedNode.mediaUrl, updatedNode.mediaHeight);
+                const autoSize = calculateNodeSize(updatedNode.name, updatedNode.content, updatedNode.mediaUrl, updatedNode.mediaHeight, updatedNode.fontSize, updatedNode.fontFamily);
                 
                 if (isContentChange) {
                     // Контент изменился — полный пересчёт, сброс ручного размера
@@ -632,27 +638,9 @@ const reducer = (state, action) => {
             };
         }
         case 'DIVE_INTO': {
-            let { id, name } = action.payload || {};
-            if (!id) return state;
-
-            // Разрешено погружаться только в узел или слой.
-            // Если пытаемся погрузиться в порт или связь — они не являются контейнерами,
-            // поэтому проваливаемся в их узел-владелец или контекст связи.
-            if (state.ports && state.ports[id]) {
-                id = state.ports[id].nodeId;
-                name = state.nodes[id] ? state.nodes[id].name : name;
-            } else if (state.links && state.links[id]) {
-                const link = state.links[id];
-                const sp = state.ports ? state.ports[link.sourcePortId] : null;
-                if (sp && sp.nodeId) {
-                    id = sp.nodeId;
-                    name = state.nodes[id] ? state.nodes[id].name : name;
-                } else {
-                    id = link.context || 'root';
-                }
-            }
-
-            if (!id || state.currentContext === id) return state;
+            const { id } = action.payload || {};
+            // Разрешено погружаться только в существующие узлы
+            if (!id || !state.nodes || !state.nodes[id] || state.currentContext === id) return state;
             
             // Расчет фокуса камеры
             let targetZoom = 1;
@@ -661,41 +649,39 @@ const reducer = (state, action) => {
             const padding = 100;
             const { w: screenW, h: screenH } = getScreenSize();
 
-            if (state.nodes[id]) {
-                const node = state.nodes[id];
-                const nodeAbs = getHierarchy().getAbsolutePosition(id, state.nodes, state.layers);
-                const nx = nodeAbs.x;
-                const ny = nodeAbs.y;
+            const node = state.nodes[id];
+            const nodeAbs = getHierarchy().getAbsolutePosition(id, state.nodes, state.layers);
+            const nx = nodeAbs.x;
+            const ny = nodeAbs.y;
 
-                // Рассчитываем Bounding Box для самого узла и всех его прямых детей
-                let minX = nx;
-                let minY = ny;
-                let maxX = nx + (node.size?.w || 200);
-                let maxY = ny + (node.size?.h || 100);
+            // Рассчитываем Bounding Box для самого узла и всех его прямых детей
+            let minX = nx;
+            let minY = ny;
+            let maxX = nx + (node.size?.w || 200);
+            let maxY = ny + (node.size?.h || 100);
 
-                Object.values(state.nodes).forEach(child => {
-                    if (child.parentId === id) {
-                        // Дети хранят относительные координаты: мировые = позиция узла + смещение
-                        const cx = nx + (child.position?.x || 0);
-                        const cy = ny + (child.position?.y || 0);
-                        minX = Math.min(minX, cx);
-                        minY = Math.min(minY, cy);
-                        maxX = Math.max(maxX, cx + (child.size?.w || 200));
-                        maxY = Math.max(maxY, cy + (child.size?.h || 100));
-                    }
-                });
+            Object.values(state.nodes).forEach(child => {
+                if (child.parentId === id) {
+                    // Дети хранят относительные координаты: мировые = позиция узла + смещение
+                    const cx = nx + (child.position?.x || 0);
+                    const cy = ny + (child.position?.y || 0);
+                    minX = Math.min(minX, cx);
+                    minY = Math.min(minY, cy);
+                    maxX = Math.max(maxX, cx + (child.size?.w || 200));
+                    maxY = Math.max(maxY, cy + (child.size?.h || 100));
+                }
+            });
 
-                const totalW = maxX - minX;
-                const totalH = maxY - minY;
-                const centerX = minX + totalW / 2;
-                const centerY = minY + totalH / 2;
+            const totalW = maxX - minX;
+            const totalH = maxY - minY;
+            const centerX = minX + totalW / 2;
+            const centerY = minY + totalH / 2;
 
-                const scaleX = (screenW - padding * 2) / totalW;
-                const scaleY = (screenH - padding * 2) / totalH;
-                targetZoom = Math.min(scaleX, scaleY, 1.2);
-                targetOffsetX = (screenW / 2) - centerX * targetZoom;
-                targetOffsetY = (screenH / 2) - centerY * targetZoom;
-            }
+            const scaleX = (screenW - padding * 2) / totalW;
+            const scaleY = (screenH - padding * 2) / totalH;
+            targetZoom = Math.min(scaleX, scaleY, 1.2);
+            targetOffsetX = (screenW / 2) - centerX * targetZoom;
+            targetOffsetY = (screenH / 2) - centerY * targetZoom;
 
             // Проверяем, есть ли у целевого контекста дети
             const hasChildren = Object.values(state.nodes).some(n => n && n.parentId === id) ||
@@ -706,7 +692,7 @@ const reducer = (state, action) => {
                 ? state.canvas
                 : (savedCamera || { offset: { x: targetOffsetX, y: targetOffsetY }, zoom: targetZoom });
 
-            const newBreadcrumbs = getHierarchy().getBreadcrumbPath(id, state.nodes, state.layers, state.ports, state.links);
+            const newBreadcrumbs = getHierarchy().getBreadcrumbPath(id, state.nodes, state.layers);
 
             return {
                 ...state,
@@ -783,20 +769,12 @@ const reducer = (state, action) => {
             };
         }
         case 'GO_TO_CONTEXT': {
-            let targetId = action.payload;
+            const targetId = action.payload;
             if (!targetId) return state;
-
-            if (state.ports && state.ports[targetId]) {
-                targetId = state.ports[targetId].nodeId;
-            } else if (state.links && state.links[targetId]) {
-                const link = state.links[targetId];
-                const sp = state.ports ? state.ports[link.sourcePortId] : null;
-                targetId = sp ? sp.nodeId : (link.context || 'root');
-            }
-
+            if (targetId !== 'root' && (!state.nodes || !state.nodes[targetId])) return state;
             if (state.currentContext === targetId) return state;
 
-            const breadcrumbs = getHierarchy().getBreadcrumbPath(targetId, state.nodes, state.layers, state.ports, state.links);
+            const breadcrumbs = getHierarchy().getBreadcrumbPath(targetId, state.nodes, state.layers);
 
             return {
                 ...state,
@@ -1252,7 +1230,13 @@ const reducer = (state, action) => {
 
             ids.forEach(id => {
                 const specificUpdates = updatesById && updatesById[id] ? updatesById[id] : updates;
-                if (newNodes[id]) newNodes[id] = { ...newNodes[id], ...specificUpdates };
+                if (newNodes[id]) {
+                    const updatedNode = { ...newNodes[id], ...specificUpdates };
+                    if (updatedNode.type !== 'ai-agent' && (specificUpdates.fontSize || specificUpdates.content || specificUpdates.name)) {
+                        updatedNode.size = calculateNodeSize(updatedNode.name, updatedNode.content, updatedNode.mediaUrl, updatedNode.mediaHeight, updatedNode.fontSize, updatedNode.fontFamily);
+                    }
+                    newNodes[id] = updatedNode;
+                }
                 else if (newLayers[id]) newLayers[id] = { ...newLayers[id], ...specificUpdates };
                 else if (newPorts[id]) newPorts[id] = { ...newPorts[id], ...specificUpdates };
                 else if (newLinks[id]) newLinks[id] = { ...newLinks[id], ...specificUpdates };

@@ -46,9 +46,8 @@ architector-main/
 │   │   ├── Layer.js               # Отрисовка слоя, группировка нод, предотвращение перекрытий
 │   │   ├── Port.js                # Точки привязки связей на гранях нод
 │   │   ├── Link.js                # Отрисовка связей (Bezier и Orthogonal)
-│   │   ├── MiniMap.js             # Миникарта пространства текущего контекста (drag-панорама, вьюпорт)
 │   │   ├── NodePreview.js         # Компонент превью контента ноды при семантическом масштабировании
-│   │   ├── PropertyPanel.js       # Правая панель свойств (одиночное и массовое выделение)
+│   │   ├── ContextActionBar.js    # Верхняя контекстная панель свойств (Узлы, Слои, Порты, Связи, Массовое)
 │   │   ├── Toolbar.js             # Левая панель инструментов (добавление, выравнивание, экспорт/импорт, динамический сдвиг)
 │   │   ├── Library.js             # Левый обозреватель проекта (3 главные вкладки: Объекты, Уровни, История; дерево и иерархия)
 │   │   ├── OutlinerTree.js        # Иерархическое дерево узлов и слоев (Drag & Drop перевложение)
@@ -74,9 +73,9 @@ architector-main/
 ## 📐 Модель данных v10 и Инварианты
 
 1. **Формат сохранения (`formatVersion: 10`):**
-   * Все координаты `position` у нод и слоев считаются **относительными** к верхнему левому углу родительского элемента (`parentId`). Родительским элементом может выступать слой, нода или порт (`ports[parentId]`).
+   * Все координаты `position` у нод и слоев считаются **относительными** к верхнему левому углу родительского элемента (`parentId`). Родительским элементом может выступать слой или нода.
    * Если `parentId === 'root'`, координаты совпадают с мировыми координатами холста.
-   * Мировые координаты вычисляются динамически вызовом `HierarchyUtils.getAbsolutePosition(id, nodes, layers, ports)`.
+   * Мировые координаты вычисляются динамически вызовом `HierarchyUtils.getAbsolutePosition(id, nodes, layers)`.
 
 2. **Ключи словарей:**
    * В объектах `nodes`, `layers`, `ports`, `links` ключ в словаре **ОБЯЗАТЕЛЬНО** совпадает с `entity.id` (например, `nodes["node-1"].id === "node-1"`).
@@ -136,6 +135,8 @@ architector-main/
 * `name` *(string, обязательный)*: заголовок слоя.
 * `content` *(string)*: краткое описание назначения слоя.
 * `color` *(string)*: HEX-цвет границы и фона шапки (например `"#0284c7"`).
+* `fontFamily` *(string, опционально)*: гарнитура шрифта (например `"Montserrat, sans-serif"`).
+* `fontSize` *(number, опционально)*: размер шрифта заголовка (11..24, по умолчанию 14).
 * `position` *({x: number, y: number}, обязательный)*: относительно родителя.
 * `size` *({w: number, h: number}, обязательный)*: размеры (рекомендуется от 500x400px).
 * `parentId` *(string)*: ID родительского контейнера (по умолчанию `"root"`).
@@ -147,11 +148,14 @@ architector-main/
 * `name` *(string, обязательный)*: название узла.
 * `content` *(string)*: текстовое или маркдаун описание.
 * `color` *(string)*: HEX-цвет фона шапки узла.
+* `fontFamily` *(string, опционально)*: гарнитура шрифта (например `"Fira Code, monospace"`).
+* `fontSize` *(number, опционально)*: кегль шрифта (11..24, по умолчанию 14, динамически масштабирует шапку и узел).
 * `position` *({x: number, y: number}, обязательный)*: координаты относительны родителя.
 * `size` *({w: number, h: number}, обязательный)*: габариты (автоподстройка по умолчанию, базовая ширина 220-300px).
-* `parentId` *(string)*: ID родительского контейнера (`"root"`, ID слоя, ID узла, ID порта или ID связи).
+* `parentId` *(string)*: ID родительского контейнера (`"root"`, ID слоя или ID узла).
 * `shape` *(string)*: форма узла — `"rectangle"` (по умолчанию), `"circle"`, `"hexagon"`, `"diamond"`.
 * `type` *(string)*: `"default"` (обычный) или `"ai-agent"` (интерактивный ИИ-копилот).
+* `icon` *(string, опционально)*: иконка Lucide (`"icon-box"`, `"icon-bot"`) или эмодзи (`"🤖"`).
 * `mediaUrl` *(string, опционально)*: URL картинки для медиа-карточки.
 * `mediaHeight` *(number, опционально)*: высота картинки в пикселях (например `80`).
 
@@ -163,6 +167,9 @@ architector-main/
 * `edge` *(string)*: грань узла — `"left"`, `"right"`, `"top"`, `"bottom"`.
 * `position` *(number 0.0..1.0)*: смещение вдоль грани (0.5 = середина).
 * `name` *(string)*: подпись порта.
+* `content` *(string, опционально)*: описание передаваемых данных порта.
+* `fontFamily` *(string, опционально)*: гарнитура шрифта.
+* `fontSize` *(number, опционально)*: размер шрифта (по умолчанию 12).
 * `color` *(string)*: HEX-цвет точки привязки.
 
 #### ⚡ Связи (`link`)
@@ -171,7 +178,10 @@ architector-main/
 * `sourcePortId` *(string, обязательный)*: ID порта-источника.
 * `targetPortId` *(string, обязательный)*: ID порта-приемника.
 * `name` *(string)*: подпись связи (например `"HTTP Dispatch"`).
+* `content` *(string, опционально)*: описание назначения связи.
 * `linkStyle` *(string)*: `"orthogonal"` (прямые углы) или `"bezier"` (плавная кривая).
+* `fontFamily` *(string, опционально)*: гарнитура шрифта.
+* `fontSize` *(number, опционально)*: размер шрифта (по умолчанию 12).
 * `color` *(string)*: HEX-цвет линии.
 * `context` *(string)*: контекст отображения (обычно совпадает со слоем или `"root"`).
 
@@ -180,7 +190,7 @@ architector-main/
 ### 3. Математика относительных координат (v10)
 
 1. **Если `parentId === 'root'`:** Координаты `position` задаются в абсолютной мировой системе координат (например `{x: -400, y: -250}`).
-2. **Если `parentId !== 'root'` (внутри Слоя, Узла, Порта или Связи):** Координаты `position` **ОБЯЗАТЕЛЬНО считаются от левого верхнего угла родителя `(0, 0)`**.
+2. **Если `parentId !== 'root'` (внутри Слоя или Узла):** Координаты `position` **ОБЯЗАТЕЛЬНО считаются от левого верхнего угла родителя `(0, 0)`**.
    * Безопасный внутренний диапазон для слоев шириной 600px и высотой 400px: `x: 30..350`, `y: 80..280`.
 
 ---
@@ -189,30 +199,34 @@ architector-main/
 
 | Экшен | Payload | Описание |
 |---|---|---|
-| `ADD_LAYER` | `{ id, name, content, color, position, size, parentId }` | Добавить новый слой-фрейм |
-| `ADD_NODE` | `{ id, name, content, color, position, size, parentId, shape: "rectangle", type, mediaUrl, mediaHeight }` | Добавить прямоугольный узел |
-| `ADD_PORT` | `{ id, nodeId, type, edge, position, name, color }` | Добавить порт на грань узла |
-| `ADD_LINK` | `{ id, sourcePortId, targetPortId, name, linkStyle, color, context }` | Создать связь между портами |
-| `UPDATE_NODE` | `{ id, updates: { name, content, color, mediaUrl } }` | Обновить свойства узла |
-| `UPDATE_LAYER` | `{ id, updates: { name, content, color, size } }` | Обновить параметры слоя |
-| `UPDATE_PORT` | `{ id, updates: { name, color, edge, position } }` | Переместить или переименовать порт |
-| `UPDATE_LINK` | `{ id, updates: { name, color, linkStyle } }` | Изменить стиль/цвет связи |
+| `ADD_LAYER` | `{ id, name, content, color, position, size, parentId, fontFamily?, fontSize? }` | Добавить новый слой-фрейм |
+| `ADD_NODE` | `{ id, name, content, color, position, size, parentId, shape: "rectangle", type, mediaUrl, mediaHeight, icon?, fontFamily?, fontSize? }` | Добавить прямоугольный узел |
+| `ADD_PORT` | `{ id, nodeId, type, edge, position, name, color, content?, fontFamily?, fontSize? }` | Добавить порт на грань узла |
+| `ADD_LINK` | `{ id, sourcePortId, targetPortId, name, linkStyle, color, context, content?, fontFamily?, fontSize? }` | Создать связь между портами |
+| `UPDATE_NODE` | `{ id, updates: { name, content, color, mediaUrl, icon, fontFamily, fontSize } }` | Обновить свойства узла |
+| `UPDATE_LAYER` | `{ id, updates: { name, content, color, size, fontFamily, fontSize } }` | Обновить параметры слоя |
+| `UPDATE_PORT` | `{ id, updates: { name, color, edge, position, content, fontFamily, fontSize } }` | Переместить, переименовать порт или настроить шрифт |
+| `UPDATE_LINK` | `{ id, updates: { name, color, linkStyle, content, fontFamily, fontSize } }` | Изменить стиль, цвет, описание или шрифт связи |
 | `REPARENT_ENTITY` | `{ id, newParentId }` | Перенести элемент в другой контейнер без сдвига в мире |
 | `DELETE_SELECTED` | `{ ids: string[] }` | Удалить выделенные элементы |
 | `ALIGN_LAYERS` | `{ contextId }` | Автоматически выровнять слои в контексте |
-| `DIVE_INTO` | `{ id, name }` | Погрузить камеру пользователя внутрь узла, слоя, порта или связи |
+| `DIVE_INTO` | `{ id, name }` | Погрузить камеру пользователя внутрь узла |
+| `NAVIGATE_TO` | `contextId` или `{ id, name }` | Перейти к контексту графа (с восстановлением камеры) |
 | `GO_TO_CONTEXT` | `targetId` | Переместить камеру к указанному контексту графа |
 | `NAV_BACK` / `NAV_FORWARD` | `{}` | Переход по истории навигации пользователя |
+| `CENTER_ON_ENTITY` | `id` | Сфокусировать и центрировать камеру на элементе |
+| `SET_XRAY_LEVEL` | `{ down: number, up: number }` | Задать глобальный уровень рентгена вглубь/наверх |
+| `SET_NODE_XRAY_DOWN` / `SET_NODE_XRAY_UP` | `{ nodeId: string, delta?: number, value?: number }` | Управлять избирательным рентгеном узла |
 | `REMOVE_NODE` | `nodeId` | Прицельно удалить конкретный узел с его портами |
 | `REMOVE_LAYER` | `layerId` | Прицельно удалить слой без потери детей |
 | `REMOVE_PORT` / `REMOVE_LINK` | `id` | Прицельно удалить конкретный порт или конкретную связь |
-| `MASS_UPDATE` | `{ ids: string[], updatesById: {} }` | Массово обновить свойства группы элементов |
+| `MASS_UPDATE` | `{ ids: string[], updates?: {}, updatesById?: {} }` | Массово обновить свойства группы элементов (цвет, шрифт, размер, сетка) |
 
 ---
 
 ### 5. Пример сгенерированного 3-уровневого графа (JSON Protocol)
 
-Пример генерации слоев 1-го уровня, узлов 2-го уровня, портов и **вложенного контейнера в контексте порта (3-й уровень)**:
+Пример генерации слоев 1-го уровня, узлов 2-го уровня, портов и **вложенного контейнера в контексте узла (3-й уровень)**:
 
 ```json
 [
@@ -310,7 +324,7 @@ architector-main/
    ```bash
    cmd /c "node --test app/tests/*.test.js"
    ```
-   *Все тесты должны проходить со статусом PASS (0 ошибок).*
+   *Все 72 теста должны проходить со статусом PASS (0 ошибок).*
 
 2. **Статическая проверка типов TypeScript:**
    ```bash

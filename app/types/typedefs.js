@@ -37,6 +37,9 @@
  * @property {number} [mediaHeight]
  * @property {boolean} [userResized]
  * @property {boolean} [hidden]
+ * @property {string} [icon]
+ * @property {string} [fontFamily]
+ * @property {number} [fontSize]
  */
 
 /**
@@ -50,6 +53,8 @@
  * @property {boolean} [locked]
  * @property {string} parentId
  * @property {boolean} [snapToGrid]
+ * @property {string} [fontFamily]
+ * @property {number} [fontSize]
  */
 
 /**
@@ -60,7 +65,10 @@
  * @property {'left'|'right'|'top'|'bottom'} edge
  * @property {number} position: смещение вдоль грани, от 0.0 до 1.0
  * @property {string} [name]
+ * @property {string} [content]
  * @property {string} [color]
+ * @property {string} [fontFamily]
+ * @property {number} [fontSize]
  */
 
 /**
@@ -73,6 +81,8 @@
  * @property {string} [color]
  * @property {'bezier'|'orthogonal'} [linkStyle]
  * @property {string} [context]: справочное поле, фактический контекст вычисляется
+ * @property {string} [fontFamily]
+ * @property {number} [fontSize]
  */
 
 /**

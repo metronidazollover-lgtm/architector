@@ -401,7 +401,13 @@ function Library() {
                                                     key={item.entity.id}
                                                     className={`flex items-center justify-between px-2.5 py-1.5 rounded cursor-pointer text-xs transition-colors border ${isSelected ? 'bg-[var(--accent-blue)]/20 border-[var(--accent-blue)]/50 text-white' : 'bg-[#1a1a1a] border-[#333] hover:border-[#555] text-gray-300'}`}
                                                     onClick={() => handleSelect(item.entity.id)}
-                                                    onDoubleClick={() => dispatch({ type: 'DIVE_INTO', payload: { id: item.entity.id, name: item.name } })}
+                                                    onDoubleClick={() => {
+                                                        if (item.type === 'node') {
+                                                            dispatch({ type: 'DIVE_INTO', payload: { id: item.entity.id, name: item.name } });
+                                                        } else {
+                                                            handleSelect(item.entity.id);
+                                                        }
+                                                    }}
                                                 >
                                                     <div className="flex items-center gap-2 truncate">
                                                         <div className={`${item.icon} text-gray-400 shrink-0`}></div>
@@ -426,7 +432,13 @@ function Library() {
                                                     key={item.entity.id}
                                                     className={`flex items-center justify-between px-2.5 py-1.5 rounded cursor-pointer text-xs transition-colors border ${isSelected ? 'bg-[var(--accent-blue)]/20 border-[var(--accent-blue)]/50 text-white' : 'bg-black/40 border-[#2a2a2a] hover:border-[#444] text-gray-400'}`}
                                                     onClick={() => handleSelect(item.entity.id)}
-                                                    onDoubleClick={() => dispatch({ type: 'DIVE_INTO', payload: { id: item.entity.id, name: item.name } })}
+                                                    onDoubleClick={() => {
+                                                        if (item.type === 'node') {
+                                                            dispatch({ type: 'DIVE_INTO', payload: { id: item.entity.id, name: item.name } });
+                                                        } else {
+                                                            handleSelect(item.entity.id);
+                                                        }
+                                                    }}
                                                 >
                                                     <div className="flex items-center gap-2 truncate">
                                                         <div className={`${item.icon} text-gray-500 shrink-0`}></div>

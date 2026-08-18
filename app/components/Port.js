@@ -308,7 +308,7 @@ function Port({ data, nodeData }) {
             }}
             onMouseDown={handleMouseDown}
             onDoubleClick={handleDoubleClick}
-            title={`Порт ${data.type} (Двойной клик для погружения)`}
+            title={`Порт ${data.name ? `${data.name} (${data.type})` : data.type}`}
             data-port-id={data.id}
             data-node-id={nodeData.id}
             data-edge={data.edge}

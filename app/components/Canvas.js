@@ -66,11 +66,6 @@ function Canvas() {
     const cameraRef = React.useRef({ zoom, offset });
     cameraRef.current = { zoom, offset };
 
-    // Свежий стейт для wheel-обработчика (zoom-to-dive, этап 6.2) без переподписки
-    const stateRef = React.useRef(state);
-    stateRef.current = state;
-    const lastAutoNavRef = React.useRef(0);
-
     // «Хвост» перехода (этап 6.1): прошлый уровень остаётся смонтированным на время полёта камеры
     React.useEffect(() => {
         if (!state.ui.transitionFromContext) return;
@@ -456,11 +451,6 @@ function Canvas() {
                         </button>
                     )}
                 </div>
-            </div>
-
-            {/* Миникарта (этап 4): правый нижний угол, под PropertyPanel */}
-            <div className="absolute right-4 bottom-4 z-40 flex flex-col gap-2 items-end">
-                <MiniMap />
             </div>
 
             <div 
