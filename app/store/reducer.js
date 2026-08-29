@@ -3407,7 +3407,10 @@ const multiReducer = (m, action) => {
         case 'UPDATE_LEVEL_PROPERTIES':
         case 'PAN_LEVEL_WINDOW':
         case 'ZOOM_LEVEL_WINDOW':
-        case 'TOGGLE_LEVEL_COLLAPSE': {
+        case 'TOGGLE_LEVEL_COLLAPSE':
+        case 'TOGGLE_LEVEL_NEIGHBORS':
+        case 'CLEAR_LEVEL_WINDOW':
+        case 'REMOVE_LEVEL_WINDOW': {
             const payload = action.payload || {};
             const winId = payload.windowId || (typeof payload.id === 'string' && !/^\d+$/.test(payload.id) ? payload.id : null);
             let targetPid = m.activeProjectId;

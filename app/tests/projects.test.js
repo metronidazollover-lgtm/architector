@@ -407,5 +407,14 @@ test('Окна: MOVE_LEVEL_WINDOW и UPDATE_LEVEL_PROPERTIES адресуютс�
     assert.deepEqual(viewA.innerOffset, { x: 50, y: 50 });
     const viewB = m.projects[pidB].levelViews[winB.id];
     assert.equal(viewB.innerZoom, 1, 'камера проекта B осталась прежней');
+
+    // Сворачиваем окно проекта A по id/windowId (когда активен проект B)
+    m = multiReducer(m, {
+        type: 'TOGGLE_LEVEL_COLLAPSE',
+        payload: { id: winA.id, windowId: winA.id, index: winA.levelIndex }
+    });
+
+    assert.equal(m.projects[pidA].levelViews[winA.id].isCollapsed, true, 'окно проекта A свернулось');
+    assert.equal(m.projects[pidB].levelViews[winB.id].isCollapsed, false, 'окно проекта B не свернулось');
 });
 

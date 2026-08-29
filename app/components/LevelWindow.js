@@ -171,6 +171,9 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
         if (e.target.closest('button') || e.target.closest('input')) return;
 
         e.stopPropagation();
+        if (projectId && s && projectId !== s.activeProjectId) {
+            dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+        }
         dispatch({ type: 'SET_SELECTED', payload: winSelectionId });
 
         const startX = e.clientX;
@@ -210,6 +213,9 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
     const handleMouseDownResize = (e) => {
         if (e.button !== 0) return;
         e.stopPropagation();
+        if (projectId && s && projectId !== s.activeProjectId) {
+            dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+        }
 
         const startX = e.clientX;
         const startY = e.clientY;
@@ -670,7 +676,10 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                                 : 'Показать только ветки выделенных узлов этого уровня')}
                         onClick={(e) => {
                             e.stopPropagation();
-                            dispatch({ type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { levelIndex: index } });
+                            if (projectId && s && projectId !== s.activeProjectId) {
+                                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+                            }
+                            dispatch({ type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { id: windowData.id, windowId: windowData.id, levelIndex: index } });
                         }}
                     >
                         <div className={`text-xs ${isIsolated ? 'icon-eye-off' : 'icon-eye'}`}></div>
@@ -690,6 +699,9 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                             : 'Изолировать уровень: скрыть с холста всё, кроме него'}
                         onClick={(e) => {
                             e.stopPropagation();
+                            if (projectId && s && projectId !== s.activeProjectId) {
+                                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+                            }
                             dispatch({ type: 'TOGGLE_CONTAINER_ISOLATION', payload: { kind: 'window', id: windowData.id } });
                         }}
                     >
@@ -702,7 +714,10 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                         title={isCollapsed ? 'Развернуть окно' : 'Свернуть окно'}
                         onClick={(e) => {
                             e.stopPropagation();
-                            dispatch({ type: 'TOGGLE_LEVEL_COLLAPSE', payload: { index } });
+                            if (projectId && s && projectId !== s.activeProjectId) {
+                                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+                            }
+                            dispatch({ type: 'TOGGLE_LEVEL_COLLAPSE', payload: { id: windowData.id, windowId: windowData.id, index } });
                         }}
                     >
                         <div className={`text-xs ${isCollapsed ? 'icon-maximize' : 'icon-minimize'}`}></div>
@@ -716,17 +731,20 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                             : `Удалить Уровень ${index}`}
                         onClick={(e) => {
                             e.stopPropagation();
+                            if (projectId && s && projectId !== s.activeProjectId) {
+                                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+                            }
                             // Крестик Главного холста — очистка. Удаление холста
                             // (с повышением Уровня 1) — кнопка в панели свойств.
                             if (index === 0) {
                                 if (window.confirm('Очистить Главный холст? Его элементы будут удалены, а их дети на Уровне 1 станут сиротами, сохранив свои ветки.')) {
-                                    dispatch({ type: 'CLEAR_LEVEL_WINDOW', payload: { index: 0 } });
+                                    dispatch({ type: 'CLEAR_LEVEL_WINDOW', payload: { id: windowData.id, windowId: windowData.id, index: 0 } });
                                 }
                                 return;
                             }
                             const msg = `Удалить Уровень ${index}? Его элементы будут удалены, а потомки и уровни ниже поднимутся на один (Уровень ${index + 1} станет Уровнем ${index}).`;
                             if (window.confirm(msg)) {
-                                dispatch({ type: 'REMOVE_LEVEL_WINDOW', payload: { index } });
+                                dispatch({ type: 'REMOVE_LEVEL_WINDOW', payload: { id: windowData.id, windowId: windowData.id, index } });
                             }
                         }}
                     >

@@ -1,23 +1,56 @@
 function Toolbar() {
     const { dispatch, state } = useStore();
     const [menuOpen, setMenuOpen] = React.useState(false);
-    // Тач-устройства не знают onMouseEnter — раскрываем дугу по тапу вместо
-    // наведения (см. fabRevealHandlers ниже).
-    const isTouchDevice = React.useMemo(
-        () => (typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)),
-        []
-    );
+    const closeTimeoutRef = React.useRef(null);
+    const longPressTimerRef = React.useRef(null);
+    const isLongPressRef = React.useRef(false);
+    const touchStartPosRef = React.useRef({ x: 0, y: 0 });
 
-    // Закрытие дуги тапом мимо неё (только тач-режим — на мыши для этого
-    // хватает onMouseLeave).
+    const openMenu = React.useCallback(() => {
+        if (closeTimeoutRef.current) {
+            clearTimeout(closeTimeoutRef.current);
+            closeTimeoutRef.current = null;
+        }
+        setMenuOpen(true);
+    }, []);
+
+    const closeMenuWithDelay = React.useCallback((delay = 140) => {
+        if (closeTimeoutRef.current) {
+            clearTimeout(closeTimeoutRef.current);
+        }
+        closeTimeoutRef.current = setTimeout(() => {
+            setMenuOpen(false);
+            closeTimeoutRef.current = null;
+        }, delay);
+    }, []);
+
+    const closeMenuImmediately = React.useCallback(() => {
+        if (closeTimeoutRef.current) {
+            clearTimeout(closeTimeoutRef.current);
+            closeTimeoutRef.current = null;
+        }
+        setMenuOpen(false);
+    }, []);
+
+    // Очистка таймеров при демонтировании
     React.useEffect(() => {
-        if (!isTouchDevice || !menuOpen) return;
-        const handleOutside = (e) => {
-            if (!e.target.closest('[data-fab-root]')) setMenuOpen(false);
+        return () => {
+            if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+            if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
         };
-        window.addEventListener('touchstart', handleOutside);
-        return () => window.removeEventListener('touchstart', handleOutside);
-    }, [isTouchDevice, menuOpen]);
+    }, []);
+
+    // Закрытие веера кликом/тапом мимо него
+    React.useEffect(() => {
+        if (!menuOpen) return;
+        const handleOutside = (e) => {
+            if (!e.target.closest('[data-fab-root]')) {
+                closeMenuImmediately();
+            }
+        };
+        window.addEventListener('pointerdown', handleOutside);
+        return () => window.removeEventListener('pointerdown', handleOutside);
+    }, [menuOpen, closeMenuImmediately]);
 
     // v12: без активного проекта добавлять некуда — все кнопки создания
     // сущностей гасятся, доступна только «Добавить проект»
@@ -180,24 +213,51 @@ function Toolbar() {
         }
     ];
 
-    const fabRevealHandlers = isTouchDevice
-        ? {
-            onClick: (e) => {
-                if (!menuOpen) {
-                    // Первый тап — только раскрыть дугу, без создания узла.
-                    e.preventDefault();
-                    setMenuOpen(true);
-                    return;
-                }
-                setMenuOpen(false);
-                addNode();
+    const handleTouchStart = (e) => {
+        if (!e.touches || e.touches.length === 0) return;
+        touchStartPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        isLongPressRef.current = false;
+        if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = setTimeout(() => {
+            isLongPressRef.current = true;
+            openMenu();
+            if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                navigator.vibrate(25);
+            }
+        }, 350);
+    };
+
+    const handleTouchMove = (e) => {
+        if (!e.touches || e.touches.length === 0) return;
+        const dx = Math.abs(e.touches[0].clientX - touchStartPosRef.current.x);
+        const dy = Math.abs(e.touches[0].clientY - touchStartPosRef.current.y);
+        if (dx > 10 || dy > 10) {
+            if (longPressTimerRef.current) {
+                clearTimeout(longPressTimerRef.current);
+                longPressTimerRef.current = null;
             }
         }
-        : {
-            onMouseEnter: () => setMenuOpen(true),
-            onMouseLeave: () => setMenuOpen(false),
-            onClick: addNode
-        };
+    };
+
+    const handleTouchEnd = (e) => {
+        if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+        }
+        if (isLongPressRef.current) {
+            // Если сработало долгое нажатие для раскрытия веера, предотвращаем клик
+            if (e.cancelable) e.preventDefault();
+        }
+    };
+
+    const handleFabClick = () => {
+        if (isLongPressRef.current) {
+            isLongPressRef.current = false;
+            return;
+        }
+        addNode();
+        closeMenuImmediately();
+    };
 
     return (
         <div
@@ -207,9 +267,22 @@ function Toolbar() {
             <div
                 data-fab-root
                 className="relative"
-                onMouseEnter={!isTouchDevice ? () => setMenuOpen(true) : undefined}
-                onMouseLeave={!isTouchDevice ? () => setMenuOpen(false) : undefined}
+                onMouseEnter={openMenu}
+                onMouseLeave={() => closeMenuWithDelay(140)}
             >
+                {/* Невидимый хитбокс, соединяющий кнопку «+» и полукруг веера спутников без потери ховера */}
+                <div
+                    className="absolute pointer-events-none"
+                    style={{
+                        top: -75,
+                        left: -85,
+                        width: 145,
+                        height: 200,
+                        borderRadius: '100px 24px 24px 100px',
+                        pointerEvents: menuOpen ? 'auto' : 'none'
+                    }}
+                />
+
                 {satellites.map((sat) => {
                     const rad = (sat.angleDeg * Math.PI) / 180;
                     const dx = Math.round(Math.cos(rad) * RADIUS);
@@ -231,7 +304,7 @@ function Toolbar() {
                                 e.stopPropagation();
                                 if (sat.disabled) return;
                                 sat.onClick();
-                                if (isTouchDevice) setMenuOpen(false);
+                                closeMenuImmediately();
                             }}
                         >
                             <div className={`${sat.icon} text-lg`}></div>
@@ -244,7 +317,11 @@ function Toolbar() {
                         addCtx.ok ? 'btn-primary' : 'opacity-40 cursor-not-allowed text-gray-500'
                     }`}
                     title={addCtx.ok ? 'Быстрый пустой узел (наведите — ещё действия)' : addDisabledHint}
-                    {...fabRevealHandlers}
+                    onClick={handleFabClick}
+                    onTouchStart={handleTouchStart}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                    onTouchCancel={handleTouchEnd}
                 >
                     <div className="icon-square-plus text-2xl"></div>
                 </button>

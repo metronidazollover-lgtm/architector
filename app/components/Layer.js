@@ -88,6 +88,13 @@ function Layer(props) {
         e.stopPropagation();
         if (e.button !== 0) return; // Only left click
 
+        if (projectId) {
+            const rootState = (typeof architectorStore !== 'undefined') ? architectorStore.getState() : null;
+            if (rootState && rootState.activeProjectId !== projectId) {
+                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+            }
+        }
+
         if (!isExplicitlySelected) {
             dispatch({ type: 'SET_SELECTED', payload: data.id });
         }
@@ -260,6 +267,12 @@ function Layer(props) {
     const handleBodyClick = (e) => {
         // Selection on body click
         e.stopPropagation();
+        if (projectId) {
+            const rootState = (typeof architectorStore !== 'undefined') ? architectorStore.getState() : null;
+            if (rootState && rootState.activeProjectId !== projectId) {
+                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+            }
+        }
         if (e.shiftKey) {
             dispatch({ type: 'TOGGLE_SELECTED', payload: data.id });
         } else {

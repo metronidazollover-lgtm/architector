@@ -113,6 +113,13 @@ function NodeView(props) {
         e.stopPropagation();
         if (e.button !== 0) return; // Only left click
 
+        if (projectId) {
+            const rootState = (typeof architectorStore !== 'undefined') ? architectorStore.getState() : null;
+            if (rootState && rootState.activeProjectId !== projectId) {
+                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+            }
+        }
+
         if (!e.shiftKey && !isExplicitlySelected) {
             dispatch({ type: 'SET_SELECTED', payload: data.id });
         }

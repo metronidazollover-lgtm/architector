@@ -55,6 +55,7 @@ const computeLinkDerived = (view, linkId) => {
 function Link(props) {
     if (typeof StoreEngine !== 'undefined') StoreEngine.profileRender('Link');
     const dispatch = useProjectDispatch();
+    const projectId = React.useContext(ProjectContext);
     const linkId = props.linkId
         || (props.data && props.data.id)
         || (props.link && props.link.id)
@@ -77,6 +78,12 @@ function Link(props) {
 
     const handleClick = (e) => {
         e.stopPropagation();
+        if (projectId) {
+            const rootState = (typeof architectorStore !== 'undefined') ? architectorStore.getState() : null;
+            if (rootState && rootState.activeProjectId !== projectId) {
+                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+            }
+        }
         if (e.shiftKey) {
             dispatch({ type: 'TOGGLE_SELECTED', payload: data.id });
         } else {
@@ -86,6 +93,12 @@ function Link(props) {
 
     const handleDoubleClick = (e) => {
         e.stopPropagation();
+        if (projectId) {
+            const rootState = (typeof architectorStore !== 'undefined') ? architectorStore.getState() : null;
+            if (rootState && rootState.activeProjectId !== projectId) {
+                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+            }
+        }
         dispatch({ type: 'SET_SELECTED', payload: data.id });
         dispatch({ type: 'FOCUS_CONNECTED_ELEMENTS', payload: { entityId: data.id } });
     };

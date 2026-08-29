@@ -105,6 +105,13 @@ function Port(props) {
     const handleMouseDown = (e) => {
         e.stopPropagation();
 
+        if (projectId) {
+            const rootState = (typeof architectorStore !== 'undefined') ? architectorStore.getState() : null;
+            if (rootState && rootState.activeProjectId !== projectId) {
+                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+            }
+        }
+
         // Shift + Drag for sliding the port along the entire perimeter, Shift+Click for selection
         if (e.shiftKey) {
             let hasMoved = false;
