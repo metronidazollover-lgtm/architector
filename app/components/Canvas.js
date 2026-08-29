@@ -1,79 +1,215 @@
+// Магистральные отрезки межуровневых связей — те, что идут между рамками окон
+// через мировое пространство (внутренние отрезки рисует сам LevelWindow).
+//
+// Компонент параметризован состоянием ПРОЕКТА, а не берёт активный: иначе у
+// неактивных проектов на рамках висели бы прокси-порты без соединяющего их
+// пунктира, и связь выглядела бы оборванной. Изоляция «глазом» считается по
+// состоянию своего проекта — иначе «глаз» активного гасил бы чужие связи.
+function CrossLevelLinkLayer({ projectState, dispatch, interactive = true, opacity = 1 }) {
+    if (typeof StoreEngine !== 'undefined') StoreEngine.profileRender('CrossLevelLinkLayer');
+    const state = projectState;
+    if (!state || !state.links) return null;
+
+    // Перебираются ТОЛЬКО межуровневые связи, взятые из кэшированного индекса.
+    // Прежде слой проходил по всем связям проекта на каждый рендер и для каждой
+    // вычислял уровни обоих концов — на сцене в 3000 связей это был самый
+    // дорогой участок кадра (около 60% процессорного времени по профилю).
+    const HU = window.HierarchyUtils;
+
+    // Видимая часть мира: магистраль, чьи оба окна целиком за экраном, рисовать
+    // незачем. Проверка идёт по объединяющему прямоугольнику ДВУХ окон, а не по
+    // точкам концов: связь между окном выше экрана и окном ниже экрана проходит
+    // через видимую область, и отбросить её было бы ошибкой.
+    const cam = state.canvas || { offset: { x: 0, y: 0 }, zoom: 1 };
+    const camZoom = cam.zoom || 1;
+    const screenW = (typeof window !== 'undefined' && window.innerWidth) || 1600;
+    const screenH = (typeof window !== 'undefined' && window.innerHeight) || 900;
+    const padX = screenW / camZoom;
+    const padY = screenH / camZoom;
+    const viewRect = {
+        x0: (0 - cam.offset.x) / camZoom - padX,
+        y0: (0 - cam.offset.y) / camZoom - padY,
+        x1: (screenW - cam.offset.x) / camZoom + padX,
+        y1: (screenH - cam.offset.y) / camZoom + padY
+    };
+    const winRectOfLevel = (lvl) => {
+        const w = HU ? HU.getWindowOfLevel(Number(lvl), state.levelWindows) : null;
+        if (!w) return null;
+        const pos = w.position || { x: 0, y: 0 };
+        const size = w.size || { w: 1000, h: 700 };
+        return { x0: pos.x, y0: pos.y, x1: pos.x + size.w, y1: pos.y + size.h };
+    };
+    const rectCache = {};
+    const rectOf = (lvl) => {
+        if (!(lvl in rectCache)) rectCache[lvl] = winRectOfLevel(lvl);
+        return rectCache[lvl];
+    };
+
+    const crossLinks = [];
+    if (HU && HU.getCrossLinksByLevel) {
+        const byLevel = HU.getCrossLinksByLevel(state);
+        Object.keys(byLevel).forEach(lvl => {
+            byLevel[lvl].forEach(entry => {
+                // Каждая межуровневая связь лежит в индексе дважды (со стороны
+                // источника и со стороны приёмника) — берём её один раз
+                if (!entry || !entry.isSource) return;
+                const a = rectOf(lvl);
+                const b = rectOf(entry.otherLevel);
+                if (a && b) {
+                    const box = {
+                        x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0),
+                        x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1)
+                    };
+                    if (box.x1 < viewRect.x0 || box.x0 > viewRect.x1 ||
+                        box.y1 < viewRect.y0 || box.y0 > viewRect.y1) return; // за экраном
+                }
+                crossLinks.push(entry.link);
+            });
+        });
+    } else {
+        Object.values(state.links || {}).forEach(l => { if (l) crossLinks.push(l); });
+    }
+
+    return (
+        <svg className="absolute top-0 left-0 pointer-events-none" style={{ width: '1px', height: '1px', overflow: 'visible', zIndex: 35, opacity }}>
+                    {crossLinks.map((link) => {
+                        if (!link || !link.id) return null;
+                        const sPort = state.ports && state.ports[link.sourcePortId];
+                        const tPort = state.ports && state.ports[link.targetPortId];
+                        if (!sPort || !tPort) return null;
+
+                        const sNode = (state.nodes && state.nodes[sPort.nodeId]) || (state.layers && state.layers[sPort.nodeId]);
+                        const tNode = (state.nodes && state.nodes[tPort.nodeId]) || (state.layers && state.layers[tPort.nodeId]);
+                        if (!sNode || !tNode) return null;
+
+                        const H = window.HierarchyUtils;
+
+                        // Конец связи скрыт изоляцией («глаз») — пунктир не рисуем,
+                        // иначе он повиснет над пустым местом
+                        if (H && H.isEntityVisible &&
+                            (!H.isEntityVisible(sNode.id, state) || !H.isEntityVisible(tNode.id, state))) {
+                            return null;
+                        }
+                        const sLvl = H ? H.getEntityLevel(sNode.id, state.nodes, state.layers) : 0;
+                        const tLvl = H ? H.getEntityLevel(tNode.id, state.nodes, state.layers) : 0;
+
+                        // Рендерим в глобальном слое только межуровневые связи
+                        if (sLvl === tLvl) return null;
+
+                        const sWin = H ? H.getWindowOfLevel(sLvl, state.levelWindows) : null;
+                        const tWin = H ? H.getWindowOfLevel(tLvl, state.levelWindows) : null;
+                        const sView = (H && sWin) ? H.getLevelView(sWin.id, state) : { isCollapsed: false };
+                        const tView = (H && tWin) ? H.getLevelView(tWin.id, state) : { isCollapsed: false };
+
+                        let p1 = null;
+                        let p2 = null;
+
+                        // Магистральный отрезок связи идёт ОТ РАМКИ ДО РАМКИ через
+                        // прокси-порты, а не от порта к порту. Иначе пунктир ляжет
+                        // поверх чужого содержимого: глобальный слой лежит выше окон.
+                        const edgeToDir = { top: 'top', bottom: 'bottom', left: 'left', right: 'right' };
+
+                        if (sWin && sView.isCollapsed) {
+                            p1 = H ? H.getMasterPortWorldCoordinates(sWin.id, state) : null;
+                            if (p1) p1.edge = 'top';
+                        } else {
+                            const pr = (H && sWin) ? H.getProxyForLink(link.id, sWin.id, state) : null;
+                            if (pr) {
+                                p1 = { x: pr.worldPos.x, y: pr.worldPos.y, edge: edgeToDir[pr.edge] || 'bottom' };
+                            } else {
+                                p1 = H ? H.getPortWorldPosition(link.sourcePortId, state) : null;
+                                if (p1) p1.edge = sPort.edge || 'right';
+                            }
+                        }
+
+                        if (tWin && tView.isCollapsed) {
+                            p2 = H ? H.getMasterPortWorldCoordinates(tWin.id, state) : null;
+                            if (p2) p2.edge = 'top';
+                        } else {
+                            const pr = (H && tWin) ? H.getProxyForLink(link.id, tWin.id, state) : null;
+                            if (pr) {
+                                p2 = { x: pr.worldPos.x, y: pr.worldPos.y, edge: edgeToDir[pr.edge] || 'top' };
+                            } else {
+                                p2 = H ? H.getPortWorldPosition(link.targetPortId, state) : null;
+                                if (p2) p2.edge = tPort.edge || 'left';
+                            }
+                        }
+
+                        if (!p1 || !p2) return null;
+
+                        // Тот же построитель пути, что и у внутриуровневых связей:
+                        // иначе переключение стиля работало бы только внутри окна.
+                        // Порядковый номер — из кэшированного индекса. Поиск через
+                        // Object.keys(links).indexOf() выполнялся для КАЖДОЙ магистрали
+                        // на каждом кадре и давал O(связи²): на 3000 связей это больше
+                        // миллиона операций в кадр.
+                        const linkIndex = (HU && HU.getLinkOrderIndex)
+                            ? (HU.getLinkOrderIndex(state.links)[link.id] ?? -1)
+                            : Object.keys(state.links || {}).indexOf(link.id);
+                        const pathD = window.GeometryUtils.buildLinkPath(p1, p2, link.linkStyle, linkIndex);
+
+                        const isSelected = state.selectedIds && (
+                            state.selectedIds.includes(link.id)
+                            || state.selectedIds.includes(link.sourcePortId)
+                            || state.selectedIds.includes(link.targetPortId)
+                            || state.selectedIds.includes(sNode.id)
+                            || state.selectedIds.includes(tNode.id)
+                        );
+                        const linkColor = link.color || '#38bdf8';
+
+                        return (
+                            <g key={`cross-link-${link.id}`}>
+                                <path
+                                    d={pathD}
+                                    fill="none"
+                                    stroke="transparent"
+                                    strokeWidth="16"
+                                    className="pointer-events-auto cursor-pointer"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (!interactive) return;
+                                        dispatch({ type: 'SET_SELECTED', payload: link.id });
+                                    }}
+                                    onDoubleClick={(e) => {
+                                        e.stopPropagation();
+                                        if (!interactive) return;
+                                        dispatch({ type: 'FOCUS_CONNECTED_ELEMENTS', payload: { entityId: link.id } });
+                                    }}
+                                />
+                                <path
+                                    d={pathD}
+                                    fill="none"
+                                    stroke={linkColor}
+                                    strokeWidth={isSelected ? "4.5" : "2.5"}
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeDasharray="3, 5"
+                                    vectorEffect="non-scaling-stroke"
+                                    className="transition-all duration-150 pointer-events-none"
+                                    style={{
+                                        filter: isSelected ? `drop-shadow(0 0 10px ${linkColor})` : `drop-shadow(0 0 4px ${linkColor}66)`
+                                    }}
+                                />
+                            </g>
+                        );
+                    })}
+        </svg>
+    );
+}
+
 function Canvas() {
+    if (typeof StoreEngine !== 'undefined') StoreEngine.profileRender('Canvas');
     const { state, dispatch } = useStore();
+    const HU = window.HierarchyUtils;
     const { offset, zoom } = state.canvas;
     const canvasRef = React.useRef(null);
     const [isPanning, setIsPanning] = React.useState(false);
     const [isInteracting, setIsInteracting] = React.useState(false);
     const wheelTimeoutRef = React.useRef(null);
-    
-    const nodeVisibility = React.useMemo(() => {
-        const H = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof global !== 'undefined' && global.HierarchyUtils) || null;
-        if (!H || !H.getVisibilityState) return {};
-        const result = {};
-        Object.values(state.nodes || {}).forEach(node => {
-            if (!node || !node.id) return;
-            result[node.id] = H.getVisibilityState(
-                node.id,
-                state.currentContext || 'root',
-                state.ui?.xRayDown || 0,
-                state.ui?.xRayUp || 0,
-                state.nodes,
-                state.layers,
-                state.ports,
-                state.links,
-                {
-                    selectedIds: state.selectedIds,
-                    peekNodeId: state.ui?.peekNodeId,
-                    transitionFromContext: state.ui?.transitionFromContext,
-                    isolatedIds: state.isolatedIds,
-                    breadcrumbs: state.breadcrumbs,
-                    xRayNodes: state.ui?.xRayNodes
-                }
-            );
-        });
-        return result;
-    }, [state.nodes, state.layers, state.ports, state.links, state.currentContext, state.ui?.xRayDown, state.ui?.xRayUp, state.ui?.xRayNodes, state.selectedIds, state.ui?.peekNodeId, state.ui?.transitionFromContext, state.isolatedIds, state.breadcrumbs]);
-
-    const layerVisibility = React.useMemo(() => {
-        const H = (typeof window !== 'undefined' && window.HierarchyUtils) || (typeof global !== 'undefined' && global.HierarchyUtils) || null;
-        if (!H || !H.getVisibilityState) return {};
-        const result = {};
-        Object.values(state.layers || {}).forEach(layer => {
-            if (!layer || !layer.id) return;
-            result[layer.id] = H.getVisibilityState(
-                layer.id,
-                state.currentContext || 'root',
-                state.ui?.xRayDown || 0,
-                state.ui?.xRayUp || 0,
-                state.nodes,
-                state.layers,
-                state.ports,
-                state.links,
-                {
-                    selectedIds: state.selectedIds,
-                    peekNodeId: state.ui?.peekNodeId,
-                    transitionFromContext: state.ui?.transitionFromContext,
-                    isolatedIds: state.isolatedIds,
-                    breadcrumbs: state.breadcrumbs,
-                    xRayNodes: state.ui?.xRayNodes
-                }
-            );
-        });
-        return result;
-    }, [state.nodes, state.layers, state.ports, state.links, state.currentContext, state.ui?.xRayDown, state.ui?.xRayUp, state.ui?.xRayNodes, state.selectedIds, state.ui?.peekNodeId, state.ui?.transitionFromContext, state.isolatedIds, state.breadcrumbs]);
 
     // Используем Ref для актуального стейта камеры, чтобы не переподключать слушатель wheel каждый кадр
     const cameraRef = React.useRef({ zoom, offset });
     cameraRef.current = { zoom, offset };
-
-    // «Хвост» перехода (этап 6.1): прошлый уровень остаётся смонтированным на время полёта камеры
-    React.useEffect(() => {
-        if (!state.ui.transitionFromContext) return;
-        const t = setTimeout(() => {
-            dispatch({ type: 'SET_UI', payload: { transitionFromContext: null } });
-        }, 550);
-        return () => clearTimeout(t);
-    }, [state.ui.transitionFromContext, dispatch]);
 
     React.useEffect(() => {
         const handleKeyDown = (e) => {
@@ -81,7 +217,7 @@ function Canvas() {
             const activeTag = document.activeElement?.tagName?.toLowerCase();
             if (activeTag === 'input' || activeTag === 'textarea') return;
 
-            const { selectedIds, layers, nodes, ports, links, clipboard, past, future } = state;
+            const { selectedIds, nodes, clipboard, past, future } = state;
 
             // Удаление (Delete / Backspace)
             if (e.code === 'Delete' || e.code === 'Backspace') {
@@ -90,28 +226,16 @@ function Canvas() {
                 }
             }
 
-            // Esc: сначала выход из режима, потом сброс выделения, потом уровень вверх
+            // Esc: сначала выход из режима, потом сброс выделения
             if (e.code === 'Escape') {
                 if (state.interactionMode !== 'default') {
                     dispatch({ type: 'SET_MODE', payload: 'default' });
                 } else if (selectedIds.length > 0) {
                     dispatch({ type: 'SET_SELECTED', payload: null });
-                } else if (state.breadcrumbs.length > 1) {
-                    dispatch({ type: 'NAVIGATE_TO', payload: state.breadcrumbs.length - 2 });
                 }
             }
 
-            // История посещений контекстов: Cmd/Ctrl+[ назад, Cmd/Ctrl+] вперед
-            if ((e.ctrlKey || e.metaKey) && e.code === 'BracketLeft') {
-                e.preventDefault();
-                dispatch({ type: 'NAV_BACK' });
-            }
-            if ((e.ctrlKey || e.metaKey) && e.code === 'BracketRight') {
-                e.preventDefault();
-                dispatch({ type: 'NAV_FORWARD' });
-            }
-
-            // Копирование узла (Ctrl+C / Cmd+C) - пока копируем только первый узел (MVP)
+            // Копирование узла (Ctrl+C / Cmd+C)
             if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyC' || e.key.toLowerCase() === 'c' || e.key.toLowerCase() === 'с')) {
                 e.preventDefault();
                 const primaryId = selectedIds[0];
@@ -153,40 +277,41 @@ function Canvas() {
             }
         };
 
-        // Отпустили Alt — peek гаснет (см. этап 3.2 плана)
-        const handleKeyUp = (e) => {
-            if (e.key === 'Alt' && state.ui.peekNodeId) {
-                dispatch({ type: 'SET_UI', payload: { peekNodeId: null } });
-            }
-        };
-
         window.addEventListener('keydown', handleKeyDown);
-        window.addEventListener('keyup', handleKeyUp);
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
-            window.removeEventListener('keyup', handleKeyUp);
         };
     }, [state, dispatch]);
 
     React.useEffect(() => {
         const handleWheel = (e) => {
-            // Если мы крутим колесико над панелью со скроллом (например, внутри узла или чата):
-            const scrollable = e.target.closest('.overflow-y-auto');
-            if (scrollable && scrollable.scrollHeight > scrollable.clientHeight) {
-                const isScrollingUp = e.deltaY < 0;
-                const isScrollingDown = e.deltaY > 0;
-                const atTop = scrollable.scrollTop <= 0;
-                const atBottom = Math.abs(scrollable.scrollTop + scrollable.clientHeight - scrollable.scrollHeight) <= 2;
+            // Ctrl/Cmd + колесо = зум ОБЩЕГО холста, где бы ни был курсор
+            // (в т.ч. над окном уровня — LevelWindow пропускает такое событие
+            // всплыть сюда). Без модификатора: над окном уровня зум обрабатывает
+            // само окно, поэтому здесь выходим.
+            const forceWorldZoom = e.ctrlKey || e.metaKey;
 
-                // Блокируем зум холста ТОЛЬКО если контейнер может прокрутиться дальше в направлении движения
-                if ((isScrollingUp && !atTop) || (isScrollingDown && !atBottom)) {
+            if (!forceWorldZoom) {
+                if (e.target.closest('.level-window')) {
                     return;
+                }
+
+                const scrollable = e.target.closest('.overflow-y-auto');
+                if (scrollable && scrollable.scrollHeight > scrollable.clientHeight) {
+                    const isScrollingUp = e.deltaY < 0;
+                    const isScrollingDown = e.deltaY > 0;
+                    const atTop = scrollable.scrollTop <= 0;
+                    const atBottom = Math.abs(scrollable.scrollTop + scrollable.clientHeight - scrollable.scrollHeight) <= 2;
+
+                    if ((isScrollingUp && !atTop) || (isScrollingDown && !atBottom)) {
+                        return;
+                    }
                 }
             }
 
-            e.preventDefault(); // Блокируем стандартную прокрутку страницы
+            // preventDefault обязателен: иначе Ctrl+колесо зумит саму страницу браузера
+            e.preventDefault();
             
-            // Отключаем CSS-анимацию (transition) на время зума колесиком мыши
             setIsInteracting(true);
             if (wheelTimeoutRef.current) {
                 clearTimeout(wheelTimeoutRef.current);
@@ -198,7 +323,6 @@ function Canvas() {
             const currentZoom = cameraRef.current.zoom;
             const currentOffset = cameraRef.current.offset;
             
-            // Чувствительность зума (подходит и для мыши, и для трекпада)
             const zoomSensitivity = 0.001;
             const delta = -e.deltaY * zoomSensitivity;
             let newZoom = Math.min(Math.max(0.1, currentZoom + delta), 5.0);
@@ -212,7 +336,6 @@ function Canvas() {
                 const newOffsetX = mouseX - (mouseX - currentOffset.x) * zoomRatio;
                 const newOffsetY = mouseY - (mouseY - currentOffset.y) * zoomRatio;
                 
-                // Обновляем реф немедленно, чтобы следующие события wheel до рендера видели свежие значения
                 cameraRef.current = { zoom: newZoom, offset: { x: newOffsetX, y: newOffsetY } };
 
                 dispatch({ type: 'SET_CANVAS', payload: { zoom: newZoom, offset: { x: newOffsetX, y: newOffsetY } } });
@@ -221,16 +344,18 @@ function Canvas() {
 
         const canvasEl = canvasRef.current;
         if(canvasEl) {
-            // passive: false ОБЯЗАТЕЛЕН для вызова e.preventDefault()
             canvasEl.addEventListener('wheel', handleWheel, { passive: false });
         }
         return () => {
             if(canvasEl) canvasEl.removeEventListener('wheel', handleWheel);
             if(wheelTimeoutRef.current) clearTimeout(wheelTimeoutRef.current);
-        }
+        };
     }, [dispatch]);
 
     const handleTouchStart = (e) => {
+        if (e.target.closest('.level-window')) {
+            return;
+        }
         if (e.target.id === 'canvas-container' || e.target.classList.contains('canvas-grid')) {
             if (e.touches.length === 1) {
                 dispatch({ type: 'SET_SELECTED', payload: null });
@@ -271,7 +396,6 @@ function Canvas() {
                 window.addEventListener('touchcancel', handleTouchEnd);
                 
             } else if (e.touches.length === 2) {
-                // Отключаем анимацию (transition) во время жестов масштабирования пальцами
                 setIsInteracting(true);
                 const getDist = (touches) => Math.hypot(touches[1].clientX - touches[0].clientX, touches[1].clientY - touches[0].clientY);
                 const getCenter = (touches) => ({
@@ -322,7 +446,6 @@ function Canvas() {
     };
 
     const handleMouseDown = (e) => {
-        // Space + Left Click or Middle Click for Pan
         if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
             setIsPanning(true);
             const startX = e.clientX - offset.x;
@@ -346,7 +469,6 @@ function Canvas() {
             window.addEventListener('mousemove', handleMouseMove);
             window.addEventListener('mouseup', handleMouseUp);
         } else {
-            // Deselect on canvas click
             if (e.target.id === 'canvas-container' || e.target.classList.contains('canvas-grid')) {
                 dispatch({ type: 'SET_SELECTED', payload: null });
                 if (state.ui.libraryOpen) {
@@ -368,7 +490,171 @@ function Canvas() {
             onTouchStart={handleTouchStart}
             data-file="components/Canvas.js"
         >
-            <div 
+            {/* Стек плашек проектов: по плашке на каждый проект, активная
+                подсвечена; под плашкой — обозреватель её проекта (если открыт),
+                плашки ниже съезжают вниз. Клик по плашке активирует проект и
+                открывает его панель свойств. */}
+            <div className="fixed top-4 left-6 z-40 flex flex-col gap-2 items-start max-h-[calc(100vh-2rem)] overflow-y-auto no-scrollbar pr-1">
+                {(state.projectOrder || []).map((pid) => {
+                    const proj = state.projects && state.projects[pid];
+                    if (!proj) return null;
+                    const isActive = pid === state.activeProjectId;
+                    const color = proj.projectColor || '#059669';
+                    const projSelected = (state.selectedIds || []).includes(`project:${pid}`)
+                        || (isActive && (state.selectedIds || []).includes('project'));
+                    return (
+                        <React.Fragment key={pid}>
+                            <div
+                                className={`flex items-center gap-2.5 glass-panel bg-[#0d1017]/90 backdrop-blur-md rounded-xl px-3.5 py-2 shadow-2xl cursor-pointer transition-all hover:scale-[1.02] group ${isActive ? '' : 'opacity-75 hover:opacity-100'}`}
+                                onClick={(e) => {
+                                    // Shift+клик набирает проекты пачкой и НЕ меняет активный:
+                                    // «активный» и «выделенный» — разные вещи
+                                    if (e.shiftKey) {
+                                        dispatch({ type: 'TOGGLE_SELECTED', payload: `project:${pid}` });
+                                        return;
+                                    }
+                                    if (!isActive) dispatch({ type: 'SET_ACTIVE_PROJECT', payload: pid });
+                                    dispatch({ type: 'SET_SELECTED', payload: `project:${pid}` });
+                                }}
+                                title={isActive
+                                    ? 'Свойства проекта (кликните для редактирования)'
+                                    : `Проект «${proj.projectName || 'Без имени'}» — кликните, чтобы сделать активным`}
+                                style={{
+                                    // Выделение и активность — разные признаки: выделенная
+                                    // плашка обведена, активная светится
+                                    border: projSelected ? `2px solid #f8fafc` : `1.5px solid ${color}`,
+                                    boxShadow: isActive ? `0 0 20px ${color}66` : `0 0 8px ${color}22`
+                                }}
+                            >
+                                <div
+                                    className="w-6 h-6 rounded-lg flex items-center justify-center text-white border text-xs shrink-0 shadow-sm"
+                                    style={{ backgroundColor: color, borderColor: 'rgba(255,255,255,0.3)' }}
+                                >
+                                    🌐
+                                </div>
+                                <div className="flex flex-col min-w-0">
+                                    <span
+                                        className="text-xs font-bold text-gray-100 group-hover:text-white truncate max-w-[180px]"
+                                        style={{ fontFamily: proj.projectFontFamily || 'Inter, sans-serif' }}
+                                    >
+                                        {proj.projectName || 'Проект Архитектуры'}
+                                    </span>
+                                    <span className="text-[10px] text-gray-400 font-mono">
+                                        Уровней: {Object.keys(proj.levelWindows || {}).length}{isActive ? ' · активный' : ''}
+                                    </span>
+                                </div>
+                                <button
+                                    className={`ml-1.5 w-6 h-6 rounded flex items-center justify-center transition-colors shrink-0 ${
+                                        state.ui && state.ui.outlinerOpen && state.ui.outlinerOpen[pid]
+                                            ? 'bg-[var(--accent-blue)] text-white shadow-sm'
+                                            : 'text-gray-400 hover:text-white hover:bg-white/10'
+                                    }`}
+                                    title={
+                                        state.ui && state.ui.outlinerOpen && state.ui.outlinerOpen[pid]
+                                            ? 'Закрыть обозреватель проекта'
+                                            : 'Обозреватель проекта (Библиотека)'
+                                    }
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        dispatch({ type: 'TOGGLE_PROJECT_OUTLINER', payload: pid });
+                                    }}
+                                >
+                                    <div className="icon-list text-xs"></div>
+                                </button>
+                            </div>
+                            {state.ui && state.ui.outlinerOpen && state.ui.outlinerOpen[pid] && (
+                                <Library projectId={pid} />
+                            )}
+                        </React.Fragment>
+                    );
+                })}
+            </div>
+
+            {/* Пустой холст: проектов нет */}
+            {(!state.projectOrder || state.projectOrder.length === 0) && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                    <div className="glass-panel rounded-xl px-6 py-4 text-gray-400 text-sm border-[#444] shadow-2xl">
+                        Проектов нет — наведите на кнопку «+» справа и выберите «Добавить проект»
+                    </div>
+                </div>
+            )}
+
+            {/* Панель утилит холста в правом верхнем углу (масштаб, Drag&Drop, изоляция) */}
+            <div
+                className="fixed top-4 right-4 z-40 glass-panel bg-[#0d1017]/90 backdrop-blur-md rounded-xl p-1.5 shadow-2xl flex flex-col items-center gap-1 border border-white/10 select-none"
+            >
+                {/* Индикатор зума */}
+                <div
+                    className="px-1 py-0.5 text-center text-[10px] text-gray-400 font-mono"
+                    title="Масштаб холста"
+                >
+                    {Math.round(state.canvas.zoom * 100)}%
+                </div>
+
+                {/* Разделитель */}
+                <div className="w-5 h-px bg-white/10"></div>
+
+                {/* Тумблер глобального режима Drag&Drop */}
+                <button
+                    className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
+                        state.ui && state.ui.dragDropMode
+                            ? 'text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 shadow-sm'
+                            : 'text-gray-400 hover:text-white hover:bg-white/10'
+                    }`}
+                    title={
+                        state.ui && state.ui.dragDropMode
+                            ? 'Режим Drag&Drop включён: перетаскивание между уровнями и вложение элементов разрешены. Клик — выключить'
+                            : 'Включить режим Drag&Drop: перетаскивание между уровнями и вложение элементов друг в друга'
+                    }
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        dispatch({ type: 'TOGGLE_UI', payload: 'dragDropMode' });
+                    }}
+                >
+                    <div className="icon-move text-xs"></div>
+                </button>
+
+                {/* Разделитель */}
+                <div className="w-5 h-px bg-white/10"></div>
+
+                {/* Кнопка изоляции (статична, тусклая при отсутствии выделения) */}
+                {(() => {
+                    const isIsolated = state.isolatedIds && state.isolatedIds.length > 0;
+                    const hasSelection = state.selectedIds && state.selectedIds.length > 0;
+                    return (
+                        <button
+                            className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
+                                isIsolated
+                                    ? 'bg-orange-500 text-white hover:bg-orange-600 shadow-md'
+                                    : hasSelection
+                                        ? 'text-gray-300 hover:text-white hover:bg-white/10'
+                                        : 'opacity-30 cursor-not-allowed text-gray-500'
+                            }`}
+                            title={
+                                isIsolated
+                                    ? 'Отключить изоляцию'
+                                    : hasSelection
+                                        ? 'Изолировать выделенные элементы'
+                                        : 'Выделите элементы для изоляции'
+                            }
+                            disabled={!isIsolated && !hasSelection}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (isIsolated) {
+                                    dispatch({ type: 'SET_ISOLATED', payload: [] });
+                                } else if (hasSelection) {
+                                    dispatch({ type: 'SET_ISOLATED', payload: [...state.selectedIds] });
+                                    dispatch({ type: 'SET_SELECTED', payload: null });
+                                }
+                            }}
+                        >
+                            <div className="icon-scan text-xs"></div>
+                        </button>
+                    );
+                })()}
+            </div>
+
+            <div
                 className="absolute inset-0 canvas-grid"
                 style={{
                     backgroundSize: `${30 * zoom}px ${30 * zoom}px`,
@@ -377,81 +663,6 @@ function Canvas() {
                     transition: (isPanning || isInteracting) ? 'none' : 'background-position 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), background-size 0.4s cubic-bezier(0.2, 0.8, 0.2, 1)'
                 }}
             />
-            
-            {/* Контекстная шапка навигации (Floating Scope Banner) вместо старых хлебных крошек */}
-            <div className={`absolute top-4 transition-all duration-300 ${state.ui.libraryOpen ? 'left-[384px]' : 'left-20'} glass-panel rounded-xl px-3 py-1.5 flex items-center gap-3 z-40 text-xs border border-white/10 shadow-2xl backdrop-blur-md bg-slate-900/80`}>
-                {/* Кнопки навигации по истории (Назад / Вперед) */}
-                <div className="flex items-center gap-1">
-                    <button
-                        className={`p-1.5 rounded-lg transition-colors ${
-                            (state.navHistory?.past?.length || 0) === 0
-                                ? 'text-gray-600 cursor-not-allowed'
-                                : 'text-gray-300 hover:text-white hover:bg-white/10'
-                        }`}
-                        onClick={(e) => { e.stopPropagation(); dispatch({ type: 'NAV_BACK' }); }}
-                        disabled={!(state.navHistory?.past?.length)}
-                        title="Назад по истории (Ctrl+[)"
-                    >
-                        <div className="icon-arrow-left text-xs"></div>
-                    </button>
-                    <button
-                        className={`p-1.5 rounded-lg transition-colors ${
-                            (state.navHistory?.future?.length || 0) === 0
-                                ? 'text-gray-600 cursor-not-allowed'
-                                : 'text-gray-300 hover:text-white hover:bg-white/10'
-                        }`}
-                        onClick={(e) => { e.stopPropagation(); dispatch({ type: 'NAV_FORWARD' }); }}
-                        disabled={!(state.navHistory?.future?.length)}
-                        title="Вперёд по истории (Ctrl+])"
-                    >
-                        <div className="icon-arrow-right text-xs"></div>
-                    </button>
-                </div>
-
-                <span className="w-px h-4 bg-white/15"></span>
-
-                {/* Интерактивный адресный путь (Windows Explorer style) */}
-                <div className="flex items-center gap-1 text-xs">
-                    {state.breadcrumbs.map((crumb, idx) => {
-                        const isLast = idx === state.breadcrumbs.length - 1;
-                        const isRoot = crumb.id === 'root';
-                        return (
-                            <React.Fragment key={crumb.id || idx}>
-                                {idx > 0 && <span className="text-gray-500 font-bold px-0.5">❯</span>}
-                                <button
-                                    className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${
-                                        isLast
-                                            ? 'bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-500/30'
-                                            : 'text-gray-300 hover:text-white hover:bg-white/10'
-                                    }`}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        dispatch({ type: 'NAVIGATE_TO', payload: idx });
-                                    }}
-                                    title={isLast ? 'Текущая открытая папка' : `Перейти в ${crumb.name || crumb.id}`}
-                                >
-                                    <div className={isRoot ? 'icon-house text-cyan-400' : 'icon-folder text-amber-400'}></div>
-                                    <span>{crumb.name || (isRoot ? 'Главный холст' : crumb.id)}</span>
-                                </button>
-                            </React.Fragment>
-                        );
-                    })}
-
-                    {state.currentContext !== 'root' && (
-                        <button
-                            className="btn btn-sm bg-white/5 hover:bg-white/15 text-gray-300 border border-white/10 rounded px-2 py-1 ml-2 font-medium transition-all flex items-center gap-1"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                dispatch({ type: 'NAVIGATE_TO', payload: Math.max(0, state.breadcrumbs.length - 2) });
-                            }}
-                            title="Подняться на уровень выше (Esc)"
-                        >
-                            <div className="icon-arrow-up text-xs text-cyan-400"></div>
-                            <span className="text-[11px]">Наверх (Esc)</span>
-                        </button>
-                    )}
-                </div>
-            </div>
 
             <div 
                 className="absolute origin-top-left"
@@ -460,106 +671,153 @@ function Canvas() {
                     transition: (isPanning || isInteracting || !!state.pendingConnection) ? 'none' : 'transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1)'
                 }}
             >
-                {/* Render ALL Layers */}
-                {state.layers && Object.values(state.layers).map((layer, idx) => {
-                    if (!layer || !layer.id) return null;
-                    const vis = layerVisibility[layer.id];
-                    if (!vis || !vis.visible) return null;
-
-                    const isDimmed = vis.role === 'ancestor-ghost' || vis.role === 'transition';
-                    const isHighlightedContext = vis.role === 'context';
-
-                    return (
-                        <div
-                            key={layer.id || `layer-${idx}`}
-                            className={`
-                                ${isDimmed ? 'opacity-20 pointer-events-none grayscale blur-[2px]' : ''}
-                                ${vis.role === 'xray-down' || vis.role === 'xray-up' ? 'pointer-events-auto' : ''}
-                            `}
-                            style={{
-                                zIndex: isHighlightedContext ? 0 : (vis.zIndex || 2),
-                                opacity: vis.opacity,
-                                pointerEvents: vis.interactive ? 'auto' : 'none'
+                {/* 1. Окна уровней АКТИВНОГО проекта */}
+                <ProjectContext.Provider value={state.activeProjectId}>
+                    {Object.values(state.levelWindows || {})
+                        .filter((win) => !HU || !HU.isWindowVisible
+                            || HU.isWindowVisible(win.id, state.activeProjectId, state.containerIsolation))
+                        .map((win) => (
+                        <LevelWindow
+                            key={win.id}
+                            /* Камера живёт в state.levelViews; в компонент окно приходит
+                               одним объектом, чтобы не тащить два источника по дереву. */
+                            windowData={{
+                                ...win,
+                                index: win.levelIndex,
+                                ...(window.HierarchyUtils ? window.HierarchyUtils.getLevelView(win.id, state) : {})
                             }}
-                        >
-                            <Layer data={layer} />
-                        </div>
-                    );
-                })}
+                            nodes={state.nodes}
+                            layers={state.layers}
+                            ports={state.ports}
+                            links={state.links}
+                            selectedIds={state.selectedIds}
+                            isolatedIds={state.isolatedIds}
+                            interactionMode={state.interactionMode}
+                            dispatch={dispatch}
+                            state={state}
+                            worldZoom={zoom}
+                        />
+                    ))}
+                    {/* Магистральные отрезки межуровневых связей активного проекта */}
+                    <CrossLevelLinkLayer projectState={state} dispatch={dispatch} />
+                </ProjectContext.Provider>
 
-                {/* Render ALL Links */}
-                {Object.values(state.links || {}).map((link, idx) => {
-                    if (!link || !link.id || !link.sourcePortId || !link.targetPortId) return null;
-                    const sPort = state.ports ? state.ports[link.sourcePortId] : null;
-                    const tPort = state.ports ? state.ports[link.targetPortId] : null;
-                    if (!sPort || !tPort) return null;
-
-                    const sNodeVis = nodeVisibility[sPort.nodeId];
-                    const tNodeVis = nodeVisibility[tPort.nodeId];
-
-                    const isLinkSelected = (state.selectedIds || []).includes(link.id) ||
-                        (state.selectedIds || []).includes(sPort.id) ||
-                        (state.selectedIds || []).includes(tPort.id) ||
-                        (state.selectedIds || []).includes(sPort.nodeId) ||
-                        (state.selectedIds || []).includes(tPort.nodeId);
-
-                    // Isolation check
-                    if (state.isolatedIds.length > 0) {
-                        if (!state.isolatedIds.includes(sPort.nodeId) || !state.isolatedIds.includes(tPort.nodeId)) return null;
-                    }
-
-                    const isTheContextItself = link.id === state.currentContext;
-                    const isBreadcrumbAncestor = (state.breadcrumbs || []).some(b => b && b.id === link.id);
-
-                    const bothNodesVisible = sNodeVis && sNodeVis.visible && tNodeVis && tNodeVis.visible;
-
-                    // Межуровневая связь отрисовывается ТОЛЬКО если на холсте одновременно видны ОБА её узла
-                    // (или сама связь является контекстом/предком)
-                    if (!bothNodesVisible && !isTheContextItself && !isBreadcrumbAncestor) {
-                        return null;
-                    }
-
-                    const opacity = 1;
-                    const pointerEvents = 'auto';
-
+                {/* 1.05 Окна уровней НЕАКТИВНЫХ проектов: параллельный интерактивный вид
+                    с независимым ProjectContext и маршрутизацией FOR_PROJECT. */}
+                {(state.projectOrder || []).filter(pid => pid !== state.activeProjectId).map((pid) => {
+                    const proj = state.projects && state.projects[pid];
+                    if (!proj) return null;
+                    // Изоляция контейнеров: скрытый проект не рисуется вовсе
+                    if (HU && HU.isProjectVisible && !HU.isProjectVisible(pid, state.containerIsolation, proj.levelWindows)) return null;
+                    const projectFlat = getProjectFlatView(pid);
                     return (
-                        <div key={link.id || `link-${idx}`} style={{ opacity, pointerEvents }}>
-                            <Link data={link} />
-                        </div>
+                        <ProjectContext.Provider key={`project-${pid}`} value={pid}>
+                            <div className="opacity-95 transition-opacity">
+                                {Object.values(proj.levelWindows || {})
+                                    .filter((win) => !HU || !HU.isWindowVisible
+                                        || HU.isWindowVisible(win.id, pid, state.containerIsolation))
+                                    .map((win) => (
+                                    <LevelWindow
+                                        key={win.id}
+                                        windowData={{
+                                            ...win,
+                                            index: win.levelIndex,
+                                            ...(window.HierarchyUtils ? window.HierarchyUtils.getLevelView(win.id, projectFlat) : {})
+                                        }}
+                                        nodes={proj.nodes}
+                                        layers={proj.layers}
+                                        ports={proj.ports}
+                                        links={proj.links}
+                                        selectedIds={state.selectedIds}
+                                        isolatedIds={state.isolatedIds}
+                                        interactionMode={state.interactionMode}
+                                        dispatch={dispatch}
+                                        state={projectFlat}
+                                        worldZoom={zoom}
+                                    />
+                                ))}
+                            </div>
+                            {/* Магистральные отрезки межуровневых связей неактивного проекта */}
+                            <CrossLevelLinkLayer projectState={projectFlat} dispatch={dispatch} interactive={true} />
+                        </ProjectContext.Provider>
                     );
                 })}
-                
+
+                {/* 1.1 Drag&Drop: переносимые элементы рисуются ПОВЕРХ всех окон
+                    в контексте своего проекта. */}
+                {state.ui && state.ui.dragDropMode && state.dragGesture && state.dragGesture.ids && state.dragGesture.ids.length > 0 && (() => {
+                    const H = window.HierarchyUtils;
+                    if (!H) return null;
+                    const dragPid = (state.dragGesture && state.dragGesture.projectId) || (() => {
+                        const firstId = state.dragGesture && state.dragGesture.ids && state.dragGesture.ids[0];
+                        if (!firstId) return state.activeProjectId;
+                        for (const pid of (state.projectOrder || [])) {
+                            const p = state.projects && state.projects[pid];
+                            if (p && ((p.nodes && p.nodes[firstId]) || (p.layers && p.layers[firstId]))) return pid;
+                        }
+                        return state.activeProjectId;
+                    })();
+                    const dragProjectView = getProjectFlatView(dragPid);
+                    const byWin = {};
+                    state.dragGesture.ids.forEach(id => {
+                        if (!dragProjectView.nodes[id] && !(dragProjectView.layers && dragProjectView.layers[id])) return;
+                        const lvl = H.getEntityLevel(id, dragProjectView.nodes, dragProjectView.layers);
+                        const win = H.getWindowOfLevel(lvl, dragProjectView.levelWindows);
+                        if (!win) return;
+                        (byWin[win.id] = byWin[win.id] || []).push(id);
+                    });
+                    const M = H.LEVEL_WINDOW_METRICS;
+                    return (
+                        <ProjectContext.Provider value={dragPid}>
+                            {Object.entries(byWin).map(([winId, ids]) => {
+                                const win = dragProjectView.levelWindows[winId];
+                                if (!win) return null;
+                                const view = H.getLevelView(winId, dragProjectView);
+                                if (view.isCollapsed) return null;
+                                return (
+                                    <div
+                                        key={`drag-overlay-${winId}`}
+                                        className="absolute pointer-events-none"
+                                        style={{
+                                            left: (win.position?.x || 0) + M.borderW,
+                                            top: (win.position?.y || 0) + M.borderW + M.headerH,
+                                            zIndex: 60
+                                        }}
+                                    >
+                                        <div style={{
+                                            transform: `translate(${view.innerOffset?.x || 0}px, ${view.innerOffset?.y || 0}px) scale(${view.innerZoom || 1})`,
+                                            transformOrigin: 'top left'
+                                        }}>
+                                            {ids.map(id => dragProjectView.nodes[id] ? (
+                                                <NodeComponent
+                                                    key={`drag-ov-${id}`}
+                                                    data={dragProjectView.nodes[id]}
+                                                    zoom={view.innerZoom || 1}
+                                                />
+                                            ) : (
+                                                <Layer
+                                                    key={`drag-ov-${id}`}
+                                                    data={dragProjectView.layers[id]}
+                                                    nodes={dragProjectView.nodes}
+                                                    layers={dragProjectView.layers}
+                                                    selectedIds={state.selectedIds}
+                                                    isolatedIds={state.isolatedIds}
+                                                    dispatch={dispatch}
+                                                    zoom={view.innerZoom || 1}
+                                                />
+                                            ))}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </ProjectContext.Provider>
+                    );
+                })()}
+
                 <PendingLink />
-
-                {/* Render Nodes */}
-                {Object.values(state.nodes || {}).map((node, idx) => {
-                    if (!node || !node.id) return null;
-                    const vis = nodeVisibility[node.id];
-                    if (!vis || !vis.visible || node.hidden) return null;
-
-                    const isDimmed = vis.role === 'ancestor-ghost' || vis.role === 'transition';
-                    const isHighlightedContext = vis.role === 'context' || vis.role === 'port-parent' || vis.role === 'link-endpoint';
-                    const isBreadcrumbAncestor = (state.breadcrumbs || []).some(b => b && b.id === node.id);
-
-                    return (
-                        <div 
-                            key={node.id || `node-${idx}`} 
-                            className={`
-                                ${isDimmed && !isBreadcrumbAncestor ? 'opacity-20 pointer-events-none grayscale blur-[2px]' : ''}
-                                ${isHighlightedContext ? 'shadow-[0_0_100px_rgba(0,122,255,0.15)] ring-4 ring-[var(--accent-blue)]/30 rounded-lg opacity-100 pointer-events-auto' : ''}
-                                ${vis.role === 'xray-down' || vis.role === 'xray-up' ? 'opacity-100 pointer-events-auto shadow-md' : ''}
-                                ${isBreadcrumbAncestor && !isHighlightedContext ? 'opacity-50 pointer-events-none ring-4 ring-[var(--accent-blue)] ring-opacity-50 rounded-lg' : ''}
-                                ${vis.role === 'peek' ? 'opacity-100 pointer-events-none shadow-xl' : ''}
-                                ${vis.role === 'peek-dimmed' ? 'opacity-25 grayscale' : ''}
-                                ${vis.role === 'peek-source' ? 'ring-4 ring-[var(--accent-blue)]/60 rounded-lg' : ''}
-                            `}
-                            style={{ zIndex: vis.zIndex, opacity: vis.opacity, pointerEvents: vis.interactive ? 'auto' : 'none' }}
-                        >
-                            <Node data={node} isContextNode={isHighlightedContext || isBreadcrumbAncestor} isParentOfSelected={vis.isParentOfSelected} />
-                        </div>
-                    );
-                })}
             </div>
         </div>
     );
 }
+
+if (typeof window !== 'undefined') window.Canvas = Canvas;

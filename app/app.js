@@ -39,7 +39,7 @@ function App() {
         <div className="w-screen h-screen flex overflow-hidden relative" data-name="app" data-file="app.js">
           <Canvas />
           <Toolbar />
-          <Library />
+          {/* Library (обозреватели) рендерится внутри Canvas — в стеке плашек проектов */}
           <ContextActionBar />
         </div>
       </StoreProvider>

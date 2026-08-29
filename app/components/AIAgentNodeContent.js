@@ -5,8 +5,31 @@ function _setActiveApiKey(k) { try { localStorage.setItem(_API_KEY_STORAGE, k); 
 function _getSavedApiKeys() { try { return JSON.parse(localStorage.getItem(_SAVED_KEYS_STORAGE) || '[]'); } catch(e) { return []; } }
 function _setSavedApiKeys(arr) { try { localStorage.setItem(_SAVED_KEYS_STORAGE, JSON.stringify(arr)); } catch(e) {} }
 
+// Потолок команд в одном ответе ассистента. Страховка от runaway-ответа, а не
+// рабочее ограничение: весь батч применяется одним шагом истории и снимается
+// одним Ctrl+Z, поэтому защитой служит подтверждение, а не малое число.
+// Значение продублировано в системном промпте — менять их только вместе.
+const MAX_AI_BATCH_SIZE = 500;
+
+// Автоопределение провайдера по префиксу API-ключа
+function detectProviderByKey(rawKey) {
+    if (!rawKey || typeof rawKey !== 'string') return null;
+    const k = rawKey.trim();
+    if (k.startsWith('AIzaSy') || k.startsWith('AIza')) return 'google';
+    if (k.startsWith('sk-ant-')) return 'anthropic';
+    if (k.startsWith('xai-')) return 'grok';
+    if (k.startsWith('sk-proj-') || k.startsWith('sk-')) return 'openai';
+    return null;
+}
+
 function AIAgentNodeContent({ nodeId }) {
-    const { state, dispatch } = useStore();
+    // useProjectStore() вместо useStore(): узел-ассистент рендерится внутри
+    // NodeView конкретного проекта на холсте (свой ProjectContext от Canvas.js)
+    // и обязан читать/менять СВОЙ проект, даже если сейчас активен другой.
+    // useStore() отдавал бы активный проект — узел в неактивном проекте видел
+    // бы и правил чужие данные. См. docs/ARCHITECTURE.md, «Проектно-адресный
+    // слой поверх Store.js».
+    const { state, dispatch } = useProjectStore();
     const [tab, setTab] = React.useState('chat'); // 'chat' | 'logs' | 'settings'
     const [actionLogs, setActionLogs] = React.useState([]);
     const [input, setInput] = React.useState('');
@@ -19,6 +42,7 @@ function AIAgentNodeContent({ nodeId }) {
     const [showKeyManager, setShowKeyManager] = React.useState(false);
     const [savedKeys, setSavedKeys] = React.useState(_getSavedApiKeys);
     const [kmForm, setKmForm] = React.useState({ label: '', provider: 'openai', key: '' });
+    const [pendingBatch, setPendingBatch] = React.useState(null);
     const chatEndRef = React.useRef(null);
     const fileInputRef = React.useRef(null);
 
@@ -43,9 +67,115 @@ function AIAgentNodeContent({ nodeId }) {
     const activeSession = currentSessions.find(s => s.id === activeSessionId) || currentSessions[0];
     const chatHistory = activeSession ? activeSession.messages : [];
 
+    // Функция применения батча экшенов от ИИ к холсту.
+    //
+    // Весь батч — ОДИН шаг Undo. Без этого каждый экшен ИИ писал собственный
+    // снимок, батч из 30+ команд полностью вымывал лимит истории в 20 шагов, и
+    // отменить работу ассистента одним Ctrl+Z было невозможно в принципе.
+    // Пакет открывается до применения и закрывается в finally — прерывание на
+    // любой команде не должно оставить историю выключенной.
+    const applyActionBatch = React.useCallback((actionsList, cleanAiText = '') => {
+        let validCount = 0;
+        let invalidCount = 0;
+        const logEntries = [];
+        const currentState = stateRef.current;
+
+        dispatch({ type: 'BEGIN_HISTORY_BATCH', payload: { logMessage: `ИИ-ассистент: ${actionsList.length} действий` } });
+        try {
+        actionsList.forEach(action => {
+            const val = validateAndSanitizeAction(action, currentState, actionsList);
+            if (val.valid) {
+                try {
+                    dispatch(action);
+                    validCount++;
+                    logEntries.push({
+                        id: Date.now() + Math.random(),
+                        time: new Date().toLocaleTimeString(),
+                        type: 'success',
+                        msg: `Применен экшен ${action.type} (id: ${action.payload?.id || '—'})`
+                    });
+                } catch (actionErr) {
+                    console.error('Ошибка выполнения экшена от ИИ:', actionErr, action);
+                    invalidCount++;
+                    logEntries.push({
+                        id: Date.now() + Math.random(),
+                        time: new Date().toLocaleTimeString(),
+                        type: 'error',
+                        msg: `Ошибка выполнения ${action.type}: ${actionErr.message}`
+                    });
+                }
+            } else {
+                console.warn('Отклонен невалидный экшен от ИИ:', val.reason, action);
+                invalidCount++;
+                logEntries.push({
+                    id: Date.now() + Math.random(),
+                    time: new Date().toLocaleTimeString(),
+                    type: 'warn',
+                    msg: `Отклонен экшен ${action.type}: ${val.reason}`
+                });
+            }
+        });
+        } finally {
+            // Ни одна команда не применилась — пустой шаг в историю не пишем
+            if (validCount > 0) {
+                dispatch({ type: 'COMMIT_HISTORY', payload: { logMessage: `ИИ-ассистент: применено ${validCount} действий` } });
+            } else {
+                dispatch({ type: 'CANCEL_HISTORY_BATCH' });
+            }
+        }
+
+        setActionLogs(prev => [...logEntries, ...prev].slice(0, 150));
+
+        let report = cleanAiText ? (cleanAiText + '\n\n') : '';
+        if (validCount > 0) {
+            report += `✅ *Применено ${validCount} экшенов к холсту.* Отменить всё разом — Ctrl+Z.`;
+
+            setTimeout(() => {
+                if (!mountedRef.current) return;
+                const latestState = stateRef.current;
+                const affectedLayerIds = new Set();
+                actionsList.forEach(a => {
+                    if (a && a.payload) {
+                        if (a.type === 'ADD_LAYER') affectedLayerIds.add(a.payload.id);
+                        if (a.type === 'ADD_NODE' && a.payload.parentId && a.payload.parentId !== 'root') {
+                            affectedLayerIds.add(a.payload.parentId);
+                        }
+                    }
+                });
+
+                affectedLayerIds.forEach(lId => {
+                    const layer = latestState.layers ? latestState.layers[lId] : null;
+                    if (layer) {
+                        const layerNodes = Object.values(latestState.nodes || {}).filter(n => n && n.parentId === lId);
+                        if (layerNodes.length > 0 && window.GeometryUtils && window.GeometryUtils.getSmartPlacement) {
+                            const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, layer, latestState.nodes);
+                            dispatch({ type: 'UPDATE_LAYER', payload: { id: lId, updates: { size: newLayerSize }, skipHistory: true } });
+                            dispatch({ type: 'MASS_UPDATE', payload: { ids: layerNodes.map(n => n.id), updatesById, skipHistory: true } });
+                        }
+                    }
+                });
+
+                dispatch({ type: 'ALIGN_LAYERS', payload: { contextId: 'root' } });
+            }, 50);
+        }
+        if (invalidCount > 0) {
+            report += (validCount > 0 ? '\n' : '') + `⚠️ *Отклонено ${invalidCount} невалидных команд.*`;
+        }
+
+        if (report) {
+            dispatch({ type: 'ADD_AI_MESSAGE', payload: { nodeId, message: { role: 'ai', content: report.trim() } } });
+        }
+        setPendingBatch(null);
+    }, [dispatch, nodeId]);
+
     React.useEffect(() => {
         if (chatEndRef.current && tab === 'chat') {
-            chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+            // НЕ scrollIntoView: он прокручивает ВСЕХ прокручиваемых предков,
+            // включая overflow:hidden контейнеры холста и вьюпорт окна уровня —
+            // мир визуально сдвигался, хотя стейт камеры не менялся.
+            // Прокручиваем только сам контейнер сообщений.
+            const scroller = chatEndRef.current.parentElement;
+            if (scroller) scroller.scrollTop = scroller.scrollHeight;
         }
     }, [chatHistory, tab, activeSessionId]);
 
@@ -54,11 +184,16 @@ function AIAgentNodeContent({ nodeId }) {
         const SUPPORTED_ACTION_TYPES = new Set([
             'ADD_LAYER', 'ADD_NODE', 'ADD_PORT', 'ADD_LINK',
             'UPDATE_NODE', 'UPDATE_LAYER', 'UPDATE_PORT', 'UPDATE_LINK',
-            'REPARENT_ENTITY', 'DELETE_SELECTED', 'ALIGN_LAYERS',
-            'DIVE_INTO', 'GO_TO_CONTEXT', 'NAV_BACK', 'NAV_FORWARD',
+            'REPARENT_ENTITY', 'ALIGN_LAYERS',
             'REMOVE_NODE', 'REMOVE_LAYER', 'REMOVE_PORT', 'REMOVE_LINK',
-            'MASS_UPDATE'
+            'MASS_UPDATE',
+            // v11: уровни и вложенность (используются системным промптом ассистента)
+            'CREATE_NESTED_NODE', 'FOCUS_CHILDREN_OF_NODE',
+            'CLEAR_LEVEL_WINDOW', 'REMOVE_LEVEL_WINDOW', 'REMOVE_ROOT_CANVAS', 'CLEAR_PROJECT', 'TRANSFER_NODE'
         ]);
+
+        // Экшены, у которых payload — просто строка-идентификатор
+        const STRING_PAYLOAD_TYPES = new Set(['REMOVE_NODE', 'REMOVE_LAYER', 'REMOVE_PORT', 'REMOVE_LINK']);
 
         if (!action || typeof action !== 'object' || typeof action.type !== 'string') {
             return { valid: false, reason: 'Экшен должен быть объектом с типом string' };
@@ -68,6 +203,16 @@ function AIAgentNodeContent({ nodeId }) {
         }
 
         const payload = action.payload;
+        if (STRING_PAYLOAD_TYPES.has(action.type)) {
+            // REMOVE_* принимают и строку-ID, и объект { id } (редьюсер ждёт строку —
+            // объект нормализуем прямо здесь)
+            if (typeof payload === 'string' && payload.trim() !== '') return { valid: true };
+            if (payload && typeof payload === 'object' && typeof payload.id === 'string') {
+                action.payload = payload.id;
+                return { valid: true };
+            }
+            return { valid: false, reason: `${action.type}: payload должен быть строкой-ID` };
+        }
         if (!payload || typeof payload !== 'object') {
             return { valid: false, reason: 'Payload должен быть объектом' };
         }
@@ -117,7 +262,8 @@ function AIAgentNodeContent({ nodeId }) {
 
     // Динамический запрос реального списка доступных моделей напрямую из API провайдера
     const fetchAvailableModels = async (quiet = false) => {
-        const { apiKey, baseUrl, provider = 'openai' } = aiAgentSettings;
+        const { apiKey, baseUrl } = aiAgentSettings;
+        const provider = aiAgentSettings.provider || detectProviderByKey(apiKey) || 'openai';
         if (!apiKey || !apiKey.trim()) {
             if (!quiet) setFetchModelMsg('⚠️ Укажите API Ключ');
             return;
@@ -130,8 +276,18 @@ function AIAgentNodeContent({ nodeId }) {
             let headers = {};
 
             if (provider === 'google') {
-                apiUrl = (baseUrl ? baseUrl.replace(/\/+$/, '') : 'https://generativelanguage.googleapis.com/v1beta/openai') + '/models';
-                headers = { 'Authorization': `Bearer ${apiKey.trim()}` };
+                if (baseUrl && baseUrl.trim() !== '') {
+                    apiUrl = baseUrl.replace(/\/+$/, '') + '/models';
+                    headers = {
+                        'Authorization': `Bearer ${apiKey.trim()}`,
+                        'x-goog-api-key': apiKey.trim()
+                    };
+                } else {
+                    apiUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey.trim())}`;
+                    headers = {
+                        'x-goog-api-key': apiKey.trim()
+                    };
+                }
             } else if (provider === 'anthropic') {
                 apiUrl = (baseUrl ? baseUrl.replace(/\/+$/, '') : 'https://api.anthropic.com') + '/v1/models';
                 headers = {
@@ -151,15 +307,34 @@ function AIAgentNodeContent({ nodeId }) {
 
             if (!response.ok) {
                 const errText = await response.text();
-                throw new Error(`Статус ${response.status}: ${errText.slice(0, 100)}`);
+                let parsedErr = errText;
+                try {
+                    const parsedObj = JSON.parse(errText);
+                    parsedErr = parsedObj.error?.message || parsedObj.message || errText;
+                } catch (e) {}
+                throw new Error(`Статус ${response.status}: ${parsedErr.slice(0, 120)}`);
             }
 
             const data = await response.json();
             let rawList = [];
-            if (Array.isArray(data.data)) {
+            if (Array.isArray(data.models)) {
+                // Google Gemini format
+                rawList = data.models
+                    .filter(m => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes('generateContent'))
+                    .map(m => m.name || m.id || m.displayName)
+                    .filter(Boolean);
+            } else if (Array.isArray(data.data)) {
+                // OpenAI / Anthropic / Grok format
                 rawList = data.data.map(m => m.id || m.name).filter(Boolean);
-            } else if (Array.isArray(data.models)) {
-                rawList = data.models.map(m => m.id || m.name || m.displayName).filter(Boolean);
+                if (provider === 'openai') {
+                    rawList.sort((a, b) => {
+                        const aPref = /^(gpt|o1|o3|chatgpt)/i.test(a);
+                        const bPref = /^(gpt|o1|o3|chatgpt)/i.test(b);
+                        if (aPref && !bPref) return -1;
+                        if (!aPref && bPref) return 1;
+                        return a.localeCompare(b);
+                    });
+                }
             }
 
             // Очищаем служебный префикс models/ если сервер его возвращает (например у Google)
@@ -177,7 +352,7 @@ function AIAgentNodeContent({ nodeId }) {
             }
         } catch (e) {
             console.warn('Could not fetch models dynamically:', e);
-            if (!quiet) setFetchModelMsg(`⚠️ Не удалось загрузить список: ${e.message}`);
+            if (!quiet) setFetchModelMsg(`⚠️ Не удалось загрузить: ${e.message}`);
         } finally {
             setIsFetchingModels(false);
         }
@@ -199,9 +374,9 @@ function AIAgentNodeContent({ nodeId }) {
             let body = {};
 
             const targetModel = model && model.trim() !== '' ? model.trim() :
-                (provider === 'anthropic' ? 'claude-3-5-sonnet' :
-                    provider === 'google' ? 'gemini-1.5-flash' :
-                        provider === 'grok' ? 'grok-2-mini' : 'gpt-4o');
+                (provider === 'anthropic' ? 'claude-sonnet-4-5' :
+                    provider === 'google' ? 'gemini-2.5-flash' :
+                        provider === 'grok' ? 'grok-3-mini' : 'gpt-4o');
 
             if (provider === 'anthropic') {
                 apiUrl = (baseUrl ? baseUrl.replace(/\/+$/, '') : 'https://api.anthropic.com') + '/v1/messages';
@@ -302,7 +477,8 @@ function AIAgentNodeContent({ nodeId }) {
             if (isLocalMode) {
                 const addNestedChildren = (parentId) => {
                     Object.values(state.nodes).forEach(n => {
-                        if (n.parentId === parentId && !connectedNodes.has(n)) {
+                        // v11: родство — ownerId; parentId оставлен для легаси-вложенности
+                        if ((n.ownerId === parentId || n.parentId === parentId) && !connectedNodes.has(n)) {
                             connectedNodes.add(n);
                             addNestedChildren(n.id);
                         }
@@ -312,22 +488,26 @@ function AIAgentNodeContent({ nodeId }) {
                 initialNodes.forEach(n => addNestedChildren(n.id));
             }
 
-            let nodesSummary;
-            if (isLocalMode) {
-                nodesSummary = Array.from(connectedNodes).map(n => ({
-                    id: n.id,
-                    name: n.name,
-                    parentId: n.parentId,
-                    type: n.type || 'default'
-                }));
-            } else {
-                nodesSummary = Object.values(state.nodes).map(n => ({
-                    id: n.id,
-                    name: n.name,
-                    parentId: n.parentId,
-                    type: n.type || 'default'
-                }));
-            }
+            // v11: в сводку входят владелец (родство) и уровень иерархии
+            const H = window.HierarchyUtils;
+            const describeNode = (n) => ({
+                id: n.id,
+                name: n.name,
+                ownerId: n.ownerId || null,
+                layerId: (n.parentId && n.parentId !== 'root') ? n.parentId : null,
+                level: H ? H.getEntityLevel(n.id, state.nodes, state.layers) : 0,
+                type: n.type || 'default'
+            });
+            const nodesSummary = (isLocalMode ? Array.from(connectedNodes) : Object.values(state.nodes)).map(describeNode);
+
+            // Сводка уровней проекта: номер, имя окна, количество узлов
+            const levelsSummary = Object.values(state.levelWindows || {})
+                .sort((a, b) => a.levelIndex - b.levelIndex)
+                .map(w => {
+                    const count = Object.keys(state.nodes || {}).filter(id =>
+                        (H ? H.getEntityLevel(id, state.nodes, state.layers) : 0) === w.levelIndex).length;
+                    return `L${w.levelIndex} «${w.name || (w.levelIndex === 0 ? 'Главный холст' : 'Уровень ' + w.levelIndex)}» — узлов: ${count}`;
+                }).join('; ');
 
             const connectedNodesArray = Array.from(connectedNodes).slice(0, 15);
             let contextStr = '';
@@ -344,12 +524,21 @@ function AIAgentNodeContent({ nodeId }) {
 
             let aiResponse = '';
 
-            let systemPrompt = `Вы — ИИ-ассистент (Copilot) для визуального редактора узлов Architector. 
+            let systemPrompt = `Вы — ИИ-ассистент (Copilot) для визуального редактора иерархических графов Architector (модель данных v11: пространственные окна уровней).
+
+УСТРОЙСТВО ИЕРАРХИИ (важно для понимания проекта):
+- Каждый уровень иерархии — отдельное окно-холст: L0 «Главный холст» (корневые родители), L1 (их дети), L2 (внуки) и глубже.
+- Родство выражается полем ownerId: узел с ownerId = X является РЕБЁНКОМ узла X и живёт на уровне ниже (level владельца + 1). Узлы без ownerId — корневые (уровень 0).
+- Поле parentId — это НЕ родство, а координатный контейнер: "root" (холст своего уровня) или ID слоя-рамки, в котором узел лежит визуально.
+- Поле level в сводке узлов — готовый номер уровня каждого узла.
+- Сирота-якорь: узел/слой БЕЗ ownerId с полем homeLevel = N живёт на уровне N как глава независимой ветки (его дети — на N+1). Без homeLevel сирота живёт на уровне 0.
+
+Уровни проекта: ${levelsSummary || 'только Главный холст (пусто)'}
 
 Текущее состояние холста:
 ${contextStr}
 
-Доступный список узлов для вашей работы (ID, Имя, Родитель):
+Доступный список узлов (id, name, ownerId — родитель, layerId — слой-контейнер, level — уровень, type):
 ${JSON.stringify(nodesSummary)}
 
 `;
@@ -358,32 +547,42 @@ ${JSON.stringify(nodesSummary)}
                 systemPrompt += `ВЫ РАБОТАЕТЕ В РЕЖИМЕ АГЕНТА И МОЖЕТЕ НАПРЯМУЮ РЕДАКТИРОВАТЬ И СТРОИТЬ ХОЛСТ!
 
 ПОЛНАЯ ИНСТРУКЦИЯ И ПОДДЕРЖИВАЕМЫЕ JSON-ЭКШЕНЫ:
-Если пользователь просит СОЗДАТЬ, ИЗМЕНИТЬ, УДАЛИТЬ или ПОГРУЗИТЬСЯ в структуры (слои, узлы, порты, связи), вы ОБЯЗАНЫ приложить в самом конце своего ответа один блок кода в формате JSON с массивом экшенов:
+Если пользователь просит СОЗДАТЬ, ИЗМЕНИТЬ, УДАЛИТЬ или ПОГРУЗИТЬСЯ в структуры (слои, узлы, порты, связи, уровни), вы ОБЯЗАНЫ приложить в самом конце своего ответа один блок кода в формате JSON с массивом экшенов:
 
 \`\`\`json
 [
-  { "type": "ADD_LAYER", "payload": { "id": "layer-1-ui", "name": "1. UI Layer", "content": "Описание слоя", "color": "#0284c7", "position": {"x": -400, "y": -250}, "size": {"w": 650, "h": 450}, "parentId": "root" } },
-  { "type": "ADD_NODE", "payload": { "id": "node-1", "name": "Canvas Viewport", "content": "Интерактивный холст", "color": "#0f172a", "position": {"x": 30, "y": 80}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle", "mediaUrl": "https://...", "mediaHeight": 70 } },
-  { "type": "ADD_NODE", "payload": { "id": "node-2", "name": "Store Provider", "content": "Хранилище состояния", "color": "#0f172a", "position": {"x": 310, "y": 80}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle" } },
-  { "type": "ADD_NODE", "payload": { "id": "node-sub-1", "name": "Sub-Component", "content": "Дочерний узел (Уровень 2)", "color": "#0284c7", "position": {"x": 20, "y": 20}, "parentId": "node-1", "shape": "rectangle" } },
+  { "type": "ADD_LAYER", "payload": { "id": "layer-1-ui", "name": "1. UI Layer", "content": "Описание слоя", "color": "#0284c7", "position": {"x": 60, "y": 80}, "size": {"w": 650, "h": 450}, "parentId": "root" } },
+  { "type": "ADD_NODE", "payload": { "id": "node-1", "name": "Canvas Viewport", "content": "Интерактивный холст", "color": "#0f172a", "position": {"x": 90, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle", "mediaUrl": "https://...", "mediaHeight": 70 } },
+  { "type": "ADD_NODE", "payload": { "id": "node-2", "name": "Store Provider", "content": "Хранилище состояния", "color": "#0f172a", "position": {"x": 370, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle" } },
+  { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "node-1", "id": "node-sub-1", "name": "Sub-Component" } },
+  { "type": "ADD_NODE", "payload": { "id": "node-sub-2", "name": "Второй ребёнок", "content": "Брат node-sub-1", "color": "#0284c7", "position": {"x": 380, "y": 120}, "size": {"w": 250, "h": 120}, "parentId": "root", "ownerId": "node-1", "shape": "rectangle" } },
   { "type": "ADD_PORT", "payload": { "id": "port-1-out", "nodeId": "node-1", "type": "output", "edge": "right", "position": 0.5, "name": "Events Out", "color": "#38bdf8" } },
   { "type": "ADD_PORT", "payload": { "id": "port-2-in", "nodeId": "node-2", "type": "input", "edge": "left", "position": 0.5, "name": "Actions In", "color": "#0284c7" } },
-  { "type": "ADD_LINK", "payload": { "id": "link-1-to-2", "sourcePortId": "port-1-out", "targetPortId": "port-2-in", "name": "Redux Dispatch", "linkStyle": "orthogonal", "color": "#38bdf8", "context": "layer-1-ui" } },
-  { "type": "DIVE_INTO", "payload": { "id": "node-1", "name": "Canvas Viewport" } },
+  { "type": "ADD_LINK", "payload": { "id": "link-1-to-2", "sourcePortId": "port-1-out", "targetPortId": "port-2-in", "name": "Redux Dispatch", "linkStyle": "orthogonal", "color": "#38bdf8" } },
+  { "type": "ADD_PORT", "payload": { "id": "port-layer-1-out", "nodeId": "layer-1-ui", "type": "output", "edge": "right", "position": 0.5, "name": "Layer Out", "color": "#38bdf8" } },
   { "type": "UPDATE_NODE", "payload": { "id": "node-1", "updates": { "color": "#HEX", "name": "Новое имя" } } },
   { "type": "REMOVE_NODE", "payload": "node-2" }
 ]
 \`\`\`
+(В примере выше \`port-layer-1-out\` — порт, поставленный на СЛОЙ \`layer-1-ui\` через тот же \`ADD_PORT\` с \`nodeId\` = id слоя; такой порт можно связать \`ADD_LINK\`'ом с портом другого слоя или узла ровно так же, как порты узлов.)
 
-СТРОГИЕ ПРАВИЛА И ИНВАРИАНТЫ:
-1. ФОРМА УЗЛОВ (shape): Все узлы ИМЕЮТ СТРОГО ПРЯМОУГОЛЬНУЮ ФОРМУ (shape: "rectangle"). Не-прямоугольные формы запрещены.
-2. ПОГРУЖЕНИЕ (DIVE_INTO): Вы можете переключить фокус камеры пользователя внутрь сгенерированного узла командой { "type": "DIVE_INTO", "payload": { "id": "node-id", "name": "Заголовок" } }. Погружение работает исключительно для узлов.
-3. МНОГОУРОВНЕВАЯ ВЛОЖЕННОСТЬ (parentId):
-   - Уровень 1: parentId === "root" или parentId === ID слоя.
-   - Уровень 2+: parentId === ID узла (создание дочерних суб-узлов внутри узла-контейнера).
-4. ОБЯЗАТЕЛЬНОЕ СОЗДАНИЕ ПОРТОВ (ADD_PORT): Для каждого узла создавайте порты на его гранях!
-5. СВЯЗИ СОЕДИНЯЮТ ТОЛЬКО ПОРТЫ (ADD_LINK): sourcePortId и targetPortId содержат СТРОГО ID портов.
-6. Выдайте короткий вежливый пояснительный текстовый ответ, а в самом конце — ТОЛЬКО один блок \`\`\`json ... \`\`\`.`;
+СТРОГИЕ ПРАВИЛА И ИНВАРИАНТЫ (модель v11):
+1. ФОРМА УЗЛОВ (shape): все узлы СТРОГО прямоугольные (shape: "rectangle").
+2. ИЕРАРХИЯ РОДСТВА — через ownerId, НЕ через parentId:
+   - Корневой узел (уровень 0, Главный холст): без ownerId, parentId = "root" или ID слоя.
+   - Ребёнок узла X: ЛУЧШИЙ способ — { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "X", "id": "...", "name": "..." } } — узел сам попадёт на следующий уровень с автоматическим размещением, окно уровня создастся при необходимости.
+   - Альтернатива (когда нужна точная позиция): ADD_NODE с "ownerId": "X" и "parentId": "root" — position тогда задаётся в координатах ХОЛСТА УРОВНЯ ребёнка (не внутри родителя!): x: 60..900, y: 80..600, братьев разносите сеткой с шагом ~280 по x.
+   - НЕ указывайте ID узла в parentId — это легаси; parentId только "root" или ID слоя.
+3. ПОЗИЦИИ: локальны холсту уровня, на котором живёт узел. Узлы одного родителя (братья) лежат на одном уровне рядом друг с другом.
+4. ОБЯЗАТЕЛЬНОЕ СОЗДАНИЕ ПОРТОВ (ADD_PORT): для каждого узла создавайте порты на его гранях! Порт можно поставить и на СЛОЙ — тем же ADD_PORT, где nodeId = id слоя (поле называется nodeId по историческим причинам, но принимает id узла ИЛИ слоя). Слой — полноправный участник графа связей наравне с узлом.
+5. СВЯЗИ СОЕДИНЯЮТ ТОЛЬКО ПОРТЫ (ADD_LINK): sourcePortId и targetPortId содержат СТРОГО ID портов, независимо от того, узлу или слою эти порты принадлежат. Допустимы любые комбинации: Узел↔Узел, Слой↔Слой, Узел↔Слой. Связи между узлами/слоями разных уровней допустимы (рисуются пунктиром через прокси-порты на рамках окон).
+6. УДАЛЕНИЕ И ОЧИСТКА: REMOVE_NODE удаляет узел с портами и всеми потомками по ownerId. Экшены уровней: CLEAR_LEVEL_WINDOW { "index": N } — очистить уровень N: удаляются ТОЛЬКО его сущности, потомки на нижних уровнях выживают на своих местах (пере-якорятся на ближайшего живого предка со «связью через поколение» — поле ownerGap: владелец может быть на 2+ уровня выше; без живых предков потомок становится сиротой-якорем homeLevel, сохранив свою ветку); REMOVE_LEVEL_WINDOW { "index": N } — удалить уровень N>=1: его сущности удаляются, потомки и уровни ниже поднимаются на один; REMOVE_ROOT_CANVAS {} — удалить Главный холст: его сущности удаляются, Уровень 1 становится Главным холстом (имя и цвет окна сохраняются), потомки поднимаются на уровень вверх (no-op, если других уровней нет); CLEAR_PROJECT {} — полная очистка содержимого ВСЕХ уровней (окна и настройки остаются).
+7. ФОКУСИРОВКА: FOCUS_CHILDREN_OF_NODE { "parentId": "X" } — показать детей узла X на следующем уровне.
+8. ПЕРЕНОС МЕЖДУ УРОВНЯМИ: TRANSFER_NODE { "ids": ["n1"], "targetLayerId": "layer-x" } — перенести узлы в слой (свой уровень — группировка без смены родства; чужой уровень — узел усыновляется веткой слоя, его поддерево и связи переезжают автоматически; слой собственной ветки — «спуск»: узел и его прямые дети становятся сиротами-братьями). Вместо targetLayerId можно указать "targetLevelIndex": N — перенос на холст уровня (без владельца узел станет сиротой-якорем).
+9. НЕЗАВИСИМЫЕ ВЕТКИ: чтобы создать узел на уровне N без родителя, задайте в ADD_NODE "homeLevel": N (и не задавайте ownerId).
+10. ЛИМИТ ПАКЕТА: не более ${MAX_AI_BATCH_SIZE} команд в одном ответе — всё сверх этого числа отбрасывается. Если задача крупнее, выполните её частями: выдайте первую порцию и предложите продолжить следующим сообщением. Весь пакет применяется одним шагом истории и отменяется одним Ctrl+Z.
+11. ПОДТВЕРЖДЕНИЕ: по умолчанию пользователь видит список ваших команд и подтверждает их вручную. Формулируйте пояснение так, чтобы по нему было понятно, что именно изменится на холсте, — особенно для удаляющих команд.
+12. Выдайте короткий вежливый пояснительный текстовый ответ, а в самом конце — ТОЛЬКО один блок \`\`\`json ... \`\`\`.`;
             } else {
                 systemPrompt += `ВЫ РАБОТАЕТЕ В РЕЖИМЕ CHAT-ONLY (Только чтение).
 Вы просто умный ИИ-помощник. Отвечайте на вопросы пользователя, анализируя предоставленный контекст холста.
@@ -395,9 +594,9 @@ ${JSON.stringify(nodesSummary)}
                 const baseUrl = aiAgentSettings.baseUrl || '';
 
                 const model = (aiAgentSettings.model && aiAgentSettings.model.trim() !== '') ? aiAgentSettings.model.trim() :
-                    (provider === 'anthropic' ? 'claude-3-5-sonnet' :
-                        provider === 'google' ? 'gemini-1.5-flash' :
-                            provider === 'grok' ? 'grok-2-mini' : 'gpt-4o');
+                    (provider === 'anthropic' ? 'claude-sonnet-4-5' :
+                        provider === 'google' ? 'gemini-2.5-flash' :
+                            provider === 'grok' ? 'grok-3-mini' : 'gpt-4o');
 
                 let apiUrl = '';
                 let fetchHeaders = {};
@@ -528,84 +727,35 @@ ${JSON.stringify(nodesSummary)}
             const jsonMatch = aiResponse.match(/```json\n?([\s\S]*?)\n?```/);
             if (jsonMatch && (!aiAgentSettings.mode || aiAgentSettings.mode === 'agent')) {
                 try {
-                    const actions = JSON.parse(jsonMatch[1]);
-                    if (Array.isArray(actions)) {
-                        let validCount = 0;
-                        let invalidCount = 0;
-                        const logEntries = [];
-
-                        actions.forEach(action => {
-                            const val = validateAndSanitizeAction(action, state, actions);
-                            if (val.valid) {
-                                try {
-                                    dispatch(action);
-                                    validCount++;
-                                    logEntries.push({
-                                        id: Date.now() + Math.random(),
-                                        time: new Date().toLocaleTimeString(),
-                                        type: 'success',
-                                        msg: `Применен экшен ${action.type} (id: ${action.payload?.id || '—'})`
-                                    });
-                                } catch (actionErr) {
-                                    console.error('Ошибка выполнения экшена от ИИ:', actionErr, action);
-                                    invalidCount++;
-                                    logEntries.push({
-                                        id: Date.now() + Math.random(),
-                                        time: new Date().toLocaleTimeString(),
-                                        type: 'error',
-                                        msg: `Ошибка выполнения ${action.type}: ${actionErr.message}`
-                                    });
-                                }
-                            } else {
-                                console.warn('Отклонен невалидный экшен от ИИ:', val.reason, action);
-                                invalidCount++;
-                                logEntries.push({
-                                    id: Date.now() + Math.random(),
-                                    time: new Date().toLocaleTimeString(),
-                                    type: 'warn',
-                                    msg: `Отклонен экшен ${action.type}: ${val.reason}`
-                                });
-                            }
-                        });
-
-                        setActionLogs(prev => [...logEntries, ...prev].slice(0, 150));
-
-                        aiResponse = aiResponse.replace(jsonMatch[0], '').trim();
-                        if (validCount > 0) {
-                            aiResponse += `\n\n✅ *Применено ${validCount} экшенов к холсту.*`;
-
-                            // Автоматически применяем авто-расстановку узлов для всех слоев, куда ИИ добавил ноды
-                            setTimeout(() => {
-                                if (!mountedRef.current) return;
-                                const currentState = stateRef.current;
-                                const affectedLayerIds = new Set();
-                                actions.forEach(a => {
-                                    if (a && a.payload) {
-                                        if (a.type === 'ADD_LAYER') affectedLayerIds.add(a.payload.id);
-                                        if (a.type === 'ADD_NODE' && a.payload.parentId && a.payload.parentId !== 'root') {
-                                            affectedLayerIds.add(a.payload.parentId);
-                                        }
-                                    }
-                                });
-
-                                affectedLayerIds.forEach(lId => {
-                                    const layer = currentState.layers ? currentState.layers[lId] : null;
-                                    if (layer) {
-                                        const layerNodes = Object.values(currentState.nodes || {}).filter(n => n && n.parentId === lId);
-                                        if (layerNodes.length > 0 && window.GeometryUtils && window.GeometryUtils.getSmartPlacement) {
-                                            const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, layer, currentState.nodes);
-                                            dispatch({ type: 'UPDATE_LAYER', payload: { id: lId, updates: { size: newLayerSize }, skipHistory: true } });
-                                            dispatch({ type: 'MASS_UPDATE', payload: { ids: layerNodes.map(n => n.id), updatesById, skipHistory: true } });
-                                        }
-                                    }
-                                });
-
-                                // Авто-выравнивание слоев на корневом уровне
-                                dispatch({ type: 'ALIGN_LAYERS', payload: { contextId: 'root' } });
-                            }, 50);
+                    const rawActions = JSON.parse(jsonMatch[1]);
+                    if (Array.isArray(rawActions)) {
+                        // Лимит — страховка от runaway-ответа, а не рабочее ограничение:
+                        // типовой запрос «схема из 15 узлов» — это уже ~65 команд
+                        // (узлы + порты + связи). Прежние 50 молча резали такой ответ
+                        // пополам. Реальная защита — подтверждение и откат одним Ctrl+Z.
+                        const actions = rawActions.slice(0, MAX_AI_BATCH_SIZE);
+                        const truncatedBy = rawActions.length - actions.length;
+                        let cleanAiText = aiResponse.replace(jsonMatch[0], '').trim();
+                        if (truncatedBy > 0) {
+                            // Обрезка не должна быть молчаливой: пользователь обязан
+                            // знать, что схема пришла неполной
+                            cleanAiText += `\n\n⚠️ *Ответ содержал ${rawActions.length} команд — применены первые ${MAX_AI_BATCH_SIZE}, остальные ${truncatedBy} отброшены. Попросите ассистента продолжить.*`;
                         }
-                        if (invalidCount > 0) {
-                            aiResponse += `\n⚠️ *Отклонено ${invalidCount} невалидных команд.*`;
+                        const isAuto = aiAgentSettings.confirmMode === 'auto';
+
+                        if (isAuto) {
+                            applyActionBatch(actions, cleanAiText);
+                            return;
+                        } else {
+                            const DESTRUCTIVE_TYPES = new Set(['CLEAR_PROJECT', 'CLEAR_LEVEL_WINDOW', 'REMOVE_LEVEL_WINDOW', 'REMOVE_ROOT_CANVAS', 'REMOVE_LAYER', 'REMOVE_NODE']);
+                            setPendingBatch({
+                                actions,
+                                cleanAiText,
+                                totalCount: actions.length,
+                                hasDestructive: actions.some(a => a && DESTRUCTIVE_TYPES.has(a.type))
+                            });
+                            dispatch({ type: 'ADD_AI_MESSAGE', payload: { nodeId, message: { role: 'ai', content: cleanAiText } } });
+                            return;
                         }
                     }
                 } catch (e) {
@@ -641,14 +791,14 @@ ${JSON.stringify(nodesSummary)}
         e.target.value = '';
     };
 
-    const currentProvider = aiAgentSettings.provider || 'openai';
+    const currentProvider = aiAgentSettings.provider || detectProviderByKey(aiAgentSettings.apiKey) || 'openai';
 
     // Запасные статические пресеты, если список моделей еще не загружен с API
     const providerPresets = {
-        openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-mini'],
-        anthropic: ['claude-3-5-sonnet', 'claude-3-haiku', 'claude-3-opus'],
-        google: ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash-8b'],
-        grok: ['grok-2-mini', 'grok-2', 'grok-beta']
+        openai: ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo'],
+        anthropic: ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-sonnet-4-5'],
+        google: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+        grok: ['grok-3', 'grok-3-mini', 'grok-2-1212']
     };
 
     // Если удалось динамически сгрузить реальные модели с API — показываем их, иначе используем статический фоллбек
@@ -798,7 +948,18 @@ ${JSON.stringify(nodesSummary)}
                             className="input-field border-[#444] focus:border-purple-500 text-xs"
                             placeholder={currentProvider === 'grok' ? 'xai-...' : currentProvider === 'google' ? 'AIzaSy...' : 'sk-...'}
                             value={aiAgentSettings.apiKey || ''}
-                            onChange={(e) => { _setActiveApiKey(e.target.value); dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { apiKey: e.target.value } }); }}
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                _setActiveApiKey(val);
+                                const detected = detectProviderByKey(val);
+                                const updates = { apiKey: val };
+                                if (detected && detected !== currentProvider) {
+                                    updates.provider = detected;
+                                    setFetchedModels([]);
+                                    setFetchModelMsg('');
+                                }
+                                dispatch({ type: 'UPDATE_AI_SETTINGS', payload: updates });
+                            }}
                         />
                         <div className="text-[9px] text-amber-500/60 flex items-center gap-1">
                             <span>⚠️</span>
@@ -898,7 +1059,7 @@ ${JSON.stringify(nodesSummary)}
                             <div key={i} className={`group flex flex-col max-w-[95%] ${msg.role === 'user' ? 'self-end items-end' : 'self-start items-start'}`}>
                                 <div className={`flex items-start gap-1.5 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                                     <div className={`px-2.5 py-1.5 rounded-lg text-xs whitespace-pre-wrap break-words select-text cursor-text ${msg.role === 'user' ? 'bg-purple-600 text-white' : 'bg-[#2a2a2a] border border-[#444] text-gray-200'}`}>
-                                        {msg.content}
+                                        {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
                                     </div>
                                     <button
                                         className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-gray-500 hover:text-purple-400 shrink-0 mt-0.5"
@@ -928,8 +1089,53 @@ ${JSON.stringify(nodesSummary)}
                     </div>
 
                     <div className="p-2 pb-2.5 border-t border-[#333] bg-black/40 flex flex-col gap-1.5 shrink-0 rounded-b-lg">
-                        {/* Панель оперативного переключения Режима и Контекста */}
-                        <div className="flex items-center justify-between pb-1 border-b border-[#333]/60 text-[10px] gap-1">
+                        {/* Интерактивная карточка запроса на подтверждение экшенов */}
+                        {pendingBatch && (
+                            <div className="p-2 rounded bg-purple-950/90 border border-purple-500/70 flex flex-col gap-1.5 shadow-lg">
+                                <div className="flex items-center justify-between text-[11px] font-semibold text-purple-200">
+                                    <span className="flex items-center gap-1.5">
+                                        <div className="icon-shield text-purple-400 text-xs"></div>
+                                        Запрос на изменение холста ({pendingBatch.totalCount} действий)
+                                    </span>
+                                    {pendingBatch.hasDestructive && (
+                                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-900/80 text-red-200 border border-red-500/60">
+                                            Удаление
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="max-h-20 overflow-y-auto text-[10px] font-mono text-gray-300 space-y-0.5 no-scrollbar bg-black/50 p-1.5 rounded border border-purple-500/30">
+                                    {pendingBatch.actions.map((a, idx) => (
+                                        <div key={idx} className="truncate">
+                                            • <span className="text-purple-300 font-bold">{a.type}</span>: {a.payload?.name || a.payload?.id || JSON.stringify(a.payload || {})}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="flex items-center justify-end gap-2 pt-0.5">
+                                    <button
+                                        type="button"
+                                        className="px-2 py-1 rounded text-[10px] bg-red-900/40 hover:bg-red-800/60 text-red-200 border border-red-700/50 transition-colors"
+                                        onClick={() => {
+                                            dispatch({ type: 'ADD_AI_MESSAGE', payload: { nodeId, message: { role: 'ai', content: '🚫 *Команды отклонены пользователем.*' } } });
+                                            setPendingBatch(null);
+                                        }}
+                                    >
+                                        Отклонить
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="px-2.5 py-1 rounded text-[10px] font-semibold bg-green-600 hover:bg-green-500 text-white transition-colors flex items-center gap-1 shadow-md shadow-green-900/30"
+                                        onClick={() => applyActionBatch(pendingBatch.actions, '')}
+                                    >
+                                        <div className="icon-check text-[10px]"></div>
+                                        Применить ({pendingBatch.totalCount})
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Панель оперативного переключения Режима, Подтверждения и Контекста */}
+                        <div className="flex items-center justify-between pb-1 border-b border-[#333]/60 text-[10px] gap-1 flex-wrap">
+                            {/* 1. Режим: Agent / Chat */}
                             <div className="flex items-center gap-1">
                                 <span className="text-gray-400 font-semibold uppercase text-[9px]">Режим:</span>
                                 <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
@@ -952,6 +1158,30 @@ ${JSON.stringify(nodesSummary)}
                                 </div>
                             </div>
 
+                            {/* 2. Подтверждение: Спрашивать / Без подтверждения (Авто) */}
+                            <div className="flex items-center gap-1">
+                                <span className="text-gray-400 font-semibold uppercase text-[9px]">Правки:</span>
+                                <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
+                                    <button
+                                        type="button"
+                                        className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${(!aiAgentSettings.confirmMode || aiAgentSettings.confirmMode === 'ask') ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
+                                        onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { confirmMode: 'ask' } })}
+                                        title="Спрашивать подтверждение перед применением экшенов"
+                                    >
+                                        <div className="icon-shield text-[10px]"></div> Спрашивать
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${aiAgentSettings.confirmMode === 'auto' ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
+                                        onClick={() => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { confirmMode: 'auto' } })}
+                                        title="Применять экшены автоматически без подтверждения"
+                                    >
+                                        <div className="icon-zap text-[10px]"></div> Авто
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* 3. Контекст: Глобально / Локально */}
                             <div className="flex items-center gap-1">
                                 <span className="text-gray-400 font-semibold uppercase text-[9px]">Контекст:</span>
                                 <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
@@ -1049,7 +1279,7 @@ ${JSON.stringify(nodesSummary)}
                                         </div>
                                         <div className="text-[9px] text-gray-500 font-mono mt-0.5">{k.key.slice(0, 7)}••••{k.key.slice(-4)}</div>
                                     </div>
-                                    <button className="text-[9px] px-1.5 py-0.5 rounded bg-purple-600/30 hover:bg-purple-600/60 text-purple-300 font-semibold transition-colors" onClick={() => { _setActiveApiKey(k.key); setFetchedModels([]); setFetchModelMsg(''); dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { apiKey: k.key, provider: k.provider } }); setShowKeyManager(false); }}>Применить</button>
+                                    <button className="text-[9px] px-1.5 py-0.5 rounded bg-purple-600/30 hover:bg-purple-600/60 text-purple-300 font-semibold transition-colors" onClick={() => { const prov = k.provider || detectProviderByKey(k.key) || 'openai'; _setActiveApiKey(k.key); setFetchedModels([]); setFetchModelMsg(''); dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { apiKey: k.key, provider: prov } }); setShowKeyManager(false); }}>Применить</button>
                                     <button className="text-gray-600 hover:text-red-400 transition-colors p-0.5 opacity-0 group-hover:opacity-100" onClick={() => { const next = savedKeys.filter(x => x.id !== k.id); setSavedKeys(next); _setSavedApiKeys(next); }}>
                                         <div className="icon-trash text-[10px]"></div>
                                     </button>
@@ -1066,11 +1296,12 @@ ${JSON.stringify(nodesSummary)}
                                     <option value="google">Google</option>
                                     <option value="grok">Grok</option>
                                 </select>
-                                <input type="password" className="input-field border-[#444] focus:border-purple-500 text-xs flex-[2]" placeholder="sk-..." value={kmForm.key} onChange={(e) => setKmForm(f => ({...f, key: e.target.value}))} onMouseDown={(e) => e.stopPropagation()} />
+                                <input type="password" className="input-field border-[#444] focus:border-purple-500 text-xs flex-[2]" placeholder="sk-..." value={kmForm.key} onChange={(e) => { const val = e.target.value; const detected = detectProviderByKey(val); setKmForm(f => ({...f, key: val, provider: detected || f.provider })); }} onMouseDown={(e) => e.stopPropagation()} />
                             </div>
                             <button className="w-full btn bg-purple-600/40 hover:bg-purple-600/60 border-purple-500/40 text-purple-200 text-[11px] py-1.5 rounded font-semibold transition-colors" onClick={() => {
                                 if (!kmForm.label.trim() || !kmForm.key.trim()) return;
-                                const next = [...savedKeys, { id: 'key-' + Date.now(), label: kmForm.label.trim(), provider: kmForm.provider, key: kmForm.key.trim(), createdAt: new Date().toISOString().slice(0, 10) }];
+                                const prov = kmForm.provider || detectProviderByKey(kmForm.key) || 'openai';
+                                const next = [...savedKeys, { id: 'key-' + Date.now(), label: kmForm.label.trim(), provider: prov, key: kmForm.key.trim(), createdAt: new Date().toISOString().slice(0, 10) }];
                                 setSavedKeys(next);
                                 _setSavedApiKeys(next);
                                 setKmForm({ label: '', provider: 'openai', key: '' });
@@ -1085,3 +1316,6 @@ ${JSON.stringify(nodesSummary)}
         </div>
     );
 }
+
+if (typeof window !== 'undefined') window.AIAgentNodeContent = AIAgentNodeContent;
+if (typeof module !== 'undefined' && module.exports) module.exports = AIAgentNodeContent;

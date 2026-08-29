@@ -9,7 +9,7 @@ const GeometryUtils = {
     },
     /**
      * Мировая позиция порта. С формата v10 позиция узла может быть относительной,
-     * поэтому вызывающий передаёт absNodePos (HierarchyUtils.getAbsolutePosition).
+     * поэтому вызывающий передаёт absNodePos (HierarchyUtils.getLocalPosition).
      * Без absNodePos используется node.position как есть (узлы корня).
      */
     getPortAbsolutePosition: (port, node, absNodePos) => {
@@ -20,6 +20,142 @@ const GeometryUtils = {
         const ny = absNodePos ? absNodePos.y : (node.position?.y || 0);
         return { x: nx + cp.x, y: ny + cp.y, edge: port.edge };
     },
+    /**
+     * Построение пути связи — ЕДИНСТВЕННАЯ реализация на всё приложение.
+     * Используется и внутриуровневыми связями (локальные координаты окна),
+     * и магистральным отрезком межуровневой связи (мировые координаты).
+     * Пока функция одна, стиль линии не может работать в одном месте и не работать в другом.
+     * @param {{x:number,y:number,edge:string}} p1
+     * @param {{x:number,y:number,edge:string}} p2
+     * @param {string} style 'orthogonal' | 'bezier'
+     * @param {number} [marginIndex] порядковый номер связи — разводит параллельные ортогональные линии
+     * @returns {string}
+     */
+    buildLinkPath: (p1, p2, style, marginIndex) => {
+        let pathD = '';
+    // Bezier curve calculation
+    const dx = Math.max(Math.abs(p2.x - p1.x) / 2, 50);
+    const dy = Math.max(Math.abs(p2.y - p1.y) / 2, 50);
+
+    let cp1x = p1.x; let cp1y = p1.y;
+    let cp2x = p2.x; let cp2y = p2.y;
+
+    if (p1.edge === 'left') cp1x -= dx;
+    if (p1.edge === 'right') cp1x += dx;
+    if (p1.edge === 'top') cp1y -= dy;
+    if (p1.edge === 'bottom') cp1y += dy;
+
+    if (p2.edge === 'left') cp2x -= dx;
+    if (p2.edge === 'right') cp2x += dx;
+    if (p2.edge === 'top') cp2y -= dy;
+    if (p2.edge === 'bottom') cp2y += dy;
+
+        
+    if (style === 'orthogonal') {
+        // Уникальный отступ для каждой линии, чтобы они не сливались
+        const linkIndex = (marginIndex === undefined || marginIndex === null) ? -1 : marginIndex;
+        const marginOffset = (linkIndex > -1 ? linkIndex % 6 : 0) * 8;
+        const margin = 20 + marginOffset;
+        let m1 = margin;
+        let m2 = margin;
+
+        if (p1.edge === 'bottom' && p2.edge === 'top' && p2.y > p1.y) {
+            m1 = m2 = Math.max(5, Math.min(margin, (p2.y - p1.y) / 2));
+        } else if (p1.edge === 'top' && p2.edge === 'bottom' && p2.y < p1.y) {
+            m1 = m2 = Math.max(5, Math.min(margin, (p1.y - p2.y) / 2));
+        } else if (p1.edge === 'right' && p2.edge === 'left' && p2.x > p1.x) {
+            m1 = m2 = Math.max(5, Math.min(margin, (p2.x - p1.x) / 2));
+        } else if (p1.edge === 'left' && p2.edge === 'right' && p2.x < p1.x) {
+            m1 = m2 = Math.max(5, Math.min(margin, (p1.x - p2.x) / 2));
+        }
+
+        let p1Out = { x: p1.x, y: p1.y };
+        let p2Out = { x: p2.x, y: p2.y };
+        
+        if (p1.edge === 'left') p1Out.x -= m1;
+        if (p1.edge === 'right') p1Out.x += m1;
+        if (p1.edge === 'top') p1Out.y -= m1;
+        if (p1.edge === 'bottom') p1Out.y += m1;
+
+        if (p2.edge === 'left') p2Out.x -= m2;
+        if (p2.edge === 'right') p2Out.x += m2;
+        if (p2.edge === 'top') p2Out.y -= m2;
+        if (p2.edge === 'bottom') p2Out.y += m2;
+
+        const isP1Horiz = p1.edge === 'left' || p1.edge === 'right';
+        const isP2Horiz = p2.edge === 'left' || p2.edge === 'right';
+
+        let pts = [];
+        let midX = (p1Out.x + p2Out.x) / 2;
+        let midY = (p1Out.y + p2Out.y) / 2;
+
+        if (isP1Horiz && isP2Horiz) {
+            if (p1.edge === p2.edge) {
+                let outX = p1.edge === 'left' ? Math.min(p1Out.x, p2Out.x) : Math.max(p1Out.x, p2Out.x);
+                pts = [p1, p1Out, {x: outX, y: p1Out.y}, {x: outX, y: p2Out.y}, p2Out, p2];
+            } else {
+                if ((p1.edge === 'right' && p1Out.x < p2Out.x) || (p1.edge === 'left' && p1Out.x > p2Out.x)) {
+                    pts = [p1, p1Out, {x: midX, y: p1Out.y}, {x: midX, y: p2Out.y}, p2Out, p2];
+                } else {
+                    pts = [p1, p1Out, {x: p1Out.x, y: midY}, {x: p2Out.x, y: midY}, p2Out, p2];
+                }
+            }
+        } else if (!isP1Horiz && !isP2Horiz) {
+            if (p1.edge === p2.edge) {
+                let outY = p1.edge === 'top' ? Math.min(p1Out.y, p2Out.y) : Math.max(p1Out.y, p2Out.y);
+                pts = [p1, p1Out, {x: p1Out.x, y: outY}, {x: p2Out.x, y: outY}, p2Out, p2];
+            } else {
+                if ((p1.edge === 'bottom' && p1Out.y < p2Out.y) || (p1.edge === 'top' && p1Out.y > p2Out.y)) {
+                    pts = [p1, p1Out, {x: p1Out.x, y: midY}, {x: p2Out.x, y: midY}, p2Out, p2];
+                } else {
+                    pts = [p1, p1Out, {x: midX, y: p1Out.y}, {x: midX, y: p2Out.y}, p2Out, p2];
+                }
+            }
+        } else {
+            let ix = isP1Horiz ? p2Out.x : p1Out.x;
+            let iy = isP1Horiz ? p1Out.y : p2Out.y;
+            
+            let p1Forward = isP1Horiz ? 
+                ((p1.edge === 'right' && ix >= p1Out.x) || (p1.edge === 'left' && ix <= p1Out.x)) :
+                ((p1.edge === 'bottom' && iy >= p1Out.y) || (p1.edge === 'top' && iy <= p1Out.y));
+            
+            let p2Forward = isP2Horiz ? 
+                ((p2.edge === 'right' && ix >= p2Out.x) || (p2.edge === 'left' && ix <= p2Out.x)) :
+                ((p2.edge === 'bottom' && iy >= p2Out.y) || (p2.edge === 'top' && iy <= p2Out.y));
+
+            if (p1Forward && p2Forward) {
+                pts = [p1, p1Out, {x: ix, y: iy}, p2Out, p2];
+            } else {
+                if (isP1Horiz) pts = [p1, p1Out, {x: p1Out.x, y: p2Out.y}, p2Out, p2];
+                else pts = [p1, p1Out, {x: p2Out.x, y: p1Out.y}, p2Out, p2];
+            }
+        }
+
+        let cleanPts = [pts[0]];
+        for (let i = 1; i < pts.length; i++) {
+            let curr = pts[i];
+            let prev = cleanPts[cleanPts.length - 1];
+            
+            if (Math.abs(curr.x - prev.x) < 0.1 && Math.abs(curr.y - prev.y) < 0.1) continue;
+            
+            if (cleanPts.length > 1) {
+                let pPrev = cleanPts[cleanPts.length - 2];
+                if ((Math.abs(pPrev.x - prev.x) < 0.1 && Math.abs(prev.x - curr.x) < 0.1) ||
+                    (Math.abs(pPrev.y - prev.y) < 0.1 && Math.abs(prev.y - curr.y) < 0.1)) {
+                    cleanPts.pop();
+                }
+            }
+            cleanPts.push(curr);
+        }
+        pts = cleanPts;
+
+        pathD = `M ${pts[0].x} ${pts[0].y} ` + pts.slice(1).map(p => `L ${p.x} ${p.y}`).join(' ');
+    } else {
+        pathD = `M ${p1.x} ${p1.y} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+    }
+        return pathD;
+    },
+
     getPortRelativePosition: (port, node) => {
         const { w, h } = node.size || { w: 200, h: 100 };
         return GeometryUtils.getEdgePos(port.edge, port.position, w, h);
@@ -275,14 +411,14 @@ const GeometryUtils = {
                 if (parentLayers.length > 0) {
                     // Абсолютный правый край самого широкого слоя предыдущего уровня
                     const rightEdges = parentLayers.map(l => {
-                        const abs = H.getAbsolutePosition(l.id, nodes, layers);
+                        const abs = H.getLocalPosition(l.id, nodes, layers);
                         const w = l.size?.w || 600;
                         return abs.x + w;
                     });
                     const maxRightAbs = Math.max(...rightEdges);
                     
                     // Абсолютная позиция текущего узла-контекста
-                    const nodeAbs = H.getAbsolutePosition(contextId, nodes, layers);
+                    const nodeAbs = H.getLocalPosition(contextId, nodes, layers);
                     
                     // Относительный X: отступаем 100px от правого края родительского слоя
                     startX = Math.max(30, (maxRightAbs + 100) - nodeAbs.x);

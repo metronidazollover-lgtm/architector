@@ -1,154 +1,79 @@
-function Link({ data }) {
-    if (!data || !data.id || !data.sourcePortId || !data.targetPortId) return null;
+const computeLinkDerived = (view, linkId) => {
+    if (!linkId || !view) return { ok: false };
+    const link = (view.links || {})[linkId];
+    if (!link || !link.sourcePortId || !link.targetPortId) return { ok: false };
 
-    const { state, dispatch } = useStore();
-    const { nodes, ports } = state;
-    const sourcePort = ports ? ports[data.sourcePortId] : null;
-    const targetPort = ports ? ports[data.targetPortId] : null;
+    const ports = view.ports || {};
+    const nodes = view.nodes || {};
+    const layers = view.layers || {};
+    const sourcePort = ports[link.sourcePortId];
+    const targetPort = ports[link.targetPortId];
+    if (!sourcePort || !targetPort) return { ok: false };
 
-    if (!sourcePort || !targetPort) return null;
+    const sourceNode = nodes[sourcePort.nodeId] || layers[sourcePort.nodeId];
+    const targetNode = nodes[targetPort.nodeId] || layers[targetPort.nodeId];
+    if (!sourceNode || !targetNode) return { ok: false };
+    if (sourceNode.hidden || targetNode.hidden) return { ok: false };
 
-    const isConnectedToSelectedPort = state.selectedIds.some(sid => 
-        state.ports[sid] && (data.sourcePortId === sid || data.targetPortId === sid)
-    );
-    const isConnectedToSelectedNode = state.selectedIds.some(sid => 
-        state.nodes[sid] && ((state.ports[data.sourcePortId]?.nodeId === sid) || (state.ports[data.targetPortId]?.nodeId === sid))
-    );
-    const isSelected = state.selectedIds.includes(data.id) || isConnectedToSelectedPort || isConnectedToSelectedNode;
+    const H = window.HierarchyUtils;
+    const G = window.GeometryUtils;
+    if (!H || !G) return { ok: false };
 
-    const sourceNode = nodes[sourcePort.nodeId];
-    const targetNode = nodes[targetPort.nodeId];
+    const selectedIds = view.selectedIds || [];
+    const isSelected = selectedIds.includes(linkId)
+        || selectedIds.includes(link.sourcePortId)
+        || selectedIds.includes(link.targetPortId)
+        || selectedIds.includes(sourcePort.nodeId)
+        || selectedIds.includes(targetPort.nodeId);
 
-    if (!sourceNode || !targetNode) return null;
-    if (sourceNode.hidden || targetNode.hidden) return null;
+    // ВАЖНО: компонент рендерится внутри вьюпорта окна (transform: translate+scale),
+    // поэтому здесь нужны ЛОКАЛЬНЫЕ координаты уровня. Мировые координаты — только
+    // у межуровневых связей в глобальном слое (Canvas.js).
+    const sourceAbs = H.getLocalPosition(sourceNode.id, nodes, view.layers);
+    const targetAbs = H.getLocalPosition(targetNode.id, nodes, view.layers);
+    const p1 = G.getPortAbsolutePosition(sourcePort, sourceNode, sourceAbs);
+    const p2 = G.getPortAbsolutePosition(targetPort, targetNode, targetAbs);
+    if (!p1 || !p2) return { ok: false };
 
-    const sourceAbs = window.HierarchyUtils.getAbsolutePosition(sourceNode.id, nodes, state.layers);
-    const targetAbs = window.HierarchyUtils.getAbsolutePosition(targetNode.id, nodes, state.layers);
-    const p1 = window.GeometryUtils.getPortAbsolutePosition(sourcePort, sourceNode, sourceAbs);
-    const p2 = window.GeometryUtils.getPortAbsolutePosition(targetPort, targetNode, targetAbs);
+    const linkIndex = H.getLinkOrderIndex ? (H.getLinkOrderIndex(view.links)[linkId] ?? -1) : -1;
+    const sLvl = H.getEntityLevel(sourceNode.id, nodes, view.layers);
+    const tLvl = H.getEntityLevel(targetNode.id, nodes, view.layers);
 
-    // Bezier curve calculation
-    const dx = Math.max(Math.abs(p2.x - p1.x) / 2, 50);
-    const dy = Math.max(Math.abs(p2.y - p1.y) / 2, 50);
+    return {
+        ok: true,
+        link,
+        isSelected,
+        // Плоские координаты: срез сравнивается поверхностно, объекты давали бы
+        // «изменение» на каждом пересчёте
+        p1x: p1.x, p1y: p1.y, p1edge: p1.edge,
+        p2x: p2.x, p2y: p2.y, p2edge: p2.edge,
+        linkIndex,
+        isCrossLevel: sLvl !== tLvl
+    };
+};
 
-    let cp1x = p1.x; let cp1y = p1.y;
-    let cp2x = p2.x; let cp2y = p2.y;
+function Link(props) {
+    if (typeof StoreEngine !== 'undefined') StoreEngine.profileRender('Link');
+    const dispatch = useProjectDispatch();
+    const linkId = props.linkId
+        || (props.data && props.data.id)
+        || (props.link && props.link.id)
+        || null;
 
-    if (p1.edge === 'left') cp1x -= dx;
-    if (p1.edge === 'right') cp1x += dx;
-    if (p1.edge === 'top') cp1y -= dy;
-    if (p1.edge === 'bottom') cp1y += dy;
+    // Все хуки — ДО раннего выхода
+    const selectDerived = React.useCallback((view) => computeLinkDerived(view, linkId), [linkId]);
+    const derived = useProjectSelector(selectDerived);
 
-    if (p2.edge === 'left') cp2x -= dx;
-    if (p2.edge === 'right') cp2x += dx;
-    if (p2.edge === 'top') cp2y -= dy;
-    if (p2.edge === 'bottom') cp2y += dy;
+    if (!derived || !derived.ok) return null;
+    const data = derived.link;
+    if (!data) return null;
+    const isSelected = derived.isSelected;
+
+    const p1 = { x: derived.p1x, y: derived.p1y, edge: derived.p1edge };
+    const p2 = { x: derived.p2x, y: derived.p2y, edge: derived.p2edge };
 
     const linkColor = data.color || '#666666';
-    let pathD = '';
-    
-    if (data.linkStyle === 'orthogonal') {
-        // Уникальный отступ для каждой линии, чтобы они не сливались
-        const linkIndex = state.links ? Object.keys(state.links).indexOf(data.id) : -1;
-        const marginOffset = (linkIndex > -1 ? linkIndex % 6 : 0) * 8;
-        const margin = 20 + marginOffset;
-        let m1 = margin;
-        let m2 = margin;
-
-        if (p1.edge === 'bottom' && p2.edge === 'top' && p2.y > p1.y) {
-            m1 = m2 = Math.max(5, Math.min(margin, (p2.y - p1.y) / 2));
-        } else if (p1.edge === 'top' && p2.edge === 'bottom' && p2.y < p1.y) {
-            m1 = m2 = Math.max(5, Math.min(margin, (p1.y - p2.y) / 2));
-        } else if (p1.edge === 'right' && p2.edge === 'left' && p2.x > p1.x) {
-            m1 = m2 = Math.max(5, Math.min(margin, (p2.x - p1.x) / 2));
-        } else if (p1.edge === 'left' && p2.edge === 'right' && p2.x < p1.x) {
-            m1 = m2 = Math.max(5, Math.min(margin, (p1.x - p2.x) / 2));
-        }
-
-        let p1Out = { x: p1.x, y: p1.y };
-        let p2Out = { x: p2.x, y: p2.y };
-        
-        if (p1.edge === 'left') p1Out.x -= m1;
-        if (p1.edge === 'right') p1Out.x += m1;
-        if (p1.edge === 'top') p1Out.y -= m1;
-        if (p1.edge === 'bottom') p1Out.y += m1;
-
-        if (p2.edge === 'left') p2Out.x -= m2;
-        if (p2.edge === 'right') p2Out.x += m2;
-        if (p2.edge === 'top') p2Out.y -= m2;
-        if (p2.edge === 'bottom') p2Out.y += m2;
-
-        const isP1Horiz = p1.edge === 'left' || p1.edge === 'right';
-        const isP2Horiz = p2.edge === 'left' || p2.edge === 'right';
-
-        let pts = [];
-        let midX = (p1Out.x + p2Out.x) / 2;
-        let midY = (p1Out.y + p2Out.y) / 2;
-
-        if (isP1Horiz && isP2Horiz) {
-            if (p1.edge === p2.edge) {
-                let outX = p1.edge === 'left' ? Math.min(p1Out.x, p2Out.x) : Math.max(p1Out.x, p2Out.x);
-                pts = [p1, p1Out, {x: outX, y: p1Out.y}, {x: outX, y: p2Out.y}, p2Out, p2];
-            } else {
-                if ((p1.edge === 'right' && p1Out.x < p2Out.x) || (p1.edge === 'left' && p1Out.x > p2Out.x)) {
-                    pts = [p1, p1Out, {x: midX, y: p1Out.y}, {x: midX, y: p2Out.y}, p2Out, p2];
-                } else {
-                    pts = [p1, p1Out, {x: p1Out.x, y: midY}, {x: p2Out.x, y: midY}, p2Out, p2];
-                }
-            }
-        } else if (!isP1Horiz && !isP2Horiz) {
-            if (p1.edge === p2.edge) {
-                let outY = p1.edge === 'top' ? Math.min(p1Out.y, p2Out.y) : Math.max(p1Out.y, p2Out.y);
-                pts = [p1, p1Out, {x: p1Out.x, y: outY}, {x: p2Out.x, y: outY}, p2Out, p2];
-            } else {
-                if ((p1.edge === 'bottom' && p1Out.y < p2Out.y) || (p1.edge === 'top' && p1Out.y > p2Out.y)) {
-                    pts = [p1, p1Out, {x: p1Out.x, y: midY}, {x: p2Out.x, y: midY}, p2Out, p2];
-                } else {
-                    pts = [p1, p1Out, {x: midX, y: p1Out.y}, {x: midX, y: p2Out.y}, p2Out, p2];
-                }
-            }
-        } else {
-            let ix = isP1Horiz ? p2Out.x : p1Out.x;
-            let iy = isP1Horiz ? p1Out.y : p2Out.y;
-            
-            let p1Forward = isP1Horiz ? 
-                ((p1.edge === 'right' && ix >= p1Out.x) || (p1.edge === 'left' && ix <= p1Out.x)) :
-                ((p1.edge === 'bottom' && iy >= p1Out.y) || (p1.edge === 'top' && iy <= p1Out.y));
-            
-            let p2Forward = isP2Horiz ? 
-                ((p2.edge === 'right' && ix >= p2Out.x) || (p2.edge === 'left' && ix <= p2Out.x)) :
-                ((p2.edge === 'bottom' && iy >= p2Out.y) || (p2.edge === 'top' && iy <= p2Out.y));
-
-            if (p1Forward && p2Forward) {
-                pts = [p1, p1Out, {x: ix, y: iy}, p2Out, p2];
-            } else {
-                if (isP1Horiz) pts = [p1, p1Out, {x: p1Out.x, y: p2Out.y}, p2Out, p2];
-                else pts = [p1, p1Out, {x: p2Out.x, y: p1Out.y}, p2Out, p2];
-            }
-        }
-
-        let cleanPts = [pts[0]];
-        for (let i = 1; i < pts.length; i++) {
-            let curr = pts[i];
-            let prev = cleanPts[cleanPts.length - 1];
-            
-            if (Math.abs(curr.x - prev.x) < 0.1 && Math.abs(curr.y - prev.y) < 0.1) continue;
-            
-            if (cleanPts.length > 1) {
-                let pPrev = cleanPts[cleanPts.length - 2];
-                if ((Math.abs(pPrev.x - prev.x) < 0.1 && Math.abs(prev.x - curr.x) < 0.1) ||
-                    (Math.abs(pPrev.y - prev.y) < 0.1 && Math.abs(prev.y - curr.y) < 0.1)) {
-                    cleanPts.pop();
-                }
-            }
-            cleanPts.push(curr);
-        }
-        pts = cleanPts;
-
-        pathD = `M ${pts[0].x} ${pts[0].y} ` + pts.slice(1).map(p => `L ${p.x} ${p.y}`).join(' ');
-    } else {
-        pathD = `M ${p1.x} ${p1.y} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
-    }
+    const pathD = window.GeometryUtils.buildLinkPath(p1, p2, data.linkStyle, derived.linkIndex);
 
     const handleClick = (e) => {
         e.stopPropagation();
@@ -162,7 +87,10 @@ function Link({ data }) {
     const handleDoubleClick = (e) => {
         e.stopPropagation();
         dispatch({ type: 'SET_SELECTED', payload: data.id });
+        dispatch({ type: 'FOCUS_CONNECTED_ELEMENTS', payload: { entityId: data.id } });
     };
+
+    const isCrossLevel = derived.isCrossLevel;
 
     return (
         <svg className="absolute top-0 left-0 pointer-events-none" style={{ width: '1px', height: '1px', overflow: 'visible' }}>
@@ -181,10 +109,11 @@ function Link({ data }) {
                 d={pathD}
                 fill="none"
                 stroke={linkColor}
-                strokeWidth={isSelected ? "6" : "2"}
+                strokeWidth={isSelected ? "5" : (isCrossLevel ? "2.5" : "2")}
                 strokeLinejoin="round"
                 strokeLinecap="round"
-                strokeDasharray={data.style === 'dashed' ? '5,5' : 'none'}
+                vectorEffect="non-scaling-stroke"
+                strokeDasharray={isCrossLevel ? '2, 6' : (data.linkStyle === 'dashed' ? '5, 5' : 'none')}
                 className="transition-all duration-200 pointer-events-none"
                 style={{
                     filter: isSelected ? `drop-shadow(0 0 8px ${linkColor}AA)` : 'none'
@@ -199,16 +128,29 @@ function PendingLink() {
     if (!state.pendingConnection) return null;
 
     const { sourcePortId, endPos } = state.pendingConnection;
-    const sourcePort = state.ports[sourcePortId];
+    let sourcePort = state.ports && state.ports[sourcePortId];
+    let projectState = state;
+    if (!sourcePort && state.projects) {
+        for (const pid of (state.projectOrder || [])) {
+            const p = state.projects[pid];
+            if (p && p.ports && p.ports[sourcePortId]) {
+                sourcePort = p.ports[sourcePortId];
+                projectState = typeof getProjectFlatView === 'function' ? getProjectFlatView(pid) : p;
+                break;
+            }
+        }
+    }
     if (!sourcePort) return null;
 
-    const sourceNode = state.nodes[sourcePort.nodeId];
+    const sourceNode = (projectState.nodes && projectState.nodes[sourcePort.nodeId]) || (projectState.layers && projectState.layers[sourcePort.nodeId]);
     if (!sourceNode) return null;
 
     const { offset, zoom } = state.canvas;
 
-    const sourceAbs = window.HierarchyUtils.getAbsolutePosition(sourceNode.id, state.nodes, state.layers);
-    const p1 = window.GeometryUtils.getPortAbsolutePosition(sourcePort, sourceNode, sourceAbs);
+    const H = window.HierarchyUtils;
+    const p1 = H ? H.getPortWorldCoordinates(sourcePortId, projectState) : null;
+    if (!p1) return null;
+    p1.edge = sourcePort.edge || 'right';
 
     // Convert screen endPos to canvas absolute with container rect offset check
     const container = typeof document !== 'undefined' ? document.getElementById('canvas-container') : null;
@@ -252,5 +194,15 @@ function PendingLink() {
         </svg>
     );
 }
+
+const MemoizedLink = React.memo ? React.memo(Link) : Link;
+if (typeof window !== 'undefined') {
+    window.Link = MemoizedLink;
+    window.PendingLink = PendingLink;
+}
+if (typeof module !== 'undefined') {
+    module.exports = { Link: MemoizedLink, PendingLink };
+}
+
 
 

@@ -1,13 +1,77 @@
-function Layer({ data }) {
-    const { state, dispatch } = useStore();
-    const isExplicitlySelected = state.selectedIds.includes(data.id);
-    const isSelected = isExplicitlySelected;
-    const { zoom } = state.canvas;
+const computeLayerDerived = (view, layerId) => {
+    if (!layerId || !view) return { ok: false };
+    const layers = view.layers || {};
+    const layer = layers[layerId];
+    if (!layer) return { ok: false };
 
+    const selectedIds = view.selectedIds || [];
+    const isExplicitlySelected = selectedIds.includes(layerId);
 
+    const H = window.HierarchyUtils;
+    const ports = view.ports || {};
+    const myPorts = (H && H.getPortsByNodeId)
+        ? (H.getPortsByNodeId(ports)[layerId] || [])
+        : Object.values(ports).filter(p => p && p.nodeId === layerId);
+    const portIds = myPorts.map(p => p.id);
 
-    // v10: position относительна родителю, на экран идут мировые координаты
-    const absPos = window.HierarchyUtils.getAbsolutePosition(data.id, state.nodes, state.layers);
+    let connected = isExplicitlySelected;
+    if (!connected && H && H.getLinksByPortId) {
+        connected = myPorts.some(p => selectedIds.includes(p.id));
+        if (!connected) {
+            const linksByPort = H.getLinksByPortId(view.links || {});
+            connected = myPorts.some(p => (linksByPort[p.id] || []).some(l => {
+                if (!l) return false;
+                if (selectedIds.includes(l.id)) return true;
+                const oppId = l.sourcePortId === p.id ? l.targetPortId : l.sourcePortId;
+                if (!oppId) return false;
+                if (selectedIds.includes(oppId)) return true;
+                const opp = ports[oppId];
+                return !!(opp && selectedIds.includes(opp.nodeId));
+            }));
+        }
+    }
+    const isSelected = connected;
+    const zoom = (view.canvas && view.canvas.zoom) || 1;
+    const nodes = view.nodes || {};
+    const absPos = (H && H.getLocalPosition) ? H.getLocalPosition(layerId, nodes, layers) : (layer.position || { x: 0, y: 0 });
+    const interactionMode = view.interactionMode || 'default';
+    const dropTargetL = view.dragGesture && view.dragGesture.target;
+    const isDropReceiver = !!(dropTargetL && dropTargetL.kind === 'layer' && dropTargetL.id === layerId && dropTargetL.valid);
+
+    return {
+        ok: true,
+        layer,
+        isExplicitlySelected,
+        isSelected,
+        zoom,
+        absPos,
+        portIds,
+        interactionMode,
+        isDropReceiver
+    };
+};
+
+function Layer(props) {
+    if (typeof StoreEngine !== 'undefined') StoreEngine.profileRender('Layer');
+    const data = props.data || props.layer;
+    const layerId = data ? data.id : null;
+    const dispatch = useProjectDispatch();
+    const projectId = React.useContext(ProjectContext);
+
+    const selectDerived = React.useCallback(
+        (view) => computeLayerDerived(view, layerId),
+        [layerId]
+    );
+    const derived = useProjectSelector(selectDerived);
+
+    if (!data || !derived || !derived.ok) return null;
+    const isExplicitlySelected = derived.isExplicitlySelected;
+    const isSelected = derived.isSelected;
+    const zoom = derived.zoom;
+    const absPos = derived.absPos;
+    const portIds = derived.portIds;
+    const interactionMode = derived.interactionMode;
+    const isDropReceiver = derived.isDropReceiver;
 
     const handleMouseDown = (e) => {
         // Prevent map panning on header drag (Shift+LMB handles map panning in Canvas)
@@ -28,7 +92,7 @@ function Layer({ data }) {
             dispatch({ type: 'SET_SELECTED', payload: data.id });
         }
 
-
+        const state = getProjectFlatView(projectId);
         const startX = e.clientX;
         const startY = e.clientY;
 
@@ -40,13 +104,13 @@ function Layer({ data }) {
         const startPosX = absPos.x;
         const startPosY = absPos.y;
 
-        const nodesInside = data.locked ? Object.values(state.nodes).filter(node => {
+        const nodesInside = data.locked ? Object.values(state.nodes || {}).filter(node => {
             if (node.parentId === data.id) return false; // ребёнок, едет сам
             const nodeContext = node.parentId || 'root';
             const layerContext = data.parentId || 'root';
             if (nodeContext !== layerContext) return false;
 
-            const nodeAbs = window.HierarchyUtils.getAbsolutePosition(node.id, state.nodes, state.layers);
+            const nodeAbs = window.HierarchyUtils.getLocalPosition(node.id, state.nodes, state.layers);
             const nw = node.size?.w || 200;
             const nh = node.size?.h || 100;
             const nodeCX = nodeAbs.x + nw / 2;
@@ -56,15 +120,15 @@ function Layer({ data }) {
         }).map(n => n.id) : [];
 
         // Добавляем узлы в массив выделенных виртуально (чтобы двигать их вместе)
-        const allIdsToMove = new Set([...state.selectedIds, ...nodesInside]);
+        const allIdsToMove = new Set([...(state.selectedIds || []), ...nodesInside]);
 
         let hasMoved = false;
         const initialSnapshot = { layers: state.layers, nodes: state.nodes, ports: state.ports, links: state.links };
 
         const initialPositions = {};
         allIdsToMove.forEach(id => {
-            if (state.nodes[id]) initialPositions[id] = { ...state.nodes[id].position };
-            else if (state.layers[id]) initialPositions[id] = { ...state.layers[id].position };
+            if (state.nodes && state.nodes[id]) initialPositions[id] = { ...state.nodes[id].position };
+            else if (state.layers && state.layers[id]) initialPositions[id] = { ...state.layers[id].position };
         });
 
         const handleMouseMove = (moveEvent) => {
@@ -93,12 +157,12 @@ function Layer({ data }) {
             
             const selectedSet = new Set(allIdsToMove);
             const hasSelectedAncestor = (id) => {
-                let current = state.nodes[id] || (state.layers && state.layers[id]);
+                let current = (state.nodes && state.nodes[id]) || (state.layers && state.layers[id]);
                 const visited = new Set();
                 while (current && current.parentId && current.parentId !== 'root' && !visited.has(current.parentId)) {
                     if (selectedSet.has(current.parentId)) return true;
                     visited.add(current.parentId);
-                    current = state.nodes[current.parentId] || (state.layers && state.layers[current.parentId]) || null;
+                    current = (state.nodes && state.nodes[current.parentId]) || (state.layers && state.layers[current.parentId]) || null;
                 }
                 return false;
             };
@@ -108,9 +172,9 @@ function Layer({ data }) {
                     if (hasSelectedAncestor(id)) return;
                     const effectiveDx = resolvedDx;
                     const effectiveDy = resolvedDy;
-                    if (state.nodes[id]) {
+                    if (state.nodes && state.nodes[id]) {
                         dispatch({ type: 'UPDATE_NODE', payload: { id, updates: { position: { x: initialPositions[id].x + effectiveDx, y: initialPositions[id].y + effectiveDy } }, skipHistory: true } });
-                    } else if (state.layers[id]) {
+                    } else if (state.layers && state.layers[id]) {
                         dispatch({ type: 'UPDATE_LAYER', payload: { id, updates: { position: { x: initialPositions[id].x + effectiveDx, y: initialPositions[id].y + effectiveDy } }, skipHistory: true } });
                     }
                 }
@@ -123,7 +187,7 @@ function Layer({ data }) {
             if (hasMoved) {
                 dispatch({
                     type: 'COMMIT_HISTORY',
-                    payload: { snapshot: initialSnapshot, logMessage: `Перемещен слой: ${data.name}` }
+                    payload: { snapshot: initialSnapshot, logMessage: `Перемещение слоя: ${data.name}` }
                 });
             }
         };
@@ -137,6 +201,7 @@ function Layer({ data }) {
         e.preventDefault();
         dispatch({ type: 'SET_SELECTED', payload: data.id });
 
+        const state = getProjectFlatView(projectId);
         const startX = e.clientX;
         const startY = e.clientY;
         const startW = data.size?.w || 600;
@@ -180,7 +245,10 @@ function Layer({ data }) {
 
     const handleAutoLayout = (e) => {
         e.stopPropagation();
-        const layerNodes = Object.values(state.nodes).filter(n => n.parentId === data.id);
+        const state = getProjectFlatView(projectId);
+        const layerNodes = (window.HierarchyUtils && window.HierarchyUtils.getNodesByParentId)
+            ? (window.HierarchyUtils.getNodesByParentId(state.nodes)[data.id] || [])
+            : Object.values(state.nodes || {}).filter(n => n.parentId === data.id);
         if (layerNodes.length === 0) return;
         
         const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, data, state.nodes);
@@ -199,12 +267,10 @@ function Layer({ data }) {
         }
     };
 
-    const isCurrentContext = data.id === state.currentContext;
-
     return (
         <div
             className={`absolute flex flex-col transition-all duration-200 border-2 rounded-xl pointer-events-auto
-                ${isCurrentContext ? 'z-0 shadow-[0_0_50px_rgba(251,191,36,0.25)] ring-4 ring-amber-400/40' : isSelected ? 'z-0 shadow-lg' : '-z-10 shadow-sm'}
+                ${isSelected || isDropReceiver ? 'z-0 shadow-lg' : '-z-10 shadow-sm'}
             `}
             style={{
                 left: absPos.x,
@@ -212,9 +278,14 @@ function Layer({ data }) {
                 width: data.size?.w || 600,
                 height: data.size?.h || 400,
                 backgroundColor: data.color ? `${data.color}20` : 'rgba(255,255,255,0.02)', // 20 hex is ~12% opacity
-                borderColor: isSelected ? (data.color || '#444') : (data.color ? `${data.color}40` : '#333'),
+                borderColor: isDropReceiver ? '#34d399' : (isSelected ? (data.color || '#444') : (data.color ? `${data.color}40` : '#333')),
+                ...(isDropReceiver ? { boxShadow: '0 0 30px rgba(52,211,153,0.6)' } : {})
             }}
             onClick={handleBodyClick}
+            onDoubleClick={(e) => {
+                e.stopPropagation();
+                dispatch({ type: 'FOCUS_CONNECTED_ELEMENTS', payload: { entityId: data.id } });
+            }}
             data-file="components/Layer.js"
         >
             <div 
@@ -272,6 +343,55 @@ function Layer({ data }) {
             
             <div className="flex-1 pointer-events-none"></div>
             
+            {/* Render Ports */}
+            {zoom >= 0.4 && portIds.map(portId => (
+                <Port key={portId} portId={portId} nodeId={data.id} localZoom={1} />
+            ))}
+
+            {/* Overlay for Add Port Mode */}
+            {interactionMode === 'add-port' && (
+                <div 
+                    className="absolute inset-[-4px] cursor-crosshair border-2 border-dashed border-green-500/50 z-20 rounded-xl"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
+                        const w = rect.width;
+                        const h = rect.height;
+                        
+                        // Determine closest edge
+                        const distTop = y;
+                        const distBottom = h - y;
+                        const distLeft = x;
+                        const distRight = w - x;
+                        
+                        const minDist = Math.min(distTop, distBottom, distLeft, distRight);
+                        let edge, position;
+                        
+                        if (minDist === distTop) { edge = 'top'; position = Math.max(0.05, Math.min(0.95, x / w)); }
+                        else if (minDist === distBottom) { edge = 'bottom'; position = Math.max(0.05, Math.min(0.95, x / w)); }
+                        else if (minDist === distLeft) { edge = 'left'; position = Math.max(0.05, Math.min(0.95, y / h)); }
+                        else { edge = 'right'; position = Math.max(0.05, Math.min(0.95, y / h)); }
+
+                        dispatch({
+                            type: 'ADD_PORT',
+                            payload: {
+                                nodeId: data.id,
+                                type: edge === 'left' ? 'input' : 'output',
+                                position: position,
+                                edge: edge,
+                                name: 'Порт'
+                            }
+                        });
+                    }}
+                >
+                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-green-500/80 text-white text-xs px-2 py-1 rounded shadow select-none pointer-events-none">
+                        Клик по грани слоя
+                    </div>
+                </div>
+            )}
+
             <div 
                 className="absolute bottom-0 right-0 w-8 h-8 cursor-nwse-resize z-20 flex items-end justify-end p-2 group"
                 onMouseDown={handleResizeMouseDown}

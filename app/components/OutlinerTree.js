@@ -10,7 +10,6 @@ function OutlinerTreeRow({ entity, depth, ctx, visited = new Set() }) {
     const kids = childrenOf(entity.id);
     const isCollapsed = collapsedIds[entity.id];
     const isSelected = state.selectedIds.includes(entity.id);
-    const isCurrentCtx = state.currentContext === entity.id;
     const isDropTarget = dropTargetId === entity.id;
 
     const newVisited = new Set(visited);
@@ -21,18 +20,14 @@ function OutlinerTreeRow({ entity, depth, ctx, visited = new Set() }) {
             <div
                 draggable
                 className={`flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-sm transition-colors border-l-2
-                    ${isCurrentCtx ? 'bg-amber-500/15 text-amber-300 font-semibold border-l-amber-400' : isSelected ? 'bg-[var(--accent-blue)]/10 text-[var(--accent-blue)] border-l-transparent' : 'text-gray-300 hover:bg-white/5 border-l-transparent'}
+                    ${isSelected ? 'bg-[var(--accent-blue)]/10 text-[var(--accent-blue)] border-l-transparent' : 'text-gray-300 hover:bg-white/5 border-l-transparent'}
                     ${isDropTarget ? 'bg-green-500/20 outline outline-1 outline-green-500' : ''}
                 `}
                 style={{ paddingLeft: `${8 + depth * 14}px` }}
                 onClick={() => onSelect(entity.id)}
                 onDoubleClick={(e) => {
                     e.stopPropagation();
-                    if (state.nodes[entity.id]) {
-                        dispatch({ type: 'DIVE_INTO', payload: { id: entity.id, name: entity.name } });
-                    } else {
-                        dispatch({ type: 'SET_SELECTED', payload: entity.id });
-                    }
+                    onSelect(entity.id);
                 }}
 
                 onDragStart={(e) => {
@@ -63,6 +58,7 @@ function OutlinerTreeRow({ entity, depth, ctx, visited = new Set() }) {
                     className={`w-3 h-3 shrink-0 rounded-[3px] border border-white/10 ${isLayer ? 'border-dashed border-white/40' : ''}`}
                     style={{ backgroundColor: entity.color || '#333' }}
                 ></div>
+                <span className="text-[10px] font-mono text-gray-500 bg-white/5 px-1 py-0.2 rounded shrink-0">L{window.HierarchyUtils ? window.HierarchyUtils.getEntityLevel(entity.id, state.nodes, state.layers) : depth}</span>
                 <span className="truncate flex-1">{entity.name}</span>
                 {kids.length > 0 && <span className="text-[10px] text-gray-500 shrink-0">{kids.length}</span>}
             </div>
@@ -84,12 +80,21 @@ function OutlinerTree({ onSelect }) {
 
     const H = window.HierarchyUtils;
 
+    // Модель v11: для узла потомки — это его подопечные с другого уровня (ownerId),
+    // для слоя и корня — обычные дети по координатному контейнеру (parentId).
     const childrenOf = (parentId) => {
         const isNode = !!(state.nodes && state.nodes[parentId]);
-        const nodePorts = isNode ? Object.values(state.ports || {}).filter(p => p && p.nodeId === parentId) : [];
+        const nodePorts = isNode
+            ? ((H && H.getPortsByNodeId)
+                ? (H.getPortsByNodeId(state.ports)[parentId] || [])
+                : Object.values(state.ports || {}).filter(p => p && p.nodeId === parentId))
+            : [];
+        const belongs = (e) => isNode
+            ? e.ownerId === parentId
+            : ((e.parentId || 'root') === parentId && !e.ownerId);
         return [
-            ...Object.values(state.layers || {}).filter(l => l && l.parentId === parentId),
-            ...Object.values(state.nodes).filter(n => n && n.parentId === parentId),
+            ...Object.values(state.layers || {}).filter(l => l && belongs(l)),
+            ...Object.values(state.nodes).filter(n => n && belongs(n)),
             ...nodePorts
         ];
     };
@@ -101,12 +106,43 @@ function OutlinerTree({ onSelect }) {
         const dragged = state.nodes[dragId] || (state.layers && state.layers[dragId]);
         if (!dragged || dragged.parentId === targetId) return false;
         if (targetId !== 'root' && H.isDescendantOf(targetId, dragId, state.nodes, state.layers)) return false;
+        // Слой в ветке перетаскиваемого узла принять его не может
+        // («стань собственным ребёнком») — цель не подсвечивается
+        if (state.layers && state.layers[targetId] && state.nodes[dragId] && H.canTransferToLayer) {
+            if (!H.canTransferToLayer(dragId, targetId, state.nodes, state.layers).ok) return false;
+        }
+        // Кросс-уровневый сброс (перенос между уровнями) доступен только при
+        // включённом режиме Drag&Drop — иначе цель не подсвечивается.
+        // Сброс на «Главный холст» (root) меняет только контейнер (уровень
+        // задаётся владельцем) — он не гейтится.
+        if (!(state.ui && state.ui.dragDropMode) && H.getEntityLevel && targetId !== 'root') {
+            const targetLvl = H.getEntityLevel(targetId, state.nodes, state.layers);
+            const dragLvl = H.getEntityLevel(dragId, state.nodes, state.layers);
+            const targetIsLayer = !!(state.layers && state.layers[targetId]);
+            if (targetIsLayer) {
+                if (targetLvl !== dragLvl) return false; // слой чужого уровня
+            } else if (targetLvl + 1 !== dragLvl) {
+                return false; // вложение в узел = смена уровня ребёнка
+            }
+        }
         return true;
     };
 
     const handleDrop = (targetId) => {
         if (canDropOn(targetId)) {
-            dispatch({ type: 'REPARENT_ENTITY', payload: { id: dragIdRef.current, newParentId: targetId } });
+            const dragId = dragIdRef.current;
+            const H = window.HierarchyUtils;
+            const isTargetLayer = !!(state.layers && state.layers[targetId]);
+            const isDragNode = !!(state.nodes && state.nodes[dragId]);
+            // Сброс узла на слой ЧУЖОГО уровня — это перенос между уровнями:
+            // узел усыновляет ветка слоя, поддерево и связи переезжают сами
+            // (TRANSFER_NODE). В остальных случаях — обычное перевложение.
+            if (isTargetLayer && isDragNode && H && H.getEntityLevel &&
+                H.getEntityLevel(targetId, state.nodes, state.layers) !== H.getEntityLevel(dragId, state.nodes, state.layers)) {
+                dispatch({ type: 'TRANSFER_NODE', payload: { id: dragId, targetLayerId: targetId } });
+            } else {
+                dispatch({ type: 'REPARENT_ENTITY', payload: { id: dragId, newParentId: targetId } });
+            }
         }
         dragIdRef.current = null;
         setDropTargetId(null);
@@ -118,8 +154,7 @@ function OutlinerTree({ onSelect }) {
     return (
         <div className="flex flex-col" data-file="components/OutlinerTree.js">
             <div
-                className={`flex items-center gap-2 px-3 py-2 text-sm border-b border-[#333]/50 transition-colors
-                    ${state.currentContext === 'root' ? 'text-[var(--accent-blue)]' : 'text-gray-400'}
+                className={`flex items-center gap-2 px-3 py-2 text-sm border-b border-[#333]/50 transition-colors text-gray-300
                     ${dropTargetId === 'root' ? 'bg-green-500/20 outline outline-1 outline-green-500' : ''}
                 `}
                 onDragOver={(e) => {

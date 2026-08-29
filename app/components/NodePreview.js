@@ -9,8 +9,12 @@ function NodePreview({ nodeId }) {
         const bbox = window.HierarchyUtils.getChildrenBBox(nodeId, state.nodes, state.layers);
         if (!bbox) return null;
 
-        const childNodes = Object.values(state.nodes).filter(n => n && n.parentId === nodeId && !n.hidden);
-        const childLayers = Object.values(state.layers || {}).filter(l => l && l.parentId === nodeId);
+        const childNodes = (window.HierarchyUtils && window.HierarchyUtils.getNodesByParentId)
+            ? (window.HierarchyUtils.getNodesByParentId(state.nodes)[nodeId] || []).filter(n => !n.hidden)
+            : Object.values(state.nodes).filter(n => n && n.parentId === nodeId && !n.hidden);
+        const childLayers = (window.HierarchyUtils && window.HierarchyUtils.getLayersByParentId)
+            ? (window.HierarchyUtils.getLayersByParentId(state.layers)[nodeId] || [])
+            : Object.values(state.layers || {}).filter(l => l && l.parentId === nodeId);
 
         const childIds = new Set(childNodes.map(n => n.id));
         const innerLinks = Object.values(state.links || {}).filter(l => {

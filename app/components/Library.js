@@ -1,6 +1,12 @@
-function Library() {
+function Library({ projectId }) {
     const { state, dispatch } = useStore();
     const [objectTab, setObjectTab] = React.useState('layers');
+
+    // v12: панель обозревателя живёт в стеке плашек (по одной на проект).
+    // Полное дерево показывается только для АКТИВНОГО проекта (его данные —
+    // в плоском виде state.*); для неактивного — заглушка с активацией по
+    // клику. Простая версия по решению владельца продукта, улучшим позже.
+    const isActiveProject = !projectId || projectId === state.activeProjectId;
 
     const { layers, nodes, ports, links, past, future, historyLogs } = state;
     const activeTab = state.ui.libraryTab || 'objects';
@@ -23,7 +29,17 @@ function Library() {
         }
     }, [state.selectedIds, layers, nodes, ports, links]);
 
-    if (!state.ui.libraryOpen) return null;
+    if (!isActiveProject) {
+        return (
+            <div
+                className="w-[350px] glass-panel rounded-xl border-[#444] shadow-2xl px-4 py-3 text-sm text-gray-400 cursor-pointer hover:text-white transition-colors"
+                onClick={() => dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId })}
+                data-file="components/Library.js"
+            >
+                Проект неактивен — кликните, чтобы активировать и увидеть его объекты
+            </div>
+        );
+    }
 
     const handleSelect = (id) => {
         dispatch({ type: 'SET_SELECTED', payload: id });
@@ -126,10 +142,12 @@ function Library() {
         );
     };
 
-    // Grouping nodes
+    // Группировка узлов по СЛОЯМ (слой = логическая группа на своём холсте).
+    // Поле node.group — легаси, в интерфейсе больше не используется.
     const nodesArray = Object.values(nodes);
     const groupedNodes = nodesArray.reduce((acc, node) => {
-        const g = node.group || 'Без группы';
+        const layer = node.parentId && node.parentId !== 'root' && layers ? layers[node.parentId] : null;
+        const g = layer ? (layer.name || layer.id) : 'Вне слоёв';
         if (!acc[g]) acc[g] = [];
         acc[g].push(node);
         return acc;
@@ -200,7 +218,7 @@ function Library() {
                                         <div 
                                             className="px-3 py-1.5 bg-[#1a1a1a] text-[10px] uppercase text-gray-500 hover:text-white cursor-pointer font-semibold border-b border-[#333]/50 sticky top-0 backdrop-blur-md z-10 transition-colors flex items-center justify-between group"
                                             onClick={() => dispatch({ type: 'SET_MULTI_SELECTED', payload: groupNodes.map(n => n.id) })}
-                                            title="Выделить все узлы в этой группе"
+                                            title="Выделить все узлы этого слоя"
                                         >
                                             <span>{groupName}</span>
                                             <div className="icon-scan text-xs opacity-0 group-hover:opacity-100 transition-opacity text-[var(--accent-blue)]"></div>
@@ -287,176 +305,6 @@ function Library() {
             );
         }
 
-        if (activeTab === 'levels') {
-            const H = window.HierarchyUtils;
-            const maxDepths = H ? H.getMaxRelativeDepths(state.currentContext, nodes, layers, ports, links) : { maxDown: 10, maxUp: 10 };
-            const currentDown = state.ui?.xRayDown || 0;
-            const currentUp = state.ui?.xRayUp || 0;
-            const maxUp = maxDepths.maxUp;
-            const maxDown = maxDepths.maxDown;
-
-            const currCtx = state.currentContext || 'root';
-            const directChildren = [];
-            const xrayChildren = [];
-
-            Object.values(nodes || {}).forEach(n => {
-                if (!n) return;
-                const rel = H ? H.getRelativeDepth(n.id, currCtx, nodes, layers, ports, links) : null;
-                if (rel === 1) directChildren.push({ entity: n, type: 'node', name: n.name, icon: 'icon-box' });
-                else if (rel !== null && rel > 1 && rel <= currentDown + 1) {
-                    xrayChildren.push({ entity: n, type: 'node', name: n.name, rel, icon: 'icon-box' });
-                }
-            });
-
-            Object.values(layers || {}).forEach(l => {
-                if (!l) return;
-                const rel = H ? H.getRelativeDepth(l.id, currCtx, nodes, layers, ports, links) : null;
-                if (rel === 1) directChildren.push({ entity: l, type: 'layer', name: l.name, icon: 'icon-layers' });
-                else if (rel !== null && rel > 1 && rel <= currentDown + 1) {
-                    xrayChildren.push({ entity: l, type: 'layer', name: l.name, rel, icon: 'icon-layers' });
-                }
-            });
-
-            return (
-                <div className="flex flex-col flex-1 overflow-hidden p-3 gap-3 text-sm">
-                    {/* Секция X-Ray контроля */}
-                    <div className="rounded-lg border border-[#333] bg-[#1a1a1a]/80 p-3 flex flex-col gap-2.5">
-                        <div className="text-xs font-semibold text-gray-300 flex items-center justify-between">
-                            <span>🔍 Просвечивание (X-Ray)</span>
-                            <button
-                                className="text-[10px] text-gray-400 hover:text-white underline"
-                                onClick={() => {
-                                    dispatch({ type: 'SET_XRAY_DOWN', payload: 0 });
-                                    dispatch({ type: 'SET_XRAY_UP', payload: 0 });
-                                }}
-                            >
-                                Сбросить
-                            </button>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                            {/* Кнопка "Наверх (предки)" со стрелкой ВВЕРХ */}
-                            <div className="flex-1 flex items-center justify-between bg-black/30 px-2.5 py-1.5 rounded border border-white/5">
-                                <span className="text-xs text-gray-400 flex items-center gap-1">
-                                    <span>Наверх:</span>
-                                </span>
-                                <div className="flex items-center gap-1.5">
-                                    <span className="text-xs font-mono font-semibold text-amber-400">
-                                        {maxUp === 0 ? '0' : `${currentUp}/${maxUp}`}
-                                    </span>
-                                    <button
-                                        className={`w-6 h-6 flex items-center justify-center rounded transition-all text-xs font-bold ${currentUp > 0 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-[0_0_8px_rgba(245,158,11,0.3)]' : 'bg-white/10 text-gray-300 hover:bg-white/20'} disabled:opacity-30 disabled:hover:bg-white/10`}
-                                        disabled={maxUp === 0}
-                                        title={maxUp === 0 ? 'Нет уровней наверху' : `Просвечивание предков (${currentUp} из ${maxUp} ур.)`}
-                                        onClick={() => {
-                                            const nextUp = (currentUp + 1) > maxUp ? 0 : currentUp + 1;
-                                            dispatch({ type: 'SET_XRAY_UP', payload: nextUp });
-                                        }}
-                                    >
-                                        ↑
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* Кнопка "Вглубь (потомки)" со стрелкой ВНИЗ */}
-                            <div className="flex-1 flex items-center justify-between bg-black/30 px-2.5 py-1.5 rounded border border-white/5">
-                                <span className="text-xs text-gray-400 flex items-center gap-1">
-                                    <span>Вглубь:</span>
-                                </span>
-                                <div className="flex items-center gap-1.5">
-                                    <span className="text-xs font-mono font-semibold text-[var(--accent-blue)]">
-                                        {maxDown === 0 ? '0' : `${currentDown}/${maxDown}`}
-                                    </span>
-                                    <button
-                                        className={`w-6 h-6 flex items-center justify-center rounded transition-all text-xs font-bold ${currentDown > 0 ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)] border border-[var(--accent-blue)]/40 shadow-[0_0_8px_rgba(56,189,248,0.3)]' : 'bg-white/10 text-gray-300 hover:bg-white/20'} disabled:opacity-30 disabled:hover:bg-white/10`}
-                                        disabled={maxDown === 0}
-                                        title={maxDown === 0 ? 'Нет уровней внизу' : `Просвечивание потомков (${currentDown} из ${maxDown} ур.)`}
-                                        onClick={() => {
-                                            const nextDown = (currentDown + 1) > maxDown ? 0 : currentDown + 1;
-                                            dispatch({ type: 'SET_XRAY_DOWN', payload: nextDown });
-                                        }}
-                                    >
-                                        ↓
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Секция текущего контекста и содержимого */}
-                    <div className="flex flex-col flex-1 overflow-y-auto no-scrollbar gap-2">
-                        {directChildren.length === 0 && xrayChildren.length === 0 ? (
-                            <div className="text-gray-500 italic px-2 py-4 text-center text-xs">Контекст пуст</div>
-                        ) : (
-                            <div className="flex flex-col gap-3">
-                                {directChildren.length > 0 && (
-                                    <div className="flex flex-col gap-1">
-                                        <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 px-1">
-                                            Прямой контент ({directChildren.length})
-                                        </div>
-                                        {directChildren.map(item => {
-                                            const isSelected = state.selectedIds && state.selectedIds.includes(item.entity.id);
-                                            return (
-                                                <div
-                                                    key={item.entity.id}
-                                                    className={`flex items-center justify-between px-2.5 py-1.5 rounded cursor-pointer text-xs transition-colors border ${isSelected ? 'bg-[var(--accent-blue)]/20 border-[var(--accent-blue)]/50 text-white' : 'bg-[#1a1a1a] border-[#333] hover:border-[#555] text-gray-300'}`}
-                                                    onClick={() => handleSelect(item.entity.id)}
-                                                    onDoubleClick={() => {
-                                                        if (item.type === 'node') {
-                                                            dispatch({ type: 'DIVE_INTO', payload: { id: item.entity.id, name: item.name } });
-                                                        } else {
-                                                            handleSelect(item.entity.id);
-                                                        }
-                                                    }}
-                                                >
-                                                    <div className="flex items-center gap-2 truncate">
-                                                        <div className={`${item.icon} text-gray-400 shrink-0`}></div>
-                                                        <span className="truncate">{item.name}</span>
-                                                    </div>
-                                                    <span className="text-[9px] uppercase text-gray-500 font-mono">{item.type}</span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-
-                                {xrayChildren.length > 0 && (
-                                    <div className="flex flex-col gap-1">
-                                        <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--accent-blue)] px-1">
-                                            Вложенные (X-Ray: {xrayChildren.length})
-                                        </div>
-                                        {xrayChildren.map(item => {
-                                            const isSelected = state.selectedIds && state.selectedIds.includes(item.entity.id);
-                                            return (
-                                                <div
-                                                    key={item.entity.id}
-                                                    className={`flex items-center justify-between px-2.5 py-1.5 rounded cursor-pointer text-xs transition-colors border ${isSelected ? 'bg-[var(--accent-blue)]/20 border-[var(--accent-blue)]/50 text-white' : 'bg-black/40 border-[#2a2a2a] hover:border-[#444] text-gray-400'}`}
-                                                    onClick={() => handleSelect(item.entity.id)}
-                                                    onDoubleClick={() => {
-                                                        if (item.type === 'node') {
-                                                            dispatch({ type: 'DIVE_INTO', payload: { id: item.entity.id, name: item.name } });
-                                                        } else {
-                                                            handleSelect(item.entity.id);
-                                                        }
-                                                    }}
-                                                >
-                                                    <div className="flex items-center gap-2 truncate">
-                                                        <div className={`${item.icon} text-gray-500 shrink-0`}></div>
-                                                        <span className="truncate">{item.name}</span>
-                                                    </div>
-                                                    <span className="text-[9px] text-[var(--accent-blue)] font-mono">+{item.rel - 1} ур.</span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            );
-        }
-
         return (
             <div className="flex flex-col overflow-y-auto flex-1 p-2 gap-1 no-scrollbar relative min-h-[200px]">
                 <div className="absolute left-[19px] top-4 bottom-4 w-px bg-[#333] z-0"></div>
@@ -482,19 +330,16 @@ function Library() {
     };
 
     return (
-        <div className="absolute left-4 top-4 w-[350px] glass-panel rounded-xl flex flex-col max-h-[calc(100vh-2rem)] z-40 shadow-2xl overflow-hidden border-[#444] transition-all duration-300" data-file="components/Library.js">
+        // Панель рендерится ВНУТРИ стека плашек (Canvas) сразу под плашкой
+        // своего проекта — позиционирование задаёт родитель, плашки ниже
+        // съезжают вниз автоматически (flex-колонка).
+        <div className="w-[350px] glass-panel rounded-xl flex flex-col max-h-[55vh] shadow-2xl overflow-hidden border-[#444] transition-all duration-300 shrink-0" data-file="components/Library.js">
             <div className="p-3 border-b border-[#333] flex items-center gap-4 bg-[#1f1f1f]">
                 <button 
                     className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'objects' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
                     onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'objects' })}
                 >
                     Объекты
-                </button>
-                <button 
-                    className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'levels' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
-                    onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'levels' })}
-                >
-                    Уровни
                 </button>
                 <button 
                     className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'history' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}

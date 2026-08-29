@@ -167,12 +167,193 @@ const TypographyPopover = ({ currentFont, currentSize, onFontChange, onSizeChang
     );
 };
 
+// source сообщает вызывающему, ЧЕМ выбран цвет: 'preset'/'eyedropper' — выбор
+// завершён, поповер можно закрывать; 'input' — нативный пикер шлёт change на
+// каждое движение ползунка, и закрытие на первом же событии обрывало подбор.
+const ColorPickerPopover = ({ currentColor, onColorChange, title = 'Выбор цвета', leftClass = 'left-0', showHex = true }) => {
+    return (
+        <div className={`absolute ${leftClass} top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2.5 animate-in fade-in zoom-in-95 duration-150`}>
+            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">{title}</div>
+            <div className="grid grid-cols-7 gap-1.5">
+                {COLOR_PRESETS.map((c) => (
+                    <button
+                        key={c}
+                        className={`w-6 h-6 rounded-md border transition-all hover:scale-110 ${
+                            (currentColor || '').toLowerCase() === c.toLowerCase()
+                                ? 'border-white ring-2 ring-[var(--accent-blue)] scale-105'
+                                : 'border-white/20 hover:border-white'
+                        }`}
+                        style={{ backgroundColor: c }}
+                        onClick={() => onColorChange(c, 'preset')}
+                    />
+                ))}
+            </div>
+            <div className="flex items-center gap-2 pt-1 border-t border-white/10">
+                <span className="text-[11px] text-gray-400">Свой цвет:</span>
+                <input
+                    type="color"
+                    className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0"
+                    value={currentColor && currentColor.startsWith('#') && currentColor.length === 7 ? currentColor : '#888888'}
+                    onChange={(e) => onColorChange(e.target.value, 'input')}
+                />
+                {window.EyeDropper && (
+                    <button
+                        className="w-6 h-6 rounded flex items-center justify-center text-gray-300 hover:text-white hover:bg-white/10 border border-white/10 transition-colors"
+                        title="Пипетка: взять цвет с экрана"
+                        onClick={async () => {
+                            try {
+                                const res = await new window.EyeDropper().open();
+                                onColorChange(res.sRGBHex, 'eyedropper');
+                            } catch (err) { /* отмена пипетки */ }
+                        }}
+                    >
+                        <div className="icon-pipette text-xs"></div>
+                    </button>
+                )}
+                {showHex && (
+                    <span className="text-[10px] font-mono text-gray-400 flex-1 truncate">{currentColor || '#1a1a1a'}</span>
+                )}
+            </div>
+        </div>
+    );
+};
+
+const IconPickerPopover = ({ currentIcon, onIconChange, leftClass = 'left-48' }) => {
+    return (
+        <div className={`absolute ${leftClass} top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2 max-h-64 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-150`}>
+            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Иконка Lucide</div>
+            <div className="grid grid-cols-5 gap-1.5">
+                {ICON_PRESETS.map((item) => (
+                    <button
+                        key={item.id}
+                        className={`h-8 rounded flex flex-col items-center justify-center transition-colors border ${
+                            currentIcon === item.id 
+                                ? 'bg-[var(--accent-blue)]/30 border-[var(--accent-blue)] text-white' 
+                                : 'bg-black/20 border-white/5 text-gray-400 hover:bg-white/10 hover:text-white'
+                        }`}
+                        title={item.label}
+                        onClick={() => onIconChange(item.id)}
+                    >
+                        {item.icon ? <div className={`${item.icon} text-sm`}></div> : <span className="text-[9px]">Нет</span>}
+                    </button>
+                ))}
+            </div>
+
+            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mt-1 pt-1 border-t border-white/10">Эмодзи</div>
+            <div className="grid grid-cols-5 gap-1.5">
+                {EMOJI_PRESETS.map((emoji) => (
+                    <button
+                        key={emoji}
+                        className={`h-8 rounded flex items-center justify-center text-sm transition-colors border ${
+                            currentIcon === emoji 
+                                ? 'bg-[var(--accent-blue)]/30 border-[var(--accent-blue)]' 
+                                : 'bg-black/20 border-white/5 hover:bg-white/10'
+                        }`}
+                        onClick={() => onIconChange(emoji)}
+                    >
+                        {emoji}
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+};
+
 function ContextActionBar() {
-    const { state, dispatch } = useStore();
-    const [activePopover, setActivePopover] = React.useState(null); // 'color' | 'media' | 'layer' | 'group' | 'icon' | 'edge' | 'typography' | null
+    const { state: rootState, dispatch: rawDispatch } = useStore();
+    const [activePopover, setActivePopover] = React.useState(null); // 'color' | 'media' | 'layer' | 'icon' | 'edge' | 'typography' | null
     const barRef = React.useRef(null);
+    // Импорт/экспорт проекта переехали сюда из тулбара (панель свойств проекта).
+    const projectFileInputRef = React.useRef(null);
+
+    // Определяем, какому проекту принадлежит выбранный элемент
+    const selectedPid = React.useMemo(() => {
+        const firstId = rootState.selectedIds && rootState.selectedIds[0];
+        if (!firstId) return rootState.activeProjectId;
+        if (typeof firstId === 'string' && firstId.startsWith('project:')) return firstId.slice(8);
+        for (const pid of (rootState.projectOrder || [])) {
+            const p = rootState.projects && rootState.projects[pid];
+            if (p && ((p.nodes && p.nodes[firstId]) || (p.layers && p.layers[firstId]) || (p.ports && p.ports[firstId]) || (p.links && p.links[firstId]) || (p.levelWindows && p.levelWindows[firstId]))) {
+                return pid;
+            }
+        }
+        return rootState.activeProjectId;
+    }, [rootState.selectedIds, rootState.projects, rootState.projectOrder, rootState.activeProjectId]);
+
+    const state = React.useMemo(() => {
+        if (!selectedPid) return rootState;
+        if (typeof getProjectFlatView === 'function') {
+            return getProjectFlatView(selectedPid);
+        }
+        return rootState;
+    }, [selectedPid, rootState]);
+
+    const dispatch = React.useCallback((action) => {
+        if (!action) return action;
+        if (selectedPid && selectedPid !== rootState.activeProjectId && action.type !== 'FOR_PROJECT' && action.type !== 'SET_ACTIVE_PROJECT' && action.type !== 'TOGGLE_SELECTED' && action.type !== 'SET_SELECTED' && action.type !== 'CLEAR_SELECTION') {
+            return rawDispatch({
+                type: 'FOR_PROJECT',
+                payload: {
+                    projectId: selectedPid,
+                    action
+                }
+            });
+        }
+        return rawDispatch(action);
+    }, [selectedPid, rootState.activeProjectId, rawDispatch]);
 
     const { selectedIds, nodes, layers, ports, links } = state;
+
+    const handleExportProject = () => {
+        // Экспортируется АКТИВНЫЙ проект (плоский формат, обратно совместимый);
+        // окна уровней и настройки проекта включены для точного восстановления
+        const data = {
+            formatVersion: state.formatVersion || 10,
+            layers: state.layers,
+            nodes: state.nodes,
+            ports: state.ports,
+            links: state.links,
+            levelWindows: state.levelWindows,
+            levelViews: state.levelViews,
+            projectName: state.projectName,
+            projectColor: state.projectColor,
+            projectFontFamily: state.projectFontFamily,
+            projectContent: state.projectContent,
+            canvas: state.canvas
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `architector_project_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    const handleImportProject = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const data = JSON.parse(event.target.result);
+                if (data.nodes && data.ports && data.links) {
+                    // Импорт ДОБАВЛЯЕТ новый проект на общий холст (правее
+                    // существующих), а не заменяет текущий
+                    dispatch({ type: 'ADD_PROJECT_FROM_FILE', payload: data });
+                } else {
+                    console.error('Некорректный файл проекта');
+                }
+            } catch (err) {
+                console.error('Ошибка чтения файла', err);
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    };
 
     // Закрытие выпадающих поповеров при клике вне панели
     React.useEffect(() => {
@@ -193,6 +374,202 @@ function ContextActionBar() {
 
     if (!selectedIds || selectedIds.length === 0) {
         return null;
+    }
+
+    // === 0. МАССОВОЕ ВЫДЕЛЕНИЕ КОНТЕЙНЕРОВ (проекты и уровни) ===
+    // Классы взаимоисключающи, поэтому здесь либо только контейнеры, либо
+    // только сущности графа — панель всегда однозначна.
+    const isContainerId = (sid) => typeof sid === 'string' && (
+        sid === 'project' || sid.startsWith('project:') || sid.startsWith('window:') || sid.startsWith('level-window-')
+    );
+    if (selectedIds.length > 1 && selectedIds.some(isContainerId)) {
+        const pickedProjects = [];
+        const pickedWindows = [];
+        selectedIds.forEach(sid => {
+            if (typeof sid !== 'string') return;
+            if (sid === 'project') {
+                if (state.activeProjectId) pickedProjects.push(state.activeProjectId);
+            } else if (sid.startsWith('project:')) {
+                pickedProjects.push(sid.slice('project:'.length));
+            } else if (sid.startsWith('window:')) {
+                pickedWindows.push(sid.slice('window:'.length));
+            } else if (sid.startsWith('level-window-')) {
+                const idx = parseInt(sid.slice('level-window-'.length), 10);
+                const win = Object.values(state.levelWindows || {}).find(w => w && w.levelIndex === idx);
+                if (win) pickedWindows.push(win.id);
+            }
+        });
+
+        const projCount = pickedProjects.length;
+        const winCount = pickedWindows.length;
+        const ci = state.containerIsolation || { projectIds: [], windowIds: [] };
+        const allIsolated = (projCount > 0 || winCount > 0)
+            && pickedProjects.every(pid => (ci.projectIds || []).includes(pid))
+            && pickedWindows.every(wid => (ci.windowIds || []).includes(wid));
+
+        const applyToAll = (fn) => { pickedProjects.forEach(pid => fn('project', pid)); pickedWindows.forEach(wid => fn('window', wid)); };
+
+        const handleIsolate = () => {
+            if (allIsolated) {
+                dispatch({ type: 'CLEAR_CONTAINER_ISOLATION' });
+                return;
+            }
+            dispatch({ type: 'SET_CONTAINER_ISOLATION', payload: { projectIds: pickedProjects, windowIds: pickedWindows } });
+        };
+
+        // Окно может принадлежать НЕактивному проекту: ищем его владельца по
+        // всем проектам (id окон уникальны между проектами)
+        const ownerOfWindow = (wid) => {
+            const projects = state.projects || {};
+            return Object.keys(projects).find(pid => projects[pid].levelWindows && projects[pid].levelWindows[wid]) || null;
+        };
+        const windowInfo = (wid) => {
+            const pid = ownerOfWindow(wid);
+            if (!pid) return null;
+            const win = state.projects[pid].levelWindows[wid];
+            return win ? { projectId: pid, levelIndex: win.levelIndex } : null;
+        };
+        // FOR_PROJECT доставляет экшен в конкретный проект, не делая его активным:
+        // иначе массовая правка дёргала бы камеру и выделение пользователя
+        const toProject = (pid, action) => dispatch({ type: 'FOR_PROJECT', payload: { projectId: pid, action } });
+
+        const handleColor = (color) => {
+            pickedProjects.forEach(pid => toProject(pid, {
+                type: 'UPDATE_PROJECT_PROPERTIES', payload: { updates: { projectColor: color } }
+            }));
+            pickedWindows.forEach(wid => {
+                const info = windowInfo(wid);
+                if (info) toProject(info.projectId, {
+                    type: 'UPDATE_LEVEL_PROPERTIES', payload: { index: info.levelIndex, updates: { color } }
+                });
+            });
+        };
+
+        const handleFont = (updates) => {
+            if (updates.fontFamily) {
+                pickedProjects.forEach(pid => toProject(pid, {
+                    type: 'UPDATE_PROJECT_PROPERTIES', payload: { updates: { projectFontFamily: updates.fontFamily } }
+                }));
+            }
+            pickedWindows.forEach(wid => {
+                const info = windowInfo(wid);
+                if (info) toProject(info.projectId, {
+                    type: 'UPDATE_LEVEL_PROPERTIES', payload: { index: info.levelIndex, updates }
+                });
+            });
+        };
+
+        const handleAlign = () => {
+            // Выравниваются окна тех проектов, что задеты выделением: выстраивать
+            // «через одно» окна внутри проекта бессмысленно — уровни идут лестницей
+            const projectsToAlign = new Set(pickedProjects);
+            pickedWindows.forEach(wid => {
+                const pid = ownerOfWindow(wid);
+                if (pid) projectsToAlign.add(pid);
+            });
+            projectsToAlign.forEach(pid => toProject(pid, { type: 'ALIGN_LEVEL_WINDOWS' }));
+        };
+
+        const handleDelete = () => {
+            const parts = [];
+            if (projCount > 0) parts.push(`проектов: ${projCount} (со всем содержимым, БЕЗВОЗВРАТНО — межпроектной истории нет)`);
+            if (winCount > 0) parts.push(`уровней: ${winCount} (нижние уровни поднимутся, Главный холст не удаляется)`);
+            if (window.confirm(`Удалить ${parts.join('; ')}?`)) {
+                dispatch({ type: 'DELETE_SELECTED' });
+            }
+        };
+
+        return (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[794px] max-w-[calc(100vw-2rem)]">
+                <div className="glass-panel bg-[#0d1017]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-[#2a2a2a] p-3 flex flex-col gap-2.5">
+                    <div className="flex items-center gap-2.5">
+                        <div className="w-[110px] shrink-0 px-2 py-1 rounded-lg text-[11px] font-bold text-center bg-amber-500/20 text-amber-200 border border-amber-500/40">
+                            Контейнеры
+                        </div>
+                        <div className="text-sm text-gray-200 font-semibold">
+                            Выбрано: {projCount > 0 ? `проектов ${projCount}` : ''}{projCount > 0 && winCount > 0 ? ', ' : ''}{winCount > 0 ? `уровней ${winCount}` : ''}
+                        </div>
+                        <div className="flex-1"></div>
+                        <button
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+                            title="Снять выделение (Esc)"
+                            onClick={() => dispatch({ type: 'SET_SELECTED', payload: null })}
+                        >
+                            <div className="icon-x text-sm"></div>
+                        </button>
+                    </div>
+
+                    <div className="flex items-center gap-2 relative">
+                        <button
+                            className="w-10 h-10 rounded-xl flex items-center justify-center bg-black/40 border border-white/10 text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+                            title="Цвет: плашки проектов и рамки окон. Содержимое не затрагивается"
+                            onClick={() => setActivePopover(activePopover === 'color' ? null : 'color')}
+                        >
+                            <div className="icon-palette text-lg"></div>
+                        </button>
+                        <button
+                            className="w-10 h-10 rounded-xl flex items-center justify-center bg-black/40 border border-white/10 text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+                            title="Шрифт заголовков. Содержимое не затрагивается"
+                            onClick={() => setActivePopover(activePopover === 'typography' ? null : 'typography')}
+                        >
+                            <div className="icon-type text-lg"></div>
+                        </button>
+                        <button
+                            className={`w-10 h-10 rounded-xl flex items-center justify-center border transition-colors ${
+                                allIsolated
+                                    ? 'bg-amber-500/25 border-amber-400/60 text-amber-200'
+                                    : 'bg-black/40 border-white/10 text-gray-300 hover:text-white hover:bg-white/10'
+                            }`}
+                            title={allIsolated
+                                ? 'Изоляция включена: на холсте видно только выбранное. Клик — показать всё'
+                                : 'Изолировать выбранное: скрыть с холста всё остальное'}
+                            onClick={handleIsolate}
+                        >
+                            <div className={`text-lg ${allIsolated ? 'icon-scan' : 'icon-scan-line'}`}></div>
+                        </button>
+                        <button
+                            className="w-10 h-10 rounded-xl flex items-center justify-center bg-black/40 border border-white/10 text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+                            title="Выровнять окна уровней"
+                            onClick={handleAlign}
+                        >
+                            <div className="icon-align-vertical-justify-center text-lg"></div>
+                        </button>
+                        <div className="flex-1"></div>
+                        <button
+                            className="w-10 h-10 rounded-xl flex items-center justify-center bg-red-900/30 border border-red-700/40 text-red-300 hover:text-red-100 hover:bg-red-800/50 transition-colors"
+                            title="Удалить выбранные контейнеры"
+                            onClick={handleDelete}
+                        >
+                            <div className="icon-trash text-lg"></div>
+                        </button>
+
+                        {activePopover === 'color' && (
+                            <ColorPickerPopover
+                                title="Цвет контейнеров"
+                                currentColor={'#1a1a1a'}
+                                onColorChange={(c, source) => { handleColor(c); if (source !== 'input') setActivePopover(null); }}
+                                leftClass="left-0"
+                                showHex={false}
+                            />
+                        )}
+                        {activePopover === 'typography' && (
+                            <TypographyPopover
+                                currentFont={'Inter, sans-serif'}
+                                currentSize={14}
+                                onFontChange={(f) => handleFont({ fontFamily: f })}
+                                onSizeChange={(sz) => handleFont({ fontSize: sz })}
+                                leftClass="left-12"
+                            />
+                        )}
+                    </div>
+
+                    <div className="text-[10px] text-gray-500">
+                        Правки оформления применяются к самим контейнерам — плашкам проектов и рамкам окон.
+                        Узлы, слои и порты внутри не затрагиваются.
+                    </div>
+                </div>
+            </div>
+        );
     }
 
     // === 1. РЕЖИМ МАССОВОГО ВЫДЕЛЕНИЯ ===
@@ -232,18 +609,17 @@ function ContextActionBar() {
         const handleMassLayerChange = (parentId) => {
             const nodeIds = selectedItems.filter(item => item.type === 'Узел').map(i => i.data.id);
             const targetLayer = layers[parentId];
-            
-            if (targetLayer) {
-                const nodesToPlace = nodeIds.map(id => nodes[id]);
-                const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(nodesToPlace, targetLayer, nodes);
+            if (nodeIds.length === 0) { setActivePopover(null); return; }
 
-                dispatch({ type: 'UPDATE_LAYER', payload: { id: parentId, updates: { size: newLayerSize } } });
-                dispatch({ type: 'MASS_UPDATE', payload: { ids: nodeIds, updatesById } });
+            if (targetLayer) {
+                // Единая семантика в TRANSFER_NODE: «только верхние» из выделения,
+                // свой уровень — группировка, чужой — перенос с усыновлением веткой слоя
+                dispatch({ type: 'TRANSFER_NODE', payload: { ids: nodeIds, targetLayerId: parentId } });
             } else {
                 const H = window.HierarchyUtils;
                 const updatesById = {};
                 nodeIds.forEach(id => {
-                    const abs = H.getAbsolutePosition(id, nodes, layers);
+                    const abs = H.getLocalPosition(id, nodes, layers);
                     updatesById[id] = { parentId, position: H.toRelativePosition(abs, parentId, nodes, layers) };
                 });
                 dispatch({ type: 'MASS_UPDATE', payload: { ids: nodeIds, updatesById } });
@@ -254,7 +630,7 @@ function ContextActionBar() {
         return (
             <div 
                 ref={barRef}
-                className="fixed top-16 left-1/2 -translate-x-1/2 z-40 max-w-[794px] w-[540px] max-w-[92vw] glass-panel rounded-2xl p-2.5 flex flex-col gap-2 shadow-2xl backdrop-blur-md bg-slate-900/90 border border-white/10 animate-in fade-in slide-in-from-top-2 duration-200"
+                className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-[794px] z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl p-2.5 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-150"
                 data-file="components/ContextActionBar.js"
                 onClick={(e) => e.stopPropagation()}
             >
@@ -274,7 +650,7 @@ function ContextActionBar() {
                 </div>
 
                 {/* 2. Средний ярус: Кнопки массовых действий (40x40px) */}
-                <div className="flex items-center gap-1.5 px-0.5 relative">
+                <div className="flex items-center gap-1 relative border-t border-b border-white/10 py-1.5 px-0.5">
                     {/* Массовый цвет */}
                     <button
                         className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
@@ -363,28 +739,13 @@ function ContextActionBar() {
 
                     {/* Поповер цвета для группы */}
                     {activePopover === 'color' && (
-                        <div className="absolute left-0 top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2.5">
-                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Массовый цвет</div>
-                            <div className="grid grid-cols-7 gap-1.5">
-                                {COLOR_PRESETS.map((c) => (
-                                    <button
-                                        key={c}
-                                        className="w-6 h-6 rounded-md border border-white/20 hover:scale-110 transition-all hover:border-white"
-                                        style={{ backgroundColor: c }}
-                                        onClick={() => { handleMassColorChange(c); setActivePopover(null); }}
-                                    />
-                                ))}
-                            </div>
-                            <div className="flex items-center gap-2 pt-1 border-t border-white/10">
-                                <span className="text-[11px] text-gray-400">Свой цвет:</span>
-                                <input
-                                    type="color"
-                                    className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0"
-                                    defaultValue="#888888"
-                                    onChange={(e) => handleMassColorChange(e.target.value)}
-                                />
-                            </div>
-                        </div>
+                        <ColorPickerPopover
+                            title="Массовый цвет"
+                            currentColor={firstItemWithFont?.data?.color || '#1a1a1a'}
+                            onColorChange={(c, source) => { handleMassColorChange(c); if (source !== 'input') setActivePopover(null); }}
+                            leftClass="left-0"
+                            showHex={false}
+                        />
                     )}
 
                     {/* Поповер типографики для группы */}
@@ -409,16 +770,53 @@ function ContextActionBar() {
                                 <div className="icon-home text-gray-400 text-xs"></div>
                                 <span className="truncate flex-1">Главный холст (Root)</span>
                             </button>
-                            {layers && Object.values(layers).map((l) => (
+                            {layers && Object.values(layers).map((l) => {
+                                const H = window.HierarchyUtils;
+                                const layerLvl = (H && H.getEntityLevel) ? H.getEntityLevel(l.id, nodes, layers) : 0;
+                                const selNodeIds = selectedItems.filter(i => i.type === 'Узел').map(i => i.data.id);
+                                // «Только верхние»: потомки других выделенных едут внутри предков
+                                const topNodeIds = selNodeIds.filter(nid => !selNodeIds.some(other =>
+                                    other !== nid && H && H.hasAncestorIn && H.hasAncestorIn(nid, [other], nodes, layers)));
+                                const hasCross = topNodeIds.some(nid =>
+                                    H && H.getEntityLevel && H.getEntityLevel(nid, nodes, layers) !== layerLvl);
+                                // Разрыв связей хотя бы у одного из переносимых: спуск (отвязка детей)
+                                // или кросс-перенос узла, у которого есть родитель
+                                const tieBreakers = topNodeIds.filter(nid => {
+                                    if (!H || !H.canTransferToLayer) return false;
+                                    const v = H.canTransferToLayer(nid, l.id, nodes, layers);
+                                    if (v.reason === 'descend') {
+                                        return [...Object.values(nodes), ...Object.values(layers)].some(e => e && e.ownerId === nid);
+                                    }
+                                    const crossHere = H.getEntityLevel(nid, nodes, layers) !== layerLvl;
+                                    return crossHere && !!nodes[nid].ownerId;
+                                });
+                                const breaksTies = tieBreakers.length > 0;
+                                const warn = breaksTies
+                                    ? `⚠ Разорвёт родственные связи у ${tieBreakers.length} из ${topNodeIds.length} переносимых узлов. `
+                                    : '';
+                                // Межуровневый перенос доступен только в режиме Drag&Drop
+                                const dndLocked = hasCross && !(state.ui && state.ui.dragDropMode);
+                                return (
                                 <button
                                     key={l.id}
-                                    className="flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-xs text-gray-300 hover:bg-white/10 transition-colors"
-                                    onClick={() => handleMassLayerChange(l.id)}
+                                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-xs transition-colors ${
+                                        dndLocked
+                                            ? 'text-gray-600 opacity-50 cursor-not-allowed'
+                                            : `text-gray-300 hover:bg-white/10 ${breaksTies ? 'border border-red-500/70 hover:border-red-400' : ''}`
+                                    }`}
+                                    title={dndLocked
+                                        ? `Слой на Уровне ${layerLvl}. Включите режим Drag&Drop (кнопка в панели проекта), чтобы переносить между уровнями`
+                                        : (hasCross ? warn + `Слой уровня ${layerLvl}: узлы других уровней переедут на него (переносятся только верхние из выделения)` : (warn || undefined))}
+                                    onClick={() => { if (!dndLocked) handleMassLayerChange(l.id); }}
                                 >
                                     <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: l.color || '#0284c7' }}></div>
                                     <span className="truncate flex-1">{l.name || l.id}</span>
+                                    {hasCross && (
+                                        <span className="px-1 py-px rounded text-[9px] font-mono bg-sky-500/20 text-sky-300 border border-sky-500/40 shrink-0">L{layerLvl}</span>
+                                    )}
                                 </button>
-                            ))}
+                                );
+                            })}
                         </div>
                     )}
                 </div>
@@ -427,7 +825,406 @@ function ContextActionBar() {
     }
 
     // === 2. РЕЖИМ ЕДИНИЧНОГО ВЫДЕЛЕНИЯ ===
-    const id = selectedIds[0];
+    // Единичное выделение контейнера приводится к форме, которую понимают
+    // существующие ветки панели: 'project' и 'level-window-<номер>'. Так новая
+    // адресация (project:<id> / window:<id>) не потребовала переписывать их.
+    const normalizeSingleContainerId = (raw) => {
+        if (typeof raw !== 'string') return raw;
+        if (raw.startsWith('project:')) {
+            return raw.slice('project:'.length) === state.activeProjectId ? 'project' : raw;
+        }
+        if (raw.startsWith('window:')) {
+            const wid = raw.slice('window:'.length);
+            const win = (state.levelWindows || {})[wid];
+            return win ? `level-window-${win.levelIndex}` : raw;
+        }
+        return raw;
+    };
+    const id = normalizeSingleContainerId(selectedIds[0]);
+
+    // === 0. ВЫДЕЛЕНИЕ ПРОЕКТА (Project Header) ===
+    if (id === 'project') {
+        const projectName = state.projectName || 'Проект Архитектуры';
+        const projectColor = state.projectColor || '#0f172a';
+        const projectFontFamily = state.projectFontFamily || 'Inter, sans-serif';
+        const projectContent = state.projectContent || '';
+
+        const handleUpdateProject = (field, val, skipHistory = false) => {
+            dispatch({
+                type: 'UPDATE_PROJECT_PROPERTIES',
+                payload: { updates: { [field]: val }, skipHistory }
+            });
+        };
+
+        return (
+            <div ref={barRef} className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-[794px] z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl p-2.5 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-150">
+                {/* 1. Верхний ярус */}
+                <div className="flex items-center gap-2">
+                    <div 
+                        className="flex items-center justify-center gap-1.5 w-[110px] py-1 rounded-md text-xs font-semibold text-white border shrink-0 shadow-sm"
+                        style={{
+                            backgroundColor: projectColor || '#059669',
+                            borderColor: 'rgba(255,255,255,0.3)'
+                        }}
+                    >
+                        <div className="icon-globe text-xs"></div>
+                        <span>Проект</span>
+                    </div>
+                    <input
+                        type="text"
+                        className="flex-1 bg-transparent text-gray-100 font-semibold px-2 py-0.5 rounded border border-transparent hover:border-white/10 focus:border-[var(--accent-blue)] focus:bg-black/40 text-sm outline-none transition-all truncate"
+                        style={{ fontFamily: projectFontFamily }}
+                        value={projectName}
+                        onChange={(e) => handleUpdateProject('projectName', e.target.value, true)}
+                        onBlur={(e) => handleUpdateProject('projectName', e.target.value, false)}
+                        placeholder="Название проекта..."
+                    />
+                    <button
+                        className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+                        title="Снять выделение (Esc)"
+                        onClick={() => dispatch({ type: 'SET_SELECTED', payload: null })}
+                    >
+                        <div className="icon-x text-sm"></div>
+                    </button>
+                </div>
+
+                {/* 2. Средний ярус: Кнопки действий */}
+                <div className="flex items-center gap-1 relative border-t border-b border-white/10 py-1.5 px-0.5">
+                    {/* Цвет темы проекта */}
+                    <button
+                        className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
+                            activePopover === 'color' ? 'bg-white/20 text-white border-white/30' : 'text-gray-300 hover:text-white'
+                        }`}
+                        title="Цвет темы проекта"
+                        onClick={() => setActivePopover(activePopover === 'color' ? null : 'color')}
+                    >
+                        <div className="w-5 h-5 rounded-md border border-white/40 shadow-sm" style={{ backgroundColor: projectColor }}></div>
+                    </button>
+
+                    {/* Типографика проекта */}
+                    <button
+                        className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
+                            activePopover === 'typography' ? 'bg-white/20 text-white border-white/30' : 'text-gray-300 hover:text-white'
+                        }`}
+                        title={`Шрифт проекта: ${projectFontFamily}`}
+                        onClick={() => setActivePopover(activePopover === 'typography' ? null : 'typography')}
+                    >
+                        <div className="icon-type text-lg"></div>
+                    </button>
+
+                    {/* Выровнять окна уровней */}
+                    <button
+                        className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+                        title="Выровнять окна уровней вертикально"
+                        onClick={() => dispatch({ type: 'ALIGN_LEVEL_WINDOWS' })}
+                    >
+                        <div className="icon-layout-grid text-lg text-sky-400"></div>
+                    </button>
+
+                    {/* Импорт проекта: переехал из тулбара */}
+                    <button
+                        className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+                        title="Импорт проекта"
+                        onClick={() => projectFileInputRef.current?.click()}
+                    >
+                        <div className="icon-upload text-lg"></div>
+                    </button>
+                    <input
+                        type="file"
+                        ref={projectFileInputRef}
+                        className="hidden"
+                        accept=".json"
+                        onChange={handleImportProject}
+                    />
+
+                    {/* Экспорт проекта: переехал из тулбара */}
+                    <button
+                        className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+                        title="Экспорт проекта"
+                        onClick={handleExportProject}
+                    >
+                        <div className="icon-download text-lg"></div>
+                    </button>
+
+                    <div className="flex-1"></div>
+
+                    {/* Удалить проект: полностью, включая все уровни и плашку */}
+                    <button
+                        className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-red-400 hover:text-red-300 hover:bg-red-500/20 border-red-500/30 transition-colors"
+                        title="Удалить проект полностью: все уровни, их содержимое и плашка проекта"
+                        onClick={() => {
+                            if (window.confirm('Проект будет удалён ПОЛНОСТЬЮ — все уровни, их содержимое и плашка проекта. Действие нельзя отменить (Ctrl+Z не вернёт проект). Продолжить?')) {
+                                dispatch({ type: 'REMOVE_PROJECT', payload: { id: state.activeProjectId } });
+                            }
+                        }}
+                    >
+                        <div className="icon-trash text-lg"></div>
+                    </button>
+
+                    {/* Поповер цвета */}
+                    {activePopover === 'color' && (
+                        <ColorPickerPopover
+                            title="Цвет темы проекта"
+                            currentColor={projectColor}
+                            onColorChange={(c) => { handleUpdateProject('projectColor', c); }}
+                            leftClass="left-0"
+                        />
+                    )}
+
+                    {/* Поповер типографики */}
+                    {activePopover === 'typography' && (
+                        <TypographyPopover
+                            currentFont={projectFontFamily}
+                            currentSize={14}
+                            onFontChange={(f) => handleUpdateProject('projectFontFamily', f)}
+                            onSizeChange={() => {}}
+                            leftClass="left-10"
+                        />
+                    )}
+                </div>
+
+                {/* 3. Нижний ярус: Описание */}
+                <div className="flex flex-col gap-1 px-0.5">
+                    <ContextDescriptionInput 
+                        placeholder="Общее описание проекта или архитектуры..."
+                        value={projectContent}
+                        onChange={(e) => handleUpdateProject('projectContent', e.target.value)}
+                    />
+                </div>
+            </div>
+        );
+    }
+
+    // === 0.1 ВЫДЕЛЕНИЕ ОКНА УРОВНЯ (Level Window Header) ===
+    if (typeof id === 'string' && id.startsWith('level-window-')) {
+        const levelIndex = parseInt(id.replace('level-window-', ''), 10);
+        const win = (window.HierarchyUtils && window.HierarchyUtils.getWindowOfLevel(levelIndex, state.levelWindows)) || {
+            index: levelIndex,
+            name: levelIndex === 0 ? 'Главный холст' : `Уровень ${levelIndex}`,
+            color: '#1e293b',
+            content: '',
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 14
+        };
+
+        const handleUpdateLevelWin = (field, val, skipHistory = false) => {
+            dispatch({
+                type: 'UPDATE_LEVEL_PROPERTIES',
+                payload: { index: levelIndex, updates: { [field]: val }, skipHistory }
+            });
+        };
+
+        const isIsolated = state.levelHideNeighbors && state.levelHideNeighbors[levelIndex];
+
+        // Выравнивание слоёв: переехало из тулбара. Контекст (какая именно
+        // ветка уровня выравнивается) берём из того же резолвера, которым
+        // пользуются кнопки добавления в тулбаре — раз панель уровня открыта,
+        // selectedIds[0] === 'level-window-K', и getAddContext вернёт
+        // parentId нужной ветки этого уровня (или ok:false при нескольких
+        // ветках на уровне — тогда, как и у кнопок добавления, действие лучше
+        // не применять вслепую).
+        const H = window.HierarchyUtils;
+        const alignCtx = H ? H.getAddContext(state) : { ok: true, parentId: 'root' };
+        const alignContextId = alignCtx.parentId || 'root';
+        const layersInContext = Object.values(state.layers || {})
+            .filter(l => (l.parentId || 'root') === alignContextId).length;
+        const canAlignLayers = alignCtx.ok && layersInContext >= 2;
+
+        return (
+            <div ref={barRef} className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-[794px] z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl p-2.5 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-150">
+                {/* 1. Верхний ярус */}
+                <div className="flex items-center gap-2">
+                    <div
+                        className="flex items-center justify-center gap-1.5 w-[110px] py-1 rounded-md text-xs font-semibold shrink-0 border border-white/10 text-gray-100 shadow-sm"
+                        style={{ backgroundColor: win.color || '#191c23' }}
+                    >
+                        <div className="icon-folder text-xs"></div>
+                        <span>Уровень {levelIndex}</span>
+                    </div>
+                    <input
+                        type="text"
+                        className="flex-1 bg-transparent text-gray-100 font-semibold px-2 py-0.5 rounded border border-transparent hover:border-white/10 focus:border-[var(--accent-blue)] focus:bg-black/40 text-sm outline-none transition-all truncate"
+                        style={{ fontFamily: win.fontFamily || 'Inter, sans-serif' }}
+                        value={win.name || ''}
+                        onChange={(e) => handleUpdateLevelWin('name', e.target.value, true)}
+                        onBlur={(e) => handleUpdateLevelWin('name', e.target.value, false)}
+                        placeholder="Название уровня..."
+                    />
+                    <button
+                        className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+                        title="Снять выделение (Esc)"
+                        onClick={() => dispatch({ type: 'SET_SELECTED', payload: null })}
+                    >
+                        <div className="icon-x text-sm"></div>
+                    </button>
+                </div>
+
+                {/* 2. Средний ярус */}
+                <div className="flex items-center gap-1 relative border-t border-b border-white/10 py-1.5 px-0.5">
+                    {/* Цвет шапки и контура окна */}
+                    <button
+                        className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
+                            activePopover === 'color' ? 'bg-white/20 text-white border-white/30' : 'text-gray-300 hover:text-white'
+                        }`}
+                        title="Цвет шапки и контура окна"
+                        onClick={() => setActivePopover(activePopover === 'color' ? null : 'color')}
+                    >
+                        <div className="w-5 h-5 rounded-md border border-white/40 shadow-sm" style={{ backgroundColor: win.color || '#1e293b' }}></div>
+                    </button>
+
+                    {/* Типографика окна */}
+                    <button
+                        className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
+                            activePopover === 'typography' ? 'bg-white/20 text-white border-white/30' : 'text-gray-300 hover:text-white'
+                        }`}
+                        title={`Шрифт: ${win.fontFamily || 'Inter'} (${win.fontSize || 14}px)`}
+                        onClick={() => setActivePopover(activePopover === 'typography' ? null : 'typography')}
+                    >
+                        <div className="icon-type text-lg"></div>
+                    </button>
+
+                    {/* Тогл Глаз: Изоляция ветки */}
+                    <button
+                        className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
+                            isIsolated ? 'text-amber-400 bg-amber-500/20 border-amber-500/30' : 'text-gray-400 hover:text-white'
+                        }`}
+                        title={levelIndex === 0
+                            ? (isIsolated
+                                ? 'Глобальная изоляция включена: на всех уровнях видны только ветки выделенных родителей. Клик — показать всё'
+                                : 'Просветить ветки выделенных родителей на всех уровнях (скрыть остальные)')
+                            : (isIsolated
+                                ? 'Изоляция ветки включена (чужие ветки уровня скрыты). Клик — показать всех'
+                                : 'Показать только ветки выделенных узлов этого уровня')}
+                        onClick={() => dispatch({ type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { levelIndex } })}
+                    >
+                        <div className={`text-lg ${isIsolated ? 'icon-eye-off' : 'icon-eye'}`}></div>
+                    </button>
+
+                    {/* Тогл Свернуть/Развернуть окно */}
+                    <button
+                        className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
+                            win.isCollapsed ? 'text-sky-400 bg-sky-500/20' : 'text-gray-400 hover:text-white'
+                        }`}
+                        title={win.isCollapsed ? 'Развернуть окно' : 'Свернуть окно до шапки'}
+                        onClick={() => dispatch({ type: 'TOGGLE_LEVEL_COLLAPSE', payload: { index: levelIndex } })}
+                    >
+                        <div className={`text-lg ${win.isCollapsed ? 'icon-maximize' : 'icon-minimize'}`}></div>
+                    </button>
+
+                    {/* Выровнять слои уровня: переехало из тулбара */}
+                    {canAlignLayers && (
+                        <button
+                            className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-cyan-400 hover:text-cyan-300 hover:bg-white/5 transition-colors"
+                            title="Выровнять слои этого уровня"
+                            onClick={() => dispatch({
+                                type: 'ALIGN_LAYERS',
+                                payload: { contextId: alignContextId }
+                            })}
+                        >
+                            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M4 2v20" strokeDasharray="2 2" opacity="0.5" />
+                                <rect x="7" y="3" width="13" height="4" rx="1" fill="currentColor" fillOpacity="0.25" />
+                                <rect x="7" y="10" width="10" height="4" rx="1" fill="currentColor" fillOpacity="0.25" />
+                                <rect x="7" y="17" width="14" height="4" rx="1" fill="currentColor" fillOpacity="0.25" />
+                            </svg>
+                        </button>
+                    )}
+
+                    <div className="flex-1"></div>
+
+                    {/* Очистить уровень: удаляются только элементы САМОГО уровня.
+                        Потомки выживают: пере-якорятся на ближайшего живого предка
+                        («связь через поколение») или становятся сиротами со своими ветками. */}
+                    <button
+                        className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-amber-400 hover:text-amber-300 hover:bg-amber-500/20 border-amber-500/30 transition-colors"
+                        title={levelIndex === 0
+                            ? 'Очистить Главный холст: его элементы удалятся, потомки на Уровне 1 станут сиротами и сохранят свои ветки'
+                            : `Очистить Уровень ${levelIndex}: его элементы удалятся, потомки останутся на своих уровнях (связь через поколение)`}
+                        onClick={() => {
+                            const msg = levelIndex === 0
+                                ? 'Очистить Главный холст? Его элементы будут удалены, а их дети на Уровне 1 станут сиротами, сохранив свои ветки.'
+                                : `Очистить Уровень ${levelIndex}? Его элементы будут удалены, потомки останутся на своих уровнях и привяжутся к предкам через поколение. Окно уровня останется.`;
+                            if (window.confirm(msg)) {
+                                dispatch({ type: 'CLEAR_LEVEL_WINDOW', payload: { index: levelIndex } });
+                            }
+                        }}
+                    >
+                        <div className="icon-eraser text-lg"></div>
+                    </button>
+
+                    {/* Удалить уровень / Удалить холст */}
+                    {levelIndex > 0 ? (
+                        <button
+                            className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-red-400 hover:text-red-300 hover:bg-red-500/20 border-red-500/30 transition-colors"
+                            title={`Удалить Уровень ${levelIndex} (его элементы удалятся, потомки и уровни ниже поднимутся на один)`}
+                            onClick={() => {
+                                const msg = `Удалить Уровень ${levelIndex}? Его элементы будут удалены, а потомки и уровни ниже поднимутся на один (Уровень ${levelIndex + 1} станет Уровнем ${levelIndex}).`;
+                                if (window.confirm(msg)) {
+                                    dispatch({ type: 'REMOVE_LEVEL_WINDOW', payload: { index: levelIndex } });
+                                }
+                            }}
+                        >
+                            <div className="icon-trash text-lg"></div>
+                        </button>
+                    ) : (() => {
+                        // «Удалить холст»: без других уровней кнопка неактивна.
+                        // Подтверждения нет намеренно — операция откатывается Undo.
+                        const hasLowerLevels = Object.values(state.levelWindows || {}).some(w => w && w.levelIndex > 0);
+                        return (
+                            <button
+                                className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center border-red-500/30 transition-colors ${
+                                    hasLowerLevels
+                                        ? 'text-red-400 hover:text-red-300 hover:bg-red-500/20'
+                                        : 'text-gray-600 opacity-40 cursor-not-allowed'
+                                }`}
+                                disabled={!hasLowerLevels}
+                                title={hasLowerLevels
+                                    ? 'Удалить холст: Главный холст и его элементы удалятся, Уровень 1 станет Главным холстом (имя и цвет сохранятся), потомки поднимутся на уровень вверх. Отменяется через Undo (Ctrl+Z)'
+                                    : 'Удалить холст нельзя: других уровней нет'}
+                                onClick={() => {
+                                    if (!hasLowerLevels) return;
+                                    dispatch({ type: 'REMOVE_ROOT_CANVAS' });
+                                }}
+                            >
+                                <div className="icon-trash text-lg"></div>
+                            </button>
+                        );
+                    })()}
+
+                    {/* Поповер цвета окна */}
+                    {activePopover === 'color' && (
+                        <ColorPickerPopover
+                            title="Цвет шапки и контура"
+                            currentColor={win.color || '#1e293b'}
+                            onColorChange={(c) => { handleUpdateLevelWin('color', c); }}
+                            leftClass="left-0"
+                        />
+                    )}
+
+                    {/* Поповер типографики окна */}
+                    {activePopover === 'typography' && (
+                        <TypographyPopover
+                            currentFont={win.fontFamily}
+                            currentSize={win.fontSize}
+                            onFontChange={(f) => handleUpdateLevelWin('fontFamily', f)}
+                            onSizeChange={(s) => handleUpdateLevelWin('fontSize', s)}
+                            leftClass="left-10"
+                        />
+                    )}
+                </div>
+
+                {/* 3. Нижний ярус: Описание уровня */}
+                <div className="flex flex-col gap-1 px-0.5">
+                    <ContextDescriptionInput 
+                        placeholder="Скрытое описание назначения данного уровня..."
+                        value={win.content || ''}
+                        onChange={(e) => handleUpdateLevelWin('content', e.target.value)}
+                    />
+                </div>
+            </div>
+        );
+    }
+
     const selectedNode = nodes[id];
     const selectedLink = links ? links[id] : null;
     const selectedPort = ports[id];
@@ -464,20 +1261,23 @@ function ContextActionBar() {
         return (
             <div 
                 ref={barRef}
-                className="fixed top-16 left-1/2 -translate-x-1/2 z-40 max-w-[794px] w-[600px] max-w-[92vw] glass-panel rounded-2xl p-2.5 flex flex-col gap-2.5 shadow-2xl backdrop-blur-md bg-slate-900/90 border border-white/10 animate-in fade-in slide-in-from-top-2 duration-200"
+                className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-[794px] z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl p-2.5 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-150"
                 data-file="components/ContextActionBar.js"
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* 1. Верхний ярус: Бейдж типа + Инлайн Название (с выбранным шрифтом) + ID + Закрыть */}
                 <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-sky-500/20 text-sky-300 text-xs font-semibold shrink-0 border border-sky-500/30">
-                        <div className="icon-box text-sm"></div>
+                    <div
+                        className="flex items-center justify-center gap-1.5 w-[110px] py-1 rounded-md text-xs font-semibold shrink-0 border border-white/10 text-gray-100 shadow-sm"
+                        style={{ backgroundColor: selectedNode.color || '#191c23' }}
+                    >
+                        <div className="icon-box text-xs"></div>
                         <span>Узел</span>
                     </div>
 
                     <input 
                         type="text"
-                        className="input-field flex-1 h-8 text-sm font-medium px-2.5 bg-black/40 border-white/10 focus:border-[var(--accent-blue)] focus:bg-black/60 transition-all rounded-lg"
+                        className="flex-1 bg-transparent text-gray-100 font-semibold px-2 py-0.5 rounded border border-transparent hover:border-white/10 focus:border-[var(--accent-blue)] focus:bg-black/40 text-sm outline-none transition-all truncate"
                         style={{ fontFamily: selectedNode.fontFamily || 'inherit' }}
                         placeholder="Название узла..."
                         value={selectedNode.name || ''}
@@ -502,7 +1302,7 @@ function ContextActionBar() {
                 </div>
 
                 {/* 2. Средний ярус: Кнопки функций (40x40px) */}
-                <div className="flex items-center gap-1.5 relative">
+                <div className="flex items-center gap-1 relative border-t border-b border-white/10 py-1.5 px-0.5">
                     {/* Цвет */}
                     <button
                         className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
@@ -547,17 +1347,6 @@ function ContextActionBar() {
                         <div className="icon-layers text-lg"></div>
                     </button>
 
-                    {/* Группа */}
-                    <button
-                        className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
-                            activePopover === 'group' ? 'bg-white/20 text-white border-white/30' : (selectedNode.group ? 'text-amber-400' : 'text-gray-300 hover:text-white')
-                        }`}
-                        title="Группа / Классификация"
-                        onClick={() => setActivePopover(activePopover === 'group' ? null : 'group')}
-                    >
-                        <div className="icon-tag text-lg"></div>
-                    </button>
-
                     {/* Привязка к сетке */}
                     <button
                         className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
@@ -569,14 +1358,6 @@ function ContextActionBar() {
                         <div className="icon-layout-grid text-lg"></div>
                     </button>
 
-                    {/* Войти внутрь (Dive Into) */}
-                    <button
-                        className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 transition-colors"
-                        title="Войти внутрь узла (Dive In)"
-                        onClick={() => dispatch({ type: 'DIVE_INTO', payload: { id: selectedNode.id, name: selectedNode.name } })}
-                    >
-                        <div className="icon-folder-open text-lg"></div>
-                    </button>
 
                     {/* Значок / Эмодзи */}
                     <button
@@ -606,33 +1387,12 @@ function ContextActionBar() {
 
                     {/* Поповер: ЦВЕТ */}
                     {activePopover === 'color' && (
-                        <div className="absolute left-0 top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2.5">
-                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Цвет фона узла</div>
-                            <div className="grid grid-cols-7 gap-1.5">
-                                {COLOR_PRESETS.map((c) => (
-                                    <button
-                                        key={c}
-                                        className={`w-6 h-6 rounded-md border transition-all ${
-                                            (selectedNode.color || '#1a1a1a').toLowerCase() === c.toLowerCase()
-                                                ? 'border-white scale-110 shadow-md ring-2 ring-[var(--accent-blue)]'
-                                                : 'border-white/20 hover:scale-105 hover:border-white/60'
-                                        }`}
-                                        style={{ backgroundColor: c }}
-                                        onClick={() => handleUpdateField('color', c)}
-                                    />
-                                ))}
-                            </div>
-                            <div className="flex items-center gap-2 pt-1 border-t border-white/10">
-                                <span className="text-[11px] text-gray-400">Свой цвет:</span>
-                                <input
-                                    type="color"
-                                    className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0"
-                                    value={selectedNode.color || '#1a1a1a'}
-                                    onChange={(e) => handleUpdateField('color', e.target.value)}
-                                />
-                                <span className="text-[10px] font-mono text-gray-400 flex-1 truncate">{selectedNode.color || '#1a1a1a'}</span>
-                            </div>
-                        </div>
+                        <ColorPickerPopover
+                            title="Цвет фона узла"
+                            currentColor={selectedNode.color || '#1a1a1a'}
+                            onColorChange={(c) => handleUpdateField('color', c)}
+                            leftClass="left-0"
+                        />
                     )}
 
                     {/* Поповер: ТИПОГРАФИКА */}
@@ -698,80 +1458,82 @@ function ContextActionBar() {
                                 <div className="icon-home text-gray-400 text-xs"></div>
                                 <span className="truncate flex-1">Главный холст (Root)</span>
                             </button>
-                            {layers && Object.values(layers).map((l) => (
+                            {/* Слои своего уровня — обычная группировка (parentId).
+                                Слои ЧУЖИХ уровней помечены бейджем L№ и работают через
+                                TRANSFER_NODE: узел меняет уровень, его усыновляет ветка
+                                слоя, поддерево и связи переезжают автоматически. */}
+                            {layers && Object.values(layers).map((l) => {
+                                const H = window.HierarchyUtils;
+                                const layerLvl = (H && H.getEntityLevel) ? H.getEntityLevel(l.id, nodes, layers) : 0;
+                                const nodeLvl = (H && H.getEntityLevel) ? H.getEntityLevel(selectedNode.id, nodes, layers) : 0;
+                                const isCross = layerLvl !== nodeLvl;
+                                const verdict = (H && H.canTransferToLayer)
+                                    ? H.canTransferToLayer(selectedNode.id, l.id, nodes, layers)
+                                    : { ok: true };
+                                const blocked = !verdict.ok;
+                                const isDescend = verdict.reason === 'descend';
+                                // Разрыв родственных связей: спуск отвязывает прямых детей;
+                                // обычный кросс-перенос узла-ребёнка рвёт связь со старым родителем
+                                const childCount = isDescend
+                                    ? [...Object.values(nodes), ...Object.values(layers)].filter(e => e && e.ownerId === selectedNode.id).length
+                                    : 0;
+                                const parentName = (isCross && !isDescend && selectedNode.ownerId && nodes[selectedNode.ownerId])
+                                    ? (nodes[selectedNode.ownerId].name || selectedNode.ownerId) : null;
+                                const breaksTies = isDescend ? childCount > 0 : !!parentName;
+                                const warn = isDescend && childCount > 0
+                                    ? `⚠ Разорвёт родственные связи: отвяжет прямых детей (${childCount}) — они станут сиротами. `
+                                    : parentName ? `⚠ Разорвёт связь с родителем «${parentName}». ` : '';
+                                // Межуровневый перенос доступен только в режиме Drag&Drop
+                                const dndLocked = isCross && !(state.ui && state.ui.dragDropMode);
+                                return (
                                 <button
                                     key={l.id}
+                                    disabled={blocked || dndLocked}
                                     className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-xs transition-colors ${
-                                        selectedNode.parentId === l.id
-                                            ? 'bg-[var(--accent-blue)]/30 text-white font-medium border border-[var(--accent-blue)]/50'
-                                            : 'text-gray-300 hover:bg-white/10'
-                                    }`}
-                                    onClick={() => handleLayerChange(l.id)}
+                                        (blocked || dndLocked)
+                                            ? 'text-gray-600 opacity-50 cursor-not-allowed'
+                                            : selectedNode.parentId === l.id
+                                                ? 'bg-[var(--accent-blue)]/30 text-white font-medium border border-[var(--accent-blue)]/50'
+                                                : isCross ? 'text-gray-400 opacity-75 hover:opacity-100 hover:bg-white/10' : 'text-gray-300 hover:bg-white/10'
+                                    } ${breaksTies && !dndLocked ? 'border border-red-500/70 hover:border-red-400' : ''}`}
+                                    title={dndLocked
+                                        ? `Слой на Уровне ${layerLvl}. Включите режим Drag&Drop (кнопка в панели проекта), чтобы переносить между уровнями`
+                                        : isDescend
+                                            ? warn + 'Слой в собственной ветке: узел спустится к потомкам — станет сиротой-братом в этом слое, его прямые дети отвяжутся и останутся на своих местах (их поддеревья не изменятся)'
+                                            : (isCross ? warn + `Слой уровня ${layerLvl}: узел переедет на этот уровень (усыновит ветка слоя)` : undefined)}
+                                    onClick={() => {
+                                        if (blocked || dndLocked) return;
+                                        if (isCross) {
+                                            dispatch({ type: 'TRANSFER_NODE', payload: { id: selectedNode.id, targetLayerId: l.id } });
+                                            setActivePopover(null);
+                                        } else {
+                                            handleLayerChange(l.id);
+                                        }
+                                    }}
                                 >
                                     <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: l.color || '#0284c7' }}></div>
                                     <span className="truncate flex-1">{l.name || l.id}</span>
+                                    {isDescend ? (
+                                        <span className="px-1 py-px rounded text-[9px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">↓ ветка</span>
+                                    ) : isCross && (
+                                        <span className="px-1 py-px rounded text-[9px] font-mono bg-sky-500/20 text-sky-300 border border-sky-500/40 shrink-0">L{layerLvl}</span>
+                                    )}
                                 </button>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* Поповер: ГРУППА */}
-                    {activePopover === 'group' && (
-                        <div className="absolute left-36 top-12 w-60 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2">
-                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Группа узла</div>
-                            <input
-                                type="text"
-                                placeholder="Название группы..."
-                                className="input-field text-xs py-1"
-                                value={selectedNode.group || ''}
-                                onChange={(e) => handleUpdateField('group', e.target.value)}
-                            />
+                                );
+                            })}
                         </div>
                     )}
 
                     {/* Поповер: ЗНАЧОК / ЭМОДЗИ */}
                     {activePopover === 'icon' && (
-                        <div className="absolute left-48 top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2 max-h-64 overflow-y-auto custom-scrollbar">
-                            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Иконка Lucide</div>
-                            <div className="grid grid-cols-5 gap-1.5">
-                                {ICON_PRESETS.map((item) => (
-                                    <button
-                                        key={item.id}
-                                        className={`h-8 rounded border flex items-center justify-center transition-all ${
-                                            selectedNode.icon === item.id
-                                                ? 'bg-[var(--accent-blue)]/30 border-[var(--accent-blue)] text-white'
-                                                : 'bg-black/30 border-white/10 text-gray-300 hover:bg-white/10 hover:text-white'
-                                        }`}
-                                        title={item.label}
-                                        onClick={() => {
-                                            handleUpdateField('icon', item.id);
-                                            setActivePopover(null);
-                                        }}
-                                    >
-                                        {item.icon ? <div className={`${item.icon} text-sm`}></div> : <span className="text-[10px] text-gray-400">∅</span>}
-                                    </button>
-                                ))}
-                            </div>
-                            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider pt-1 border-t border-white/10">Эмодзи</div>
-                            <div className="grid grid-cols-5 gap-1.5">
-                                {EMOJI_PRESETS.map((emoji) => (
-                                    <button
-                                        key={emoji}
-                                        className={`h-8 rounded border flex items-center justify-center text-sm transition-all ${
-                                            selectedNode.icon === emoji
-                                                ? 'bg-[var(--accent-blue)]/30 border-[var(--accent-blue)] text-white'
-                                                : 'bg-black/30 border-white/10 hover:bg-white/10'
-                                        }`}
-                                        onClick={() => {
-                                            handleUpdateField('icon', emoji);
-                                            setActivePopover(null);
-                                        }}
-                                    >
-                                        {emoji}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
+                        <IconPickerPopover
+                            currentIcon={selectedNode.icon}
+                            onIconChange={(icon) => {
+                                handleUpdateField('icon', icon);
+                                setActivePopover(null);
+                            }}
+                            leftClass="left-48"
+                        />
                     )}
                 </div>
 
@@ -802,20 +1564,23 @@ function ContextActionBar() {
         return (
             <div 
                 ref={barRef}
-                className="fixed top-16 left-1/2 -translate-x-1/2 z-40 max-w-[794px] w-[560px] max-w-[92vw] glass-panel rounded-2xl p-2.5 flex flex-col gap-2.5 shadow-2xl backdrop-blur-md bg-slate-900/90 border border-white/10 animate-in fade-in slide-in-from-top-2 duration-200"
+                className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-[794px] z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl p-2.5 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-150"
                 data-file="components/ContextActionBar.js"
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* 1. Верхний ярус: Бейдж типа + Инлайн Название (с выбранным шрифтом) + ID + Закрыть */}
                 <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-500/20 text-amber-300 text-xs font-semibold shrink-0 border border-amber-500/30">
-                        <div className="icon-layers text-sm"></div>
+                    <div
+                        className="flex items-center justify-center gap-1.5 w-[110px] py-1 rounded-md text-xs font-semibold shrink-0 border border-white/10 text-gray-100 shadow-sm"
+                        style={{ backgroundColor: selectedLayer.color || '#191c23' }}
+                    >
+                        <div className="icon-layers text-xs"></div>
                         <span>Слой</span>
                     </div>
 
                     <input 
                         type="text"
-                        className="input-field flex-1 h-8 text-sm font-medium px-2.5 bg-black/40 border-white/10 focus:border-[var(--accent-blue)] focus:bg-black/60 transition-all rounded-lg"
+                        className="flex-1 bg-transparent text-gray-100 font-semibold px-2 py-0.5 rounded border border-transparent hover:border-white/10 focus:border-[var(--accent-blue)] focus:bg-black/40 text-sm outline-none transition-all truncate"
                         style={{ fontFamily: selectedLayer.fontFamily || 'inherit' }}
                         placeholder="Название слоя..."
                         value={selectedLayer.name || ''}
@@ -834,7 +1599,7 @@ function ContextActionBar() {
                 </div>
 
                 {/* 2. Средний ярус: Кнопки функций (40x40px) */}
-                <div className="flex items-center gap-1.5 relative">
+                <div className="flex items-center gap-1 relative border-t border-b border-white/10 py-1.5 px-0.5">
                     {/* Цвет слоя */}
                     <button
                         className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
@@ -901,29 +1666,12 @@ function ContextActionBar() {
 
                     {/* Поповер цвета слоя */}
                     {activePopover === 'color' && (
-                        <div className="absolute left-0 top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2.5">
-                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Цвет слоя</div>
-                            <div className="grid grid-cols-7 gap-1.5">
-                                {COLOR_PRESETS.map((c) => (
-                                    <button
-                                        key={c}
-                                        className="w-6 h-6 rounded-md border border-white/20 hover:scale-110 transition-all hover:border-white"
-                                        style={{ backgroundColor: c }}
-                                        onClick={() => { handleUpdateLayer('color', c); setActivePopover(null); }}
-                                    />
-                                ))}
-                            </div>
-                            <div className="flex items-center gap-2 pt-1 border-t border-white/10">
-                                <span className="text-[11px] text-gray-400">Свой цвет:</span>
-                                <input
-                                    type="color"
-                                    className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0"
-                                    value={selectedLayer.color || '#ff9500'}
-                                    onChange={(e) => handleUpdateLayer('color', e.target.value)}
-                                />
-                                <span className="text-[10px] font-mono text-gray-400 flex-1 truncate">{selectedLayer.color || '#ff9500'}</span>
-                            </div>
-                        </div>
+                        <ColorPickerPopover
+                            title="Цвет слоя"
+                            currentColor={selectedLayer.color || '#ff9500'}
+                            onColorChange={(c) => { handleUpdateLayer('color', c); }}
+                            leftClass="left-0"
+                        />
                     )}
 
                     {/* Поповер типографики слоя */}
@@ -966,20 +1714,23 @@ function ContextActionBar() {
         return (
             <div 
                 ref={barRef}
-                className="fixed top-16 left-1/2 -translate-x-1/2 z-40 max-w-[794px] w-[560px] max-w-[92vw] glass-panel rounded-2xl p-2.5 flex flex-col gap-2.5 shadow-2xl backdrop-blur-md bg-slate-900/90 border border-white/10 animate-in fade-in slide-in-from-top-2 duration-200"
+                className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-[794px] z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl p-2.5 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-150"
                 data-file="components/ContextActionBar.js"
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* 1. Верхний ярус: Бейдж типа + Инлайн Название (с выбранным шрифтом) + ID + Закрыть */}
                 <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-purple-500/20 text-purple-300 text-xs font-semibold shrink-0 border border-purple-500/30">
-                        <div className="icon-circle text-sm"></div>
+                    <div
+                        className="flex items-center justify-center gap-1.5 w-[110px] py-1 rounded-md text-xs font-semibold shrink-0 border border-white/10 text-gray-100 shadow-sm"
+                        style={{ backgroundColor: selectedPort.color || '#191c23' }}
+                    >
+                        <div className="icon-circle text-xs"></div>
                         <span>Порт</span>
                     </div>
 
                     <input 
                         type="text"
-                        className="input-field flex-1 h-8 text-sm font-medium px-2.5 bg-black/40 border-white/10 focus:border-[var(--accent-blue)] focus:bg-black/60 transition-all rounded-lg"
+                        className="flex-1 bg-transparent text-gray-100 font-semibold px-2 py-0.5 rounded border border-transparent hover:border-white/10 focus:border-[var(--accent-blue)] focus:bg-black/40 text-sm outline-none transition-all truncate"
                         style={{ fontFamily: selectedPort.fontFamily || 'inherit' }}
                         placeholder="Название порта..."
                         value={selectedPort.name || ''}
@@ -998,7 +1749,7 @@ function ContextActionBar() {
                 </div>
 
                 {/* 2. Средний ярус: Кнопки функций (40x40px) */}
-                <div className="flex items-center gap-1.5 relative">
+                <div className="flex items-center gap-1 relative border-t border-b border-white/10 py-1.5 px-0.5">
                     {/* Тогл типа порта (Input / Output) */}
                     <button
                         className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
@@ -1037,7 +1788,7 @@ function ContextActionBar() {
                         className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
                             activePopover === 'edge' ? 'bg-white/20 text-white border-white/30' : 'text-gray-300 hover:text-white'
                         }`}
-                        title={`Грань узла: ${selectedPort.edge || 'right'}`}
+                        title={`Грань: ${selectedPort.edge || 'right'}`}
                         onClick={() => setActivePopover(activePopover === 'edge' ? null : 'edge')}
                     >
                         <div className="icon-compass text-lg text-sky-400"></div>
@@ -1060,29 +1811,12 @@ function ContextActionBar() {
 
                     {/* Поповер цвета порта */}
                     {activePopover === 'color' && (
-                        <div className="absolute left-10 top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2.5">
-                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Цвет порта</div>
-                            <div className="grid grid-cols-7 gap-1.5">
-                                {COLOR_PRESETS.map((c) => (
-                                    <button
-                                        key={c}
-                                        className="w-6 h-6 rounded-md border border-white/20 hover:scale-110 transition-all hover:border-white"
-                                        style={{ backgroundColor: c }}
-                                        onClick={() => { handleUpdatePort('color', c); setActivePopover(null); }}
-                                    />
-                                ))}
-                            </div>
-                            <div className="flex items-center gap-2 pt-1 border-t border-white/10">
-                                <span className="text-[11px] text-gray-400">Свой цвет:</span>
-                                <input
-                                    type="color"
-                                    className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0"
-                                    value={selectedPort.color || '#3b82f6'}
-                                    onChange={(e) => handleUpdatePort('color', e.target.value)}
-                                />
-                                <span className="text-[10px] font-mono text-gray-400 flex-1 truncate">{selectedPort.color || '#3b82f6'}</span>
-                            </div>
-                        </div>
+                        <ColorPickerPopover
+                            title="Цвет порта"
+                            currentColor={selectedPort.color || '#3b82f6'}
+                            onColorChange={(c) => { handleUpdatePort('color', c); }}
+                            leftClass="left-10"
+                        />
                     )}
 
                     {/* Поповер типографики порта */}
@@ -1099,7 +1833,7 @@ function ContextActionBar() {
                     {/* Поповер грани (Edge) */}
                     {activePopover === 'edge' && (
                         <div className="absolute left-28 top-12 w-48 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-2 shadow-2xl z-50 flex flex-col gap-1">
-                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider px-1 mb-1">Грань узла</div>
+                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider px-1 mb-1">Грань привязки</div>
                             {EDGE_OPTIONS.map(edge => (
                                 <button
                                     key={edge.id}
@@ -1141,20 +1875,23 @@ function ContextActionBar() {
         return (
             <div 
                 ref={barRef}
-                className="fixed top-16 left-1/2 -translate-x-1/2 z-40 max-w-[794px] w-[560px] max-w-[92vw] glass-panel rounded-2xl p-2.5 flex flex-col gap-2.5 shadow-2xl backdrop-blur-md bg-slate-900/90 border border-white/10 animate-in fade-in slide-in-from-top-2 duration-200"
+                className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-[794px] z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl p-2.5 flex flex-col gap-2 animate-in fade-in zoom-in-95 duration-150"
                 data-file="components/ContextActionBar.js"
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* 1. Верхний ярус: Бейдж типа + Инлайн Название (с выбранным шрифтом) + ID + Закрыть */}
                 <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/20 text-emerald-300 text-xs font-semibold shrink-0 border border-emerald-500/30">
-                        <div className="icon-git-commit text-sm"></div>
+                    <div
+                        className="flex items-center justify-center gap-1.5 w-[110px] py-1 rounded-md text-xs font-semibold shrink-0 border border-white/10 text-gray-100 shadow-sm"
+                        style={{ backgroundColor: selectedLink.color || '#191c23' }}
+                    >
+                        <div className="icon-spline text-xs"></div>
                         <span>Связь</span>
                     </div>
 
                     <input 
                         type="text"
-                        className="input-field flex-1 h-8 text-sm font-medium px-2.5 bg-black/40 border-white/10 focus:border-[var(--accent-blue)] focus:bg-black/60 transition-all rounded-lg"
+                        className="flex-1 bg-transparent text-gray-100 font-semibold px-2 py-0.5 rounded border border-transparent hover:border-white/10 focus:border-[var(--accent-blue)] focus:bg-black/40 text-sm outline-none transition-all truncate"
                         style={{ fontFamily: selectedLink.fontFamily || 'inherit' }}
                         placeholder="Название связи..."
                         value={selectedLink.name || ''}
@@ -1173,7 +1910,7 @@ function ContextActionBar() {
                 </div>
 
                 {/* 2. Средний ярус: Кнопки функций (40x40px) */}
-                <div className="flex items-center gap-1.5 relative">
+                <div className="flex items-center gap-1 relative border-t border-b border-white/10 py-1.5 px-0.5">
                     {/* Стиль линии */}
                     <button
                         className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-gray-300 hover:text-white transition-colors"
@@ -1234,29 +1971,12 @@ function ContextActionBar() {
 
                     {/* Поповер цвета связи */}
                     {activePopover === 'color' && (
-                        <div className="absolute left-10 top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2.5">
-                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Цвет линии связи</div>
-                            <div className="grid grid-cols-7 gap-1.5">
-                                {COLOR_PRESETS.map((c) => (
-                                    <button
-                                        key={c}
-                                        className="w-6 h-6 rounded-md border border-white/20 hover:scale-110 transition-all hover:border-white"
-                                        style={{ backgroundColor: c }}
-                                        onClick={() => { handleUpdateLink('color', c); setActivePopover(null); }}
-                                    />
-                                ))}
-                            </div>
-                            <div className="flex items-center gap-2 pt-1 border-t border-white/10">
-                                <span className="text-[11px] text-gray-400">Свой цвет:</span>
-                                <input
-                                    type="color"
-                                    className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0"
-                                    value={selectedLink.color || '#3b82f6'}
-                                    onChange={(e) => handleUpdateLink('color', e.target.value)}
-                                />
-                                <span className="text-[10px] font-mono text-gray-400 flex-1 truncate">{selectedLink.color || '#3b82f6'}</span>
-                            </div>
-                        </div>
+                        <ColorPickerPopover
+                            title="Цвет линии связи"
+                            currentColor={selectedLink.color || '#3b82f6'}
+                            onColorChange={(c) => { handleUpdateLink('color', c); }}
+                            leftClass="left-10"
+                        />
                     )}
 
                     {/* Поповер типографики связи */}

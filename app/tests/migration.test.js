@@ -25,13 +25,14 @@ test('migrateToV10: дети получают координаты относи�
     assert.deepEqual(m.nodes.root1.position, { x: -50, y: -20 });
     assert.deepEqual(m.nodes.inLayer.position, { x: 40, y: 90 });   // 1040-1000, 590-500
     assert.deepEqual(m.nodes.child.position, { x: 60, y: 110 });    // 1100-1040, 700-590
-    assert.equal(m.formatVersion, FORMAT_VERSION);
+    // migrateToV10 доводит проект именно до v10; до v11 его поднимает migrateToV11
+    assert.equal(m.formatVersion, 10);
 });
 
 test('migrateToV10: абсолютные позиции после миграции совпадают с исходными мировыми', () => {
     const m = migrateToV10(v9project());
-    assert.deepEqual(H.getAbsolutePosition('child', m.nodes, m.layers), { x: 1100, y: 700 });
-    assert.deepEqual(H.getAbsolutePosition('inLayer', m.nodes, m.layers), { x: 1040, y: 590 });
+    assert.deepEqual(H.getRawChainSum('child', m.nodes, m.layers), { x: 1100, y: 700 });
+    assert.deepEqual(H.getRawChainSum('inLayer', m.nodes, m.layers), { x: 1040, y: 590 });
 });
 
 test('migrateToV10: идемпотентность по formatVersion', () => {
@@ -75,14 +76,20 @@ test('LOAD_STATE: конвертирует массив связей links в с
     assert.deepEqual(s1.links['link-2'].name, 'Link 2');
 });
 
-test('REPARENT_ENTITY: абсолютная позиция сохраняется', () => {
-    const m = migrateToV10(v9project());
-    const s0 = { ...defaultState, nodes: m.nodes, layers: m.layers };
-    const absBefore = H.getAbsolutePosition('child', s0.nodes, s0.layers);
+test('REPARENT_ENTITY: локальная позиция на уровне сохраняется при выносе из слоя', () => {
+    // Модель v11: контейнером может быть только слой или root, поэтому перевложение
+    // проверяется в пределах одного уровня — позиция в системе координат уровня не меняется.
+    const s0 = {
+        ...defaultState,
+        layers: { L: { id: 'L', name: 'L', parentId: 'root', ownerId: null, position: { x: 1000, y: 500 }, size: { w: 600, h: 400 } } },
+        nodes: { inLayer: { id: 'inLayer', name: 'IL', parentId: 'L', ownerId: null, position: { x: 40, y: 90 }, size: { w: 200, h: 100 } } }
+    };
+    const before = H.getLocalPosition('inLayer', s0.nodes, s0.layers);
+    assert.deepEqual(before, { x: 1040, y: 590 });
 
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'child', newParentId: 'root' } });
-    assert.equal(s1.nodes.child.parentId, 'root');
-    assert.deepEqual(H.getAbsolutePosition('child', s1.nodes, s1.layers), absBefore);
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'inLayer', newParentId: 'root' } });
+    assert.equal(s1.nodes.inLayer.parentId, 'root');
+    assert.deepEqual(H.getLocalPosition('inLayer', s1.nodes, s1.layers), before);
 });
 
 test('REPARENT_ENTITY: цикл отклоняется', () => {
@@ -100,34 +107,34 @@ test('MOVE_SELECTED: потомок выделенного предка не д�
     assert.deepEqual(s1.nodes.inLayer.position, { x: 50, y: 110 });
     // child остался на месте относительно родителя, мир сдвинулся на 10/20 один раз
     assert.deepEqual(s1.nodes.child.position, { x: 60, y: 110 });
-    assert.deepEqual(H.getAbsolutePosition('child', s1.nodes, s1.layers), { x: 1110, y: 720 });
+    assert.deepEqual(H.getRawChainSum('child', s1.nodes, s1.layers), { x: 1110, y: 720 });
 });
 
 test('REMOVE_LAYER: дети слоя сохраняют абсолютные позиции', () => {
     const m = migrateToV10(v9project());
     const s0 = { ...defaultState, nodes: m.nodes, layers: m.layers };
-    const absBefore = H.getAbsolutePosition('inLayer', s0.nodes, s0.layers);
+    const absBefore = H.getRawChainSum('inLayer', s0.nodes, s0.layers);
 
     const s1 = reducer(s0, { type: 'REMOVE_LAYER', payload: 'L' });
     assert.equal(s1.nodes.inLayer.parentId, 'root');
-    assert.deepEqual(H.getAbsolutePosition('inLayer', s1.nodes, s1.layers), absBefore);
+    assert.deepEqual(H.getRawChainSum('inLayer', s1.nodes, s1.layers), absBefore);
 });
 
 test('DELETE_SELECTED: удаление слоя не смещает его детей в мире', () => {
     const m = migrateToV10(v9project());
     const s0 = { ...defaultState, nodes: m.nodes, layers: m.layers, selectedIds: ['L'] };
-    const absBefore = H.getAbsolutePosition('inLayer', s0.nodes, s0.layers);
+    const absBefore = H.getRawChainSum('inLayer', s0.nodes, s0.layers);
 
     const s1 = reducer(s0, { type: 'DELETE_SELECTED' });
     assert.equal(s1.layers.L, undefined);
-    assert.deepEqual(H.getAbsolutePosition('inLayer', s1.nodes, s1.layers), absBefore);
+    assert.deepEqual(H.getRawChainSum('inLayer', s1.nodes, s1.layers), absBefore);
 });
 
-test('getAbsolutePosition: цикл parentId не зацикливает', () => {
+test('getRawChainSum: цикл parentId не зацикливает', () => {
     const nodes = {
         a: { id: 'a', position: { x: 1, y: 1 }, parentId: 'b' },
         b: { id: 'b', position: { x: 2, y: 2 }, parentId: 'a' }
     };
-    const p = H.getAbsolutePosition('a', nodes, {});
+    const p = H.getRawChainSum('a', nodes, {});
     assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y));
 });
