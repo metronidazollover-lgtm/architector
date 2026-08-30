@@ -553,6 +553,41 @@ const HierarchyUtils = {
     },
 
     /**
+     * Проходит ли цепочка КООРДИНАТНЫХ КОНТЕЙНЕРОВ сущности (только `parentId`,
+     * через слои) через хотя бы один id из набора. В отличие от `hasAncestorIn`,
+     * НЕ поднимается по `ownerId` — межуровневое родство (владение) для этой
+     * проверки не считается «содержанием» (Plan_fix.md: баг — при перетаскивании
+     * узла его ownerId-потомок на другом уровне ошибочно материализовался в
+     * нескливаемом drag-оверлее `Canvas.js`, потому что `hasAncestorIn` посчитал
+     * его «предком через `ancestorIds`» и по ownerId-цепочке тоже).
+     * Использовать там, где важно только фактическое визуальное вложение через
+     * `parentId` (drag-оверлей, «не двигать дважды» при групповом перетаскивании) —
+     * НЕ для фильтрации «только верхних» при массовом переносе/выделении, где
+     * ownerId-родство обязано учитываться (там по-прежнему `hasAncestorIn`).
+     * @param {string} id
+     * @param {string|Array<string>} containerIds
+     * @param {Object<string, NodeEntity>} nodes
+     * @param {?Object<string, LayerEntity>} [layers]
+     * @returns {boolean}
+     */
+    hasContainerAncestorIn: (id, containerIds, nodes, layers = null) => {
+        const set = HierarchyUtils.toFocusList(containerIds);
+        if (set.length === 0) return false;
+        const safeNodes = nodes || {};
+        const safeLayers = layers || {};
+        let current = safeNodes[id] || safeLayers[id];
+        const visited = new Set();
+        while (current && current.parentId && current.parentId !== 'root' && !visited.has(current.parentId)) {
+            if (set.includes(current.parentId)) return true;
+            visited.add(current.parentId);
+            // safeNodes тоже проверяем: легаси-проекты (миграция v9→v10, до появления
+            // ownerId) могут иметь parentId, указывающий на узел, а не только на слой.
+            current = safeNodes[current.parentId] || safeLayers[current.parentId] || null;
+        }
+        return false;
+    },
+
+    /**
      * Можно ли перенести узел ИЛИ слой в этот слой (для UI и валидации).
      *
      * Перенос невозможен, когда целевой слой находится в ветке САМОЙ переносимой

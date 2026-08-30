@@ -666,3 +666,46 @@ test('getDropTarget: одиночный слой на СВОЁ окно уров
     assert.equal(own.id, 'lvlwin-root');
     assert.equal(own.isMove, true);
 });
+
+test('hasContainerAncestorIn: узел внутри слоя-контейнера — true', () => {
+    const nodes = {
+        N: { id: 'N', name: 'N', parentId: 'L' }
+    };
+    const layers = {
+        L: { id: 'L', name: 'L', parentId: 'root' }
+    };
+    assert.equal(HierarchyUtils.hasContainerAncestorIn('N', ['L'], nodes, layers), true);
+});
+
+test('hasContainerAncestorIn: узел внутри ВЛОЖЕННОГО подслоя — true (поднимается через цепочку слоёв)', () => {
+    const nodes = {
+        N: { id: 'N', name: 'N', parentId: 'Sub' }
+    };
+    const layers = {
+        Sub: { id: 'Sub', name: 'Sub', parentId: 'Top' },
+        Top: { id: 'Top', name: 'Top', parentId: 'root' }
+    };
+    assert.equal(HierarchyUtils.hasContainerAncestorIn('N', ['Top'], nodes, layers), true, 'поднимается сквозь вложенные слои');
+});
+
+test('hasContainerAncestorIn: МЕЖУРОВНЕВЫЙ потомок по владению (ownerId), НЕ parentId — false (регресс на Plan_fix.md)', () => {
+    // A1 — настоящий ownerId-потомок A на другом уровне, но координатно (parentId)
+    // лежит на своём холсте (root), а не внутри A. hasAncestorIn считал бы это
+    // «предком через набор» (поднимается и по ownerId) — hasContainerAncestorIn обязан
+    // вернуть false: A1 визуально никак не связан с перетаскиванием A.
+    const nodes = {
+        A: { id: 'A', name: 'A', parentId: 'root' },
+        A1: { id: 'A1', name: 'A1', parentId: 'root', ownerId: 'A' }
+    };
+    const layers = {};
+    assert.equal(HierarchyUtils.hasAncestorIn('A1', ['A'], nodes, layers), true, 'общая hasAncestorIn (для сравнения) считает потомком по ownerId');
+    assert.equal(HierarchyUtils.hasContainerAncestorIn('A1', ['A'], nodes, layers), false, 'hasContainerAncestorIn игнорирует ownerId — это и есть фикс бага');
+});
+
+test('hasContainerAncestorIn: защита от циклических parentId', () => {
+    const layers = {
+        L1: { id: 'L1', name: 'L1', parentId: 'L2' },
+        L2: { id: 'L2', name: 'L2', parentId: 'L1' }
+    };
+    assert.equal(HierarchyUtils.hasContainerAncestorIn('L1', ['X'], {}, layers), false, 'не зацикливается, корректно возвращает false для отсутствующей цели');
+});

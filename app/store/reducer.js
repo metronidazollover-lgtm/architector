@@ -2027,17 +2027,15 @@ const reducer = (state, action) => {
             const newNodes = { ...state.nodes };
             const newLayers = { ...state.layers };
 
-            const selectedSet = new Set(state.selectedIds);
-            const hasSelectedAncestor = (id) => {
-                let current = state.nodes[id] || (state.layers && state.layers[id]);
-                const visited = new Set();
-                while (current && current.parentId && current.parentId !== 'root' && !visited.has(current.parentId)) {
-                    if (selectedSet.has(current.parentId)) return true;
-                    visited.add(current.parentId);
-                    current = state.nodes[current.parentId] || (state.layers && state.layers[current.parentId]) || null;
-                }
-                return false;
-            };
+            const H = getHierarchy();
+            // Только координатное вложение (parentId) — не ownerId: уже двигавшийся
+            // вместе с выделенным контейнером не должен получить позицию дважды.
+            // Общий HierarchyUtils.hasContainerAncestorIn (Plan_fix.md). ⚠️ Передаём
+            // state.selectedIds МАССИВОМ, не Set — toFocusList не разворачивает Set
+            // (Array.isArray(Set) === false), с ним проверка молча всегда была бы false.
+            const hasSelectedAncestor = (id) => H && H.hasContainerAncestorIn
+                ? H.hasContainerAncestorIn(id, state.selectedIds, state.nodes, state.layers)
+                : false;
 
             const movedIds = state.selectedIds.filter(id =>
                 (state.nodes[id] || (state.layers && state.layers[id])) && !hasSelectedAncestor(id));
@@ -2048,7 +2046,6 @@ const reducer = (state, action) => {
             // Элементы внутри слоёв двигаются в координатах слоя — их не клампим.
             let cdx = dx;
             let cdy = dy;
-            const H = getHierarchy();
             if (!(state.ui && state.ui.dragDropMode) && H) {
                 const { headerH, borderW } = H.LEVEL_WINDOW_METRICS;
                 let loX = -Infinity, hiX = Infinity, loY = -Infinity, hiY = Infinity;

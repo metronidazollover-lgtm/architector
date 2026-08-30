@@ -254,17 +254,12 @@ function Layer(props) {
                 resolvedDy = resolved.y - initialPositions[data.id].y;
             }
 
-            const selectedSet = new Set(allIdsToMove);
-            const hasSelectedAncestor = (id) => {
-                let current = (state.nodes && state.nodes[id]) || (state.layers && state.layers[id]);
-                const visited = new Set();
-                while (current && current.parentId && current.parentId !== 'root' && !visited.has(current.parentId)) {
-                    if (selectedSet.has(current.parentId)) return true;
-                    visited.add(current.parentId);
-                    current = (state.nodes && state.nodes[current.parentId]) || (state.layers && state.layers[current.parentId]) || null;
-                }
-                return false;
-            };
+            // Только координатное вложение (parentId) — не ownerId (Plan_fix.md):
+            // общий HierarchyUtils.hasContainerAncestorIn вместо локальной копии.
+            // ⚠️ allIdsToMove — массив, не Set (toFocusList не разворачивает Set).
+            const hasSelectedAncestor = (id) => H && H.hasContainerAncestorIn
+                ? H.hasContainerAncestorIn(id, allIdsToMove, state.nodes, state.layers)
+                : false;
 
             allIdsToMove.forEach(id => {
                 if (initialPositions[id]) {

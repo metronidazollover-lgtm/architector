@@ -765,15 +765,20 @@ function Canvas() {
                     // рендериться исключительно «под» границей своего исходного окна и пропадает
                     // из виду в момент, когда слой визуально пересекает эту границу (баг: узел,
                     // назначенный на перетаскиваемый слой, исчезал на время пересечения).
+                    // ⚠️ Именно `hasContainerAncestorIn` (только parentId), НЕ `hasAncestorIn`:
+                    // та поднимается и по ownerId — при перетаскивании обычного узла его
+                    // настоящий ownerId-потомок на ДРУГОМ уровне ошибочно тоже подхватывался
+                    // сюда и материализовался в этом нескливаемом оверлее вне своей рамки
+                    // (Plan_fix.md), хотя визуально с перетаскиваемым узлом никак не связан.
                     const expandedDragIds = (() => {
                         const seeds = state.dragGesture.ids;
                         const keep = new Set(seeds);
-                        if (H.hasAncestorIn) {
+                        if (H.hasContainerAncestorIn) {
                             Object.keys(dragProjectView.nodes || {}).forEach(nid => {
-                                if (!keep.has(nid) && H.hasAncestorIn(nid, seeds, dragProjectView.nodes, dragProjectView.layers)) keep.add(nid);
+                                if (!keep.has(nid) && H.hasContainerAncestorIn(nid, seeds, dragProjectView.nodes, dragProjectView.layers)) keep.add(nid);
                             });
                             Object.keys(dragProjectView.layers || {}).forEach(lid => {
-                                if (!keep.has(lid) && H.hasAncestorIn(lid, seeds, dragProjectView.nodes, dragProjectView.layers)) keep.add(lid);
+                                if (!keep.has(lid) && H.hasContainerAncestorIn(lid, seeds, dragProjectView.nodes, dragProjectView.layers)) keep.add(lid);
                             });
                         }
                         return Array.from(keep);
