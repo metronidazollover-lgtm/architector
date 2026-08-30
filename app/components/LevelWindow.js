@@ -544,10 +544,11 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                 {/* Левая часть: Иконка, Мастер-порт и Название */}
                 <div className="flex items-center gap-2 min-w-0">
                     <div 
-                        className="flex items-center justify-center w-6 h-6 rounded-lg bg-black/40 text-white font-mono text-[11px] font-bold border border-white/20 shrink-0"
+                        className="flex items-center justify-center min-w-6 h-6 px-1.5 rounded-lg bg-black/40 text-white font-mono text-[11px] font-bold border border-white/20 shrink-0 gap-1"
                         title={`Уровень ${index}`}
                     >
-                        {index === 0 ? '🌐' : `L${index}`}
+                        <div className="icon-folder text-xs text-sky-400"></div>
+                        <span>{index}</span>
                     </div>
 
                     {/* Мастер-порт шапки уровня */}
@@ -622,7 +623,7 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                         className="text-sm font-semibold text-white truncate max-w-[260px]"
                         style={{ fontFamily: fontFamily || 'Inter, sans-serif' }}
                     >
-                        {name || (index === 0 ? 'Главный холст' : `Уровень ${index}`)}
+                        {name || 'New level'}
                     </span>
 
                     {/* Бейдж связей в свернутом режиме */}
@@ -726,25 +727,29 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                     {/* Закрыть / Удалить окно */}
                     <button
                         className="w-7 h-7 rounded-lg flex items-center justify-center text-red-400 hover:text-red-200 hover:bg-red-500/30 transition-all"
-                        title={index === 0
-                            ? 'Очистить Главный холст (дети на Уровне 1 станут сиротами и сохранят свои ветки; удаление холста — в панели свойств)'
-                            : `Удалить Уровень ${index}`}
+                        title={index === 0 ? 'Удалить Главный холст' : `Удалить Уровень ${index}`}
                         onClick={(e) => {
                             e.stopPropagation();
-                            if (projectId && s && projectId !== s.activeProjectId) {
-                                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
+                            const curProjectId = projectId || (s && s.activeProjectId);
+                            if (curProjectId && s && curProjectId !== s.activeProjectId) {
+                                dispatch({ type: 'SET_ACTIVE_PROJECT', payload: curProjectId });
                             }
-                            // Крестик Главного холста — очистка. Удаление холста
-                            // (с повышением Уровня 1) — кнопка в панели свойств.
-                            if (index === 0) {
-                                if (window.confirm('Очистить Главный холст? Его элементы будут удалены, а их дети на Уровне 1 станут сиротами, сохранив свои ветки.')) {
-                                    dispatch({ type: 'CLEAR_LEVEL_WINDOW', payload: { id: windowData.id, windowId: windowData.id, index: 0 } });
+                            const allWindows = Object.values(state.levelWindows || {}).filter(Boolean);
+                            const hasOtherLevels = allWindows.some(w => w.id !== windowData.id);
+                            if (!hasOtherLevels) {
+                                if (window.confirm('Это единственное окно проекта. Проект будет удален. Продолжить?')) {
+                                    dispatch({ type: 'REMOVE_PROJECT', payload: { id: curProjectId } });
                                 }
                                 return;
                             }
-                            const msg = `Удалить Уровень ${index}? Его элементы будут удалены, а потомки и уровни ниже поднимутся на один (Уровень ${index + 1} станет Уровнем ${index}).`;
+                            const msg = index === 0
+                                ? 'Удалить Главный холст? Его элементы будут удалены, а Уровень 1 станет Главным холстом.'
+                                : `Удалить Уровень ${index}? Его элементы будут удалены, а потомки и уровни ниже поднимутся на один (Уровень ${index + 1} станет Уровнем ${index}).`;
                             if (window.confirm(msg)) {
-                                dispatch({ type: 'REMOVE_LEVEL_WINDOW', payload: { id: windowData.id, windowId: windowData.id, index } });
+                                dispatch({
+                                    type: index === 0 ? 'REMOVE_ROOT_CANVAS' : 'REMOVE_LEVEL_WINDOW',
+                                    payload: { id: windowData.id, windowId: windowData.id, index }
+                                });
                             }
                         }}
                     >

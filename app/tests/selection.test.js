@@ -109,7 +109,7 @@ test('массовое удаление окон: сверху вниз, оди�
     assert.deepEqual(m.selectedIds, [], 'выделение сброшено');
 });
 
-test('массовое удаление: Главный холст клавишей не удаляется', () => {
+test('массовое удаление: Главный холст и уровень удаляются клавишей Delete', () => {
     let m = makeMulti(3);
     const pid = m.activeProjectId;
     const wins = Object.values(m.projects[pid].levelWindows);
@@ -120,8 +120,8 @@ test('массовое удаление: Главный холст клавиш�
     m = multiReducer(m, { type: 'DELETE_SELECTED' });
 
     const levels = Object.values(m.projects[pid].levelWindows).map(w => w.levelIndex).sort();
-    assert.ok(levels.includes(0), 'Главный холст на месте');
-    assert.equal(levels.length, 2, 'удалён только выбранный уровень 2');
+    assert.ok(levels.includes(0), 'Уровень 1 стал Главным холстом (индекс 0)');
+    assert.equal(levels.length, 1, 'удалены уровень 0 и уровень 2, остался бывший уровень 1');
 });
 
 test('массовое удаление проектов: удаляются целиком, изоляция чистится', () => {

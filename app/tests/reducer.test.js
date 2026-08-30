@@ -746,10 +746,11 @@ test('REMOVE_LEVEL_WINDOW: словарь окон ключуется id — р�
     assert.equal(s1.levelWindows['win1'], undefined, 'окно уровня 1 удалено');
 });
 
-test('REMOVE_LEVEL_WINDOW: уровень 0 (Главный холст) удалить нельзя', () => {
+test('REMOVE_LEVEL_WINDOW: уровень 0 (Главный холст) удаляется, уровень 1 становится Главным холстом', () => {
     const s0 = makeLeveledState();
     const s1 = reducer(s0, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 0 } });
-    assert.equal(s1, s0, 'удаление Главного холста — no-op');
+    assert.equal(s1.levelWindows['lvlwin-root'], undefined, 'Главный холст удалён');
+    assert.equal(s1.levelWindows['win1'].levelIndex, 0, 'уровень 1 стал Главным холстом');
 });
 
 test('REMOVE_LEVEL_WINDOW: следующий уровень становится предыдущим с сохранением рамки и камеры', () => {
@@ -1017,7 +1018,7 @@ test('CREATE_NESTED_NODE: новое окно уровня получает за
     assert.ok(s.levelViews[win1.id], 'камера нового окна сохранена в levelViews');
 });
 
-test('DELETE_SELECTED: клавиша Delete удаляет выделенное окно уровня (кроме Главного холста)', () => {
+test('DELETE_SELECTED: клавиша Delete удаляет выделенное окно уровня (включая Главный холст)', () => {
     const s0 = makeLeveledState();
     s0.selectedIds = ['level-window-1'];
     const s1 = reducer(s0, { type: 'DELETE_SELECTED' });
@@ -1028,7 +1029,8 @@ test('DELETE_SELECTED: клавиша Delete удаляет выделенное
     const s2 = makeLeveledState();
     s2.selectedIds = ['level-window-0'];
     const s3 = reducer(s2, { type: 'DELETE_SELECTED' });
-    assert.equal(s3, s2, 'Главный холст по Delete не удаляется (no-op)');
+    assert.equal(s3.levelWindows['lvlwin-root'], undefined, 'Главный холст удалён');
+    assert.equal(s3.levelWindows['win1'].levelIndex, 0, 'уровень 1 стал Главным холстом');
 });
 
 test('SET_LEVEL_FOCUS: клик в окно уровня делает его активным для создания элементов', () => {

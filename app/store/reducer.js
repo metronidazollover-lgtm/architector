@@ -166,7 +166,7 @@ const LEVEL_WINDOW_GAP = 80;
 const makeLevelWindow = (id, levelIndex, overrides = {}) => ({
     id,
     levelIndex,
-    name: levelIndex === 0 ? 'Главный холст' : (levelIndex === 1 ? 'Уровень 1: Потомки' : 'Уровень ' + levelIndex + ': Детализация'),
+    name: 'New level',
     content: '',
     color: levelIndex === 0 ? '#1e293b' : (levelIndex === 1 ? '#0f172a' : '#1e1b4b'),
     position: { x: -500, y: -400 + levelIndex * (LEVEL_WINDOW_DEFAULT_SIZE.h + LEVEL_WINDOW_GAP) },
@@ -1050,13 +1050,12 @@ const saveHistory = (state, logMessage, snapshotOverride = null) => {
 // switch, чтобы редьюсер не ссылался сам на себя (самовызов ломал загрузку
 // через babel-standalone: top-level const переставал быть виден другим скриптам).
 //
-// allowRoot: удаление Главного холста (уровень 0) разрешено ТОЛЬКО явной
-// кнопкой «Удалить холст» (экшен REMOVE_ROOT_CANVAS) — окно уровня 1 занимает
-// его место со своим именем и цветом, вся лестница уровней поднимается на один.
-const applyRemoveLevelWindow = (state, win, allowRoot = false) => {
+// allowRoot: удаление Главного холста (уровень 0) разрешено, если есть уровень 1,
+// готовый занять его место — окно уровня 1 занимает его место со своим именем и цветом.
+const applyRemoveLevelWindow = (state, win, allowRoot = true) => {
     if (!win) return state;
     const removedLevel = win.levelIndex;
-    if (removedLevel === 0 && !allowRoot) return state; // только CLEAR_LEVEL_WINDOW
+    if (removedLevel === 0 && !allowRoot) return state;
     // Удалять Главный холст можно, лишь когда есть уровень 1, готовый занять его место
     if (removedLevel === 0 && !Object.values(state.levelWindows || {}).some(w => w && w.levelIndex === 1)) {
         return state;
@@ -2422,13 +2421,16 @@ const reducer = (state, action) => {
             if (state.selectedIds.length === 0) return state;
 
             // Выделено окно уровня — клавиша Delete удаляет сам уровень
-            // (той же логикой, что и кнопка). Главный холст (уровень 0)
-            // клавишей не удаляется и не очищается — только явной кнопкой.
-            const selectedWinId = state.selectedIds.find(sid => typeof sid === 'string' && sid.startsWith('level-window-'));
+            // (той же логикой, что и кнопка в шапке/панели).
+            const selectedWinId = state.selectedIds.find(sid => typeof sid === 'string' && (sid.startsWith('level-window-') || sid.startsWith('window:')));
             if (selectedWinId !== undefined) {
-                const selectedWinLevel = parseInt(selectedWinId.replace('level-window-', ''), 10);
-                if (Number.isNaN(selectedWinLevel) || selectedWinLevel === 0) return state;
-                return applyRemoveLevelWindow(state, resolveWindow(state, selectedWinLevel));
+                const winKey = selectedWinId.startsWith('window:')
+                    ? selectedWinId.replace('window:', '')
+                    : parseInt(selectedWinId.replace('level-window-', ''), 10);
+                const win = resolveWindow(state, winKey);
+                if (win) {
+                    return applyRemoveLevelWindow(state, win, true);
+                }
             }
 
             const historyState = saveHistory(state, `Удалено ${state.selectedIds.length} элементов`);
@@ -2575,17 +2577,9 @@ const reducer = (state, action) => {
                 const newWinId = newWindowId();
                 // Новое окно — в колонке СВОЕГО проекта, под самым нижним окном
                 const anchor = projectWindowAnchor(state.levelWindows);
-                updatedWindows[newWinId] = {
-                    id: newWinId,
-                    levelIndex: targetLevel,
-                    name: targetLevel === 1 ? 'Уровень 1: Потомки' : `Уровень ${targetLevel}: Детализация`,
-                    content: '',
-                    color: targetLevel === 1 ? '#0f172a' : '#1e1b4b',
-                    position: { x: anchor.x, y: anchor.bottomY + LEVEL_WINDOW_GAP },
-                    size: { w: LEVEL_WINDOW_DEFAULT_SIZE.w, h: LEVEL_WINDOW_DEFAULT_SIZE.h },
-                    fontFamily: 'Inter, sans-serif',
-                    fontSize: 14
-                };
+                updatedWindows[newWinId] = makeLevelWindow(newWinId, targetLevel, {
+                    position: { x: anchor.x, y: anchor.bottomY + LEVEL_WINDOW_GAP }
+                });
                 updatedViews = { ...state.levelViews, [newWinId]: makeLevelView() };
             }
 
@@ -3528,13 +3522,15 @@ const multiReducer = (m, action) => {
                 list.forEach(w => {
                     const win = flat.levelWindows && flat.levelWindows[w.windowId];
                     if (!win) return;
-                    // Главный холст клавишей не удаляется — правило то же, что и
-                    // при одиночном удалении
-                    if ((win.levelIndex || 0) === 0) return;
-                    flat = applyRemoveLevelWindow(flat, win);
+                    flat = applyRemoveLevelWindow(flat, win, true);
                 });
                 flat = reducer(flat, { type: 'COMMIT_HISTORY' });
-                next = writeProjectView(next, pid, flat);
+                const remainingWins = Object.values(flat.levelWindows || {}).filter(Boolean);
+                if (remainingWins.length === 0) {
+                    next = applyRemoveProject(next, pid);
+                } else {
+                    next = writeProjectView(next, pid, flat);
+                }
             });
 
             // 2. Проекты целиком
