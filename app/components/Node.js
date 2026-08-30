@@ -561,19 +561,10 @@ function NodeView(props) {
                             <span className="font-bold">{childCount}</span>
                         </button>
                     )}
-                    {(isNodeHovered || isSelected) && (
-                        <button
-                            className="w-5 h-5 rounded hover:bg-white/20 text-gray-300 hover:text-white flex items-center justify-center text-xs transition-all border border-white/10 hover:border-white/30"
-                            title="Создать вложенный узел на следующем уровне"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                dispatch({ type: 'CREATE_NESTED_NODE', payload: { parentId: data.id } });
-                            }}
-                            onMouseDown={(e) => e.stopPropagation()}
-                        >
-                            <div className="icon-plus text-[11px]"></div>
-                        </button>
-                    )}
+                    {/* Кнопка «+» удалена (PLAN_LAYERS_AND_CONTEXT_CREATION.md, разд.4,
+                        осознанный компромисс ⚠️ п.0.7): создание потомка на следующем
+                        уровне централизовано в FAB тулбара — выделите узел, наведите
+                        на «+» справа по центру экрана. */}
                 </div>
             </div>
 

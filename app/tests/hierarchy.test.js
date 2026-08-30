@@ -556,3 +556,113 @@ test('buildTransferConfirmText: описывает вложение и разр�
     assert.ok(textSame.includes('уровень не меняется'));
     assert.ok(!textSame.includes('разорвана'));
 });
+
+// ============================================================
+// PLAN_LAYERS_AND_CONTEXT_CREATION.md — план верификации, п.1,5,8
+// ============================================================
+
+test('getSmartLayerPlacement: первый независимый слой уровня — {40,60}; следующий — ниже с зазором, снап округляет ВВЕРХ (не срезает зазор)', () => {
+    const empty = HierarchyUtils.getSmartLayerPlacement(0, { nodes: {}, layers: {} });
+    assert.deepEqual(empty, { x: 40, y: 60 }, 'без слоёв уровня — стартовая позиция');
+
+    const state = {
+        nodes: {},
+        layers: {
+            L1: { id: 'L1', name: 'L1', parentId: 'root', position: { x: 40, y: 60 }, size: { w: 300, h: 217 } }
+        }
+    };
+    // maxY = 60+217 = 277; rawY = 287; шаг сетки 30 → 287/30=9.57 → ceil=10 → 300
+    const next = HierarchyUtils.getSmartLayerPlacement(0, state);
+    assert.equal(next.x, 40);
+    assert.equal(next.y, 300, 'округлено ВВЕРХ до сетки');
+    assert.ok(next.y >= 287, 'снап не сдвинул позицию НИЖЕ вычисленного отступа (иначе зазор обнулился бы коллизией)');
+    assert.ok(next.y - (state.layers.L1.position.y + state.layers.L1.size.h) >= 10, 'зазор >= 10px сохранён после снапа (⚠️ п.0.4)');
+});
+
+test('getSmartLayerPlacement: вложенные слои (не root) в расчёт независимого размещения не входят', () => {
+    const state = {
+        nodes: {},
+        layers: {
+            Root1: { id: 'Root1', name: 'Root1', parentId: 'root', position: { x: 40, y: 60 }, size: { w: 200, h: 100 } },
+            Nested: { id: 'Nested', name: 'Nested', parentId: 'Root1', position: { x: 0, y: 0 }, size: { w: 5000, h: 5000 } }
+        }
+    };
+    const pos = HierarchyUtils.getSmartLayerPlacement(0, state);
+    assert.ok(pos.y < 1000, 'огромный вложенный слой Nested не должен утащить позицию вниз — он не root');
+});
+
+test('bubbleUpLayerResize: слой-родитель подрастает под содержимое, каскадно до корня', () => {
+    const state = {
+        nodes: {
+            N: { id: 'N', name: 'N', parentId: 'Mid', position: { x: 500, y: 500 }, size: { w: 200, h: 100 } }
+        },
+        layers: {
+            Mid: { id: 'Mid', name: 'Mid', parentId: 'Top', position: { x: 0, y: 0 }, size: { w: 100, h: 100 } },
+            Top: { id: 'Top', name: 'Top', parentId: 'root', position: { x: 0, y: 0 }, size: { w: 150, h: 150 } }
+        }
+    };
+    const updates = HierarchyUtils.bubbleUpLayerResize('N', state);
+    assert.ok(updates.Mid, 'Mid подрос под N');
+    assert.ok(updates.Mid.w >= 700 && updates.Mid.h >= 600);
+    assert.ok(updates.Top, 'Top подрос вслед за выросшим Mid (каскад до корня)');
+});
+
+test('bubbleUpLayerResize: содержимое уже помещается — обновлений нет', () => {
+    const state = {
+        nodes: {
+            N: { id: 'N', name: 'N', parentId: 'Mid', position: { x: 10, y: 10 }, size: { w: 50, h: 50 } }
+        },
+        layers: {
+            Mid: { id: 'Mid', name: 'Mid', parentId: 'root', position: { x: 0, y: 0 }, size: { w: 600, h: 400 } }
+        }
+    };
+    const updates = HierarchyUtils.bubbleUpLayerResize('N', state);
+    assert.equal(Object.keys(updates).length, 0, 'N с запасом помещается в Mid — расти некуда');
+});
+
+test('canTransferToLayer: слой в самого себя — reason self; слой в слой СОБСТВЕННОЙ ветки — reason descend (не блокировка)', () => {
+    const nodes = {};
+    const layers = {
+        A: { id: 'A', name: 'A', parentId: 'root' },
+        B: { id: 'B', name: 'B', parentId: 'root', ownerId: 'A' } // B — в ветке А
+    };
+    const self = HierarchyUtils.canTransferToLayer('A', 'A', nodes, layers);
+    assert.equal(self.ok, false);
+    assert.equal(self.reason, 'self');
+
+    const descend = HierarchyUtils.canTransferToLayer('A', 'B', nodes, layers);
+    assert.equal(descend.ok, true, '«спуск» разрешён, это не блокировка цикла');
+    assert.equal(descend.reason, 'descend');
+
+    const sameLevel = HierarchyUtils.canTransferToLayer('A', 'C', nodes, { ...layers, C: { id: 'C', parentId: 'root' } });
+    assert.equal(sameLevel.ok, true);
+    assert.equal(sameLevel.reason, null, 'группировка своего уровня — обычный перенос');
+});
+
+test('getDropTarget: перетаскиваемый СЛОЙ исключает узлы собственной ветки из целей (защита от циклов, ⚠️ п.0.8)', () => {
+    const s = makeDndState();
+    // Слой L «усыновляет» узел A (A теперь в ветке L)
+    s.nodes.A.ownerId = 'L';
+    s.nodes.A.position = { x: 2, y: 42 }; // под указателем ниже
+    // Указатель наведён туда, где сейчас лежит A — но A в ветке L, значит исключён
+    const target = HierarchyUtils.getDropTarget(['L'], { x: 2 + 100, y: 42 + 50 }, s, { dragDropMode: true });
+    assert.ok(!target || target.kind !== 'node' || target.id !== 'A', 'узел собственной ветки не предлагается целью');
+});
+
+test('getDropTarget: одиночный слой на холст ЧУЖОГО окна уровня — валидный перенос (сирота-якорь), НЕ «нет цели» (⚠️ п.0.5)', () => {
+    const s = makeDndState();
+    const target = HierarchyUtils.getDropTarget(['L'], { x: 400, y: 1000 }, s, { dragDropMode: true });
+    assert.ok(target, 'дроп слоя на чужое окно — валидная цель, не null');
+    assert.equal(target.kind, 'window');
+    assert.equal(target.id, 'w1');
+    assert.equal(target.valid, true, 'слой на чужом окне переносится как сирота-якорь, это НЕ «нет цели»');
+    assert.equal(target.isMove, false, 'это перенос, не обычное перемещение по своему холсту');
+});
+
+test('getDropTarget: одиночный слой на СВОЁ окно уровня — обычное перемещение (isMove)', () => {
+    const s = makeDndState();
+    const own = HierarchyUtils.getDropTarget(['L'], { x: 800, y: 600 }, s, { dragDropMode: true });
+    assert.equal(own.kind, 'window');
+    assert.equal(own.id, 'lvlwin-root');
+    assert.equal(own.isMove, true);
+});

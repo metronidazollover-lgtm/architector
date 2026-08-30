@@ -135,6 +135,11 @@ const HierarchyUtils = {
      */
     LEVEL_WINDOW_METRICS: { headerH: 40, borderW: 2 },
 
+    // Шаг сетки перетаскивания узлов/слоёв (см. `snapToGrid` в Node.js/Layer.js,
+    // step = 30) — используется расчётом размещения нового независимого слоя,
+    // чтобы вычисленный зазор не «съедался» последующим снапом к сетке.
+    LAYER_GRID_STEP: 30,
+
     /**
      * Сырая сумма позиций по всей цепочке parentId, включая узлы-родители.
      * ЛЕГАСИ: используется ТОЛЬКО миграциями (в формате v10 позиция ребёнка
@@ -548,36 +553,38 @@ const HierarchyUtils = {
     },
 
     /**
-     * Можно ли перенести узел в этот слой (для UI и валидации).
+     * Можно ли перенести узел ИЛИ слой в этот слой (для UI и валидации).
      *
-     * Перенос невозможен, когда слой находится в ветке САМОГО узла (или его
-     * потомка): усыновителем стал бы сам узел — «стань собственным ребёнком»,
-     * а уровень слоя, вычисляемый через этот узел, уехал бы по кругу.
-     * Консистентной автоматической интерпретации у такой операции нет —
+     * Перенос невозможен, когда целевой слой находится в ветке САМОЙ переносимой
+     * сущности (или её потомка): усыновителем стала бы сама сущность — «стань
+     * собственным ребёнком», а уровень слоя, вычисляемый через неё, уехал бы
+     * по кругу. Консистентной автоматической интерпретации у такой операции нет —
      * UI должен показывать причину, а не молча отклонять.
      *
-     * @param {string} nodeId
+     * @param {string} entityId id переносимого узла или слоя
      * @param {string} layerId
      * @param {Object<string, NodeEntity>} nodes
      * @param {?Object<string, LayerEntity>} [layers]
      * @returns {{ ok: boolean, reason: ?string }}
      */
-    canTransferToLayer: (nodeId, layerId, nodes, layers = null) => {
+    canTransferToLayer: (entityId, layerId, nodes, layers = null) => {
         const layer = layers && layers[layerId];
-        const node = nodes && nodes[nodeId];
-        if (!layer || !node) return { ok: false, reason: 'not-found' };
+        const entity = (nodes && nodes[entityId]) || (layers && layers[entityId]);
+        if (!layer || !entity) return { ok: false, reason: 'not-found' };
+        // Слой/узел нельзя перенести в самого себя.
+        if (entityId === layerId) return { ok: false, reason: 'self' };
 
         const layerLevel = HierarchyUtils.getEntityLevel(layerId, nodes, layers);
-        const nodeLevel = HierarchyUtils.getEntityLevel(nodeId, nodes, layers);
-        if (layerLevel === nodeLevel) return { ok: true, reason: null }; // группировка своего уровня
+        const entityLevel = HierarchyUtils.getEntityLevel(entityId, nodes, layers);
+        if (layerLevel === entityLevel) return { ok: true, reason: null }; // группировка своего уровня
 
         if (layerLevel > 0) {
             const adoptOwner = HierarchyUtils.getBranchOwner(layerId, nodes, layers);
-            if (adoptOwner && (adoptOwner === nodeId ||
-                HierarchyUtils.hasAncestorIn(adoptOwner, [nodeId], nodes, layers))) {
-                // Слой в СОБСТВЕННОЙ ветке узла: обычное усыновление невозможно
-                // (узел стал бы своим же потомком), выполняется «спуск» — узел
-                // становится сиротой в слое, его прямые подопечные отвязываются
+            if (adoptOwner && (adoptOwner === entityId ||
+                HierarchyUtils.hasAncestorIn(adoptOwner, [entityId], nodes, layers))) {
+                // Слой в СОБСТВЕННОЙ ветке узла/слоя: обычное усыновление невозможно
+                // (сущность стала бы своим же потомком), выполняется «спуск» — она
+                // становится сиротой в слое, её прямые подопечные отвязываются
                 // и якорятся по месту (homeLevel), их поддеревья не меняются.
                 return { ok: true, reason: 'descend' };
             }
@@ -808,6 +815,117 @@ const HierarchyUtils = {
     },
 
     /**
+     * Расчет бесконфликтных координат для НЕЗАВИСИМОГО слоя на холсте уровня
+     * (кнопка «независимый слой»: без выделения — parentId:'root'). Новый слой
+     * ставится строго ниже уже существующих слоёв СВОЕГО уровня и своего же
+     * координатного контейнера root (вложенные слои в расчёт не берутся —
+     * PLAN_LAYERS_AND_CONTEXT_CREATION.md, п.1), с отступом коллизии (шаг сетки,
+     * см. `LAYER_GRID_STEP`), чтобы `resolveLayerCollision` не сдвинул его
+     * повторно сразу после создания.
+     * @param {number} levelIndex
+     * @param {Object} state
+     * @returns {{ x: number, y: number }}
+     */
+    getSmartLayerPlacement: (levelIndex, state) => {
+        const nodes = (state && state.nodes) || {};
+        const layers = (state && state.layers) || {};
+        const step = HierarchyUtils.LAYER_GRID_STEP || 30;
+        const rootLayers = Object.values(layers).filter(l => l
+            && (l.parentId || 'root') === 'root'
+            && HierarchyUtils.getEntityLevel(l.id, nodes, layers) === levelIndex);
+
+        if (rootLayers.length === 0) {
+            return { x: 40, y: 60 };
+        }
+
+        let maxY = -Infinity;
+        rootLayers.forEach(l => {
+            const bottom = (l.position?.y || 0) + (l.size?.h || 400);
+            if (bottom > maxY) maxY = bottom;
+        });
+
+        const rawY = maxY + 10;
+        // Округление ВВЕРХ до ближайшего шага сетки: ADD_LAYER всегда снапает
+        // (snapToGrid:true) — без округления снап после вычисления может
+        // свести зазор к нулю и тут же спровоцировать resolveLayerCollision.
+        const snappedY = Math.ceil(rawY / step) * step;
+        return { x: 40, y: Math.max(snappedY, rawY) };
+    },
+
+    /**
+     * Каскадное обновление размеров цепочки родительских слоёв «снизу вверх»:
+     * когда сущность (узел или слой) оказывается внутри слоя-контейнера (после
+     * вложения/переноса), родитель должен подрасти, чтобы вместить её по
+     * bounding-box содержимого (узлы И вложенные слои), и так же — его
+     * собственный родитель, и так далее до корня.
+     *
+     * Чистая функция: возвращает словарь ОБНОВЛЕНИЙ размеров `{ [layerId]: {w,h} }`
+     * — вызывающий код (редьюсер) сам применяет их к `state.layers`, чтобы весь
+     * жест остался одной записью истории.
+     *
+     * @param {string} movedEntityId id сущности, которая только что оказалась
+     *   внутри нового родителя (её parentId уже обновлён к моменту вызова)
+     * @param {Object} state
+     * @returns {Object<string, {w:number,h:number}>}
+     */
+    bubbleUpLayerResize: (movedEntityId, state) => {
+        const nodes = (state && state.nodes) || {};
+        const layers = (state && state.layers) || {};
+        const updates = {};
+        // Локальная проекция слоёв с уже применёнными по ходу апдейтами —
+        // цепочка бабблинга должна видеть подросшего непосредственного ребёнка.
+        const applied = { ...layers };
+        const padding = 20;
+
+        let currentId = movedEntityId;
+        const visited = new Set();
+        for (let i = 0; i < 64; i++) {
+            const child = applied[currentId] || nodes[currentId];
+            if (!child || visited.has(currentId)) break;
+            visited.add(currentId);
+
+            const parentId = child.parentId;
+            if (!parentId || parentId === 'root') break;
+            const parentLayer = applied[parentId];
+            if (!parentLayer) break;
+
+            let maxR = 0, maxB = 0, any = false;
+            Object.values(nodes).forEach(n => {
+                if (n && n.parentId === parentId) {
+                    any = true;
+                    maxR = Math.max(maxR, (n.position?.x || 0) + (n.size?.w || 200));
+                    maxB = Math.max(maxB, (n.position?.y || 0) + (n.size?.h || 100));
+                }
+            });
+            Object.values(applied).forEach(l => {
+                if (l && l.id !== parentId && l.parentId === parentId) {
+                    any = true;
+                    maxR = Math.max(maxR, (l.position?.x || 0) + (l.size?.w || 600));
+                    maxB = Math.max(maxB, (l.position?.y || 0) + (l.size?.h || 400));
+                }
+            });
+            if (!any) break;
+
+            const headerH = Math.max(90, (parentLayer.fontSize ? Math.round(parentLayer.fontSize * 2.5 + 45) : 90));
+            const curW = parentLayer.size?.w || 600;
+            const curH = parentLayer.size?.h || 400;
+            const fitW = Math.max(300, maxR + padding);
+            const fitH = Math.max(headerH + 100, maxB + padding);
+            const newW = Math.max(curW, fitW);
+            const newH = Math.max(curH, fitH);
+
+            if (newW !== curW || newH !== curH) {
+                const size = { w: newW, h: newH };
+                updates[parentId] = size;
+                applied[parentId] = { ...parentLayer, size };
+            }
+            currentId = parentId;
+        }
+
+        return updates;
+    },
+
+    /**
      * Расчет расположения нового окна уровня в мировом пространстве.
      * @param {number} levelIndex
      * @param {Object<number, LevelWindowEntity>} existingLevelWindows
@@ -971,8 +1089,14 @@ const HierarchyUtils = {
      * - свёрнутые окна не принимают дроп;
      * - dragDropMode=false: доступна только группировка в слои СВОЕГО уровня и
      *   перемещение по своему окну; всё межуровневое и вложения — invalid ('dnd-off');
-     * - слои в роли переносимых: пока только перемещение по своему окну (перенос
-     *   слоя — этап 3 плана), любые их цели → invalid ('layer-transfer-later').
+     * - слои в роли переносимых, ОДИНОЧНО (этап 3 плана `PLAN_DRAG_AND_DROP.md`,
+     *   реализовано 2026-08-30 вместе с `PLAN_LAYERS_AND_CONTEXT_CREATION.md`):
+     *   валидируются ТЕМ ЖЕ путём, что и узлы (`canTransferToLayer`/`hasAncestorIn`,
+     *   расширенные на слои) — узел/слой/окно как цель, свой уровень = группировка
+     *   (`parentId`), чужой = усыновление (`ownerId`) или сирота-якорь на чужом окне;
+     * - массовый/смешанный перенос слоя(ёв) вместе с чем-то ещё (`dragged.length > 1`
+     *   и хотя бы один — слой) — всё ещё invalid ('layer-transfer-later'): это
+     *   этап 4 плана (пока не реализован).
      *
      * @param {Array<string>} draggedIds выделенные «верхние» переносимые id
      * @param {Point} pointerWorld указатель мыши в мировых координатах
@@ -988,7 +1112,10 @@ const HierarchyUtils = {
 
         const dragged = draggedIds.filter(id => nodes[id] || layers[id]);
         if (dragged.length === 0) return null;
-        const draggedHasLayer = dragged.some(id => !!layers[id]);
+        // Массовый/смешанный перенос слоя(ёв) вместе с чем-то ещё — этап 4
+        // PLAN_DRAG_AND_DROP.md, вне объёма (реализован только перенос ОДНОГО
+        // «верхнего» слоя — PLAN_LAYERS_AND_CONTEXT_CREATION.md, 2026-08-30).
+        const unsupportedMixedLayer = dragged.length > 1 && dragged.some(id => !!layers[id]);
         const draggedLevels = dragged.map(id => HierarchyUtils.getEntityLevel(id, nodes, layers));
 
         // Исключаются сами переносимые и их потомки: по владению/слоям
@@ -1029,7 +1156,7 @@ const HierarchyUtils = {
         const nodeTarget = pickBest(nodes);
         if (nodeTarget) {
             const make = (valid, reason) => ({ kind: /** @type {'node'} */ ('node'), id: nodeTarget, valid, reason: reason || null });
-            if (draggedHasLayer) return make(false, 'layer-transfer-later');
+            if (unsupportedMixedLayer) return make(false, 'layer-transfer-later');
             if (!dragDropMode) return make(false, 'dnd-off');
             // Все переносимые уже прямые дети этой цели — переносить нечего
             const allChildren = dragged.every(id => (nodes[id] || layers[id]).ownerId === nodeTarget
@@ -1042,11 +1169,11 @@ const HierarchyUtils = {
         const layerTarget = pickBest(layers);
         if (layerTarget) {
             const make = (valid, reason, descend) => ({ kind: /** @type {'layer'} */ ('layer'), id: layerTarget, valid, reason: reason || null, descend: !!descend });
-            if (draggedHasLayer) return make(false, 'layer-transfer-later');
+            if (unsupportedMixedLayer) return make(false, 'layer-transfer-later');
             const layerLevel = HierarchyUtils.getEntityLevel(layerTarget, nodes, layers);
             const crossLevel = draggedLevels.some(lvl => lvl !== layerLevel);
             if (!dragDropMode && crossLevel) return make(false, 'dnd-off');
-            if (dragged.every(id => nodes[id] && nodes[id].parentId === layerTarget)) return make(false, 'same-parent');
+            if (dragged.every(id => (nodes[id] || layers[id])?.parentId === layerTarget)) return make(false, 'same-parent');
             let descend = false;
             for (const id of dragged) {
                 const verdict = HierarchyUtils.canTransferToLayer(id, layerTarget, nodes, layers);
@@ -1078,7 +1205,7 @@ const HierarchyUtils = {
             if (view.isCollapsed) return make(false, 'collapsed');
             const ownWindow = draggedLevels.every(lvl => lvl === winTarget.levelIndex);
             if (ownWindow) return make(true, null, true); // обычное перемещение
-            if (draggedHasLayer) return make(false, 'layer-transfer-later');
+            if (unsupportedMixedLayer) return make(false, 'layer-transfer-later');
             if (!dragDropMode) return make(false, 'dnd-off');
             return make(true, null, false);
         }

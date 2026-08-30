@@ -1245,7 +1245,7 @@ function ContextActionBar() {
             if (targetLayerId !== 'root' && layers && layers[targetLayerId]) {
                 const targetLayer = layers[targetLayerId];
                 const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(
-                    [selectedNode], targetLayer, nodes
+                    [selectedNode], targetLayer, nodes, layers
                 );
                 dispatch({ type: 'UPDATE_LAYER', payload: { id: targetLayerId, updates: { size: newLayerSize } } });
                 dispatch({ type: 'UPDATE_NODE', payload: {
@@ -1561,6 +1561,20 @@ function ContextActionBar() {
             dispatch({ type: 'UPDATE_LAYER', payload: { id: selectedLayer.id, updates: { [field]: value } } });
         };
 
+        // Назначить на слой (PLAN_LAYERS_AND_CONTEXT_CREATION.md, разд. 2.4):
+        // точная копия узлового попапа «назначить слой», но TRANSFER_NODE
+        // уже сам решает — своего уровня (группировка parentId) или чужого
+        // (усыновление ownerId) — единый путь для обоих случаев (⚠️ п.0.8),
+        // отдельная REPARENT_ENTITY-ветка нужна только для сброса на root.
+        const handleLayerParentChange = (targetLayerId) => {
+            if (targetLayerId === 'root') {
+                dispatch({ type: 'REPARENT_ENTITY', payload: { id: selectedLayer.id, newParentId: 'root' } });
+            } else {
+                dispatch({ type: 'TRANSFER_NODE', payload: { id: selectedLayer.id, targetLayerId } });
+            }
+            setActivePopover(null);
+        };
+
         return (
             <div 
                 ref={barRef}
@@ -1640,13 +1654,24 @@ function ContextActionBar() {
                         onClick={() => {
                             const layerNodes = Object.values(nodes).filter(n => n.parentId === selectedLayer.id);
                             if (layerNodes.length > 0 && window.GeometryUtils?.getSmartPlacement) {
-                                const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, selectedLayer, nodes);
+                                const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, selectedLayer, nodes, layers);
                                 dispatch({ type: 'UPDATE_LAYER', payload: { id: selectedLayer.id, updates: { size: newLayerSize } } });
                                 dispatch({ type: 'MASS_UPDATE', payload: { ids: Object.keys(updatesById), updatesById } });
                             }
                         }}
                     >
                         <div className="icon-maximize-2 text-lg"></div>
+                    </button>
+
+                    {/* Назначить на слой */}
+                    <button
+                        className={`btn w-10 h-10 p-0 rounded-lg flex items-center justify-center transition-colors ${
+                            activePopover === 'layer' ? 'bg-white/20 text-white border-white/30' : (selectedLayer.parentId && selectedLayer.parentId !== 'root' ? 'text-sky-400' : 'text-gray-300 hover:text-white')
+                        }`}
+                        title="Назначить на слой"
+                        onClick={() => setActivePopover(activePopover === 'layer' ? null : 'layer')}
+                    >
+                        <div className="icon-layers text-lg"></div>
                     </button>
 
                     <div className="flex-1"></div>
@@ -1683,6 +1708,85 @@ function ContextActionBar() {
                             onSizeChange={(fontSize) => handleUpdateLayer('fontSize', fontSize)}
                             leftClass="left-8"
                         />
+                    )}
+
+                    {/* Поповер: назначить слой на слой (⚠️ п.0.1, п.0.8) — точная
+                        копия узлового попапа «назначить слой», но переносимая
+                        сущность — сам selectedLayer, TRANSFER_NODE решает
+                        группировку/усыновление сам. Слои чужого уровня видны,
+                        но тусклые при выключенном ui.dragDropMode. */}
+                    {activePopover === 'layer' && (
+                        <div className="absolute left-28 top-12 w-60 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-2.5 shadow-2xl z-50 flex flex-col gap-1.5 max-h-56 overflow-y-auto no-scrollbar">
+                            <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider px-1">Назначить на слой</div>
+                            <button
+                                className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-xs transition-colors ${
+                                    (!selectedLayer.parentId || selectedLayer.parentId === 'root')
+                                        ? 'bg-[var(--accent-blue)]/30 text-white font-medium border border-[var(--accent-blue)]/50'
+                                        : 'text-gray-300 hover:bg-white/10'
+                                }`}
+                                onClick={() => handleLayerParentChange('root')}
+                            >
+                                <div className="icon-home text-gray-400 text-xs"></div>
+                                <span className="truncate flex-1">Главный холст (Root)</span>
+                            </button>
+                            {layers && Object.values(layers).filter(l => l && l.id !== selectedLayer.id).map((l) => {
+                                const H = window.HierarchyUtils;
+                                const layerLvl = (H && H.getEntityLevel) ? H.getEntityLevel(l.id, nodes, layers) : 0;
+                                const ownLvl = (H && H.getEntityLevel) ? H.getEntityLevel(selectedLayer.id, nodes, layers) : 0;
+                                const isCross = layerLvl !== ownLvl;
+                                const verdict = (H && H.canTransferToLayer)
+                                    ? H.canTransferToLayer(selectedLayer.id, l.id, nodes, layers)
+                                    : { ok: true };
+                                // Доп. защита от циклов через координатный контейнер (parentId):
+                                // цель — собственный потомок selectedLayer по цепочке parentId.
+                                const parentIdCycle = (H && H.isDescendantOf) ? H.isDescendantOf(l.id, selectedLayer.id, nodes, layers) : false;
+                                const blocked = !verdict.ok || parentIdCycle;
+                                const isDescend = verdict.reason === 'descend';
+                                const childCount = isDescend
+                                    ? [...Object.values(nodes), ...Object.values(layers)].filter(e => e && e.ownerId === selectedLayer.id).length
+                                    : 0;
+                                const parentName = (isCross && !isDescend && selectedLayer.ownerId && nodes[selectedLayer.ownerId])
+                                    ? (nodes[selectedLayer.ownerId].name || selectedLayer.ownerId) : null;
+                                const breaksTies = isDescend ? childCount > 0 : !!parentName;
+                                const warn = isDescend && childCount > 0
+                                    ? `⚠ Разорвёт родственные связи: отвяжет прямых детей (${childCount}) — они станут сиротами. `
+                                    : parentName ? `⚠ Разорвёт связь с родителем «${parentName}». ` : '';
+                                // Межуровневый перенос доступен только в режиме Drag&Drop
+                                const dndLocked = isCross && !(state.ui && state.ui.dragDropMode);
+                                return (
+                                <button
+                                    key={l.id}
+                                    disabled={blocked || dndLocked}
+                                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-xs transition-colors ${
+                                        (blocked || dndLocked)
+                                            ? 'text-gray-600 opacity-50 cursor-not-allowed'
+                                            : selectedLayer.parentId === l.id
+                                                ? 'bg-[var(--accent-blue)]/30 text-white font-medium border border-[var(--accent-blue)]/50'
+                                                : isCross ? 'text-gray-400 opacity-75 hover:opacity-100 hover:bg-white/10' : 'text-gray-300 hover:bg-white/10'
+                                    } ${breaksTies && !dndLocked ? 'border border-red-500/70 hover:border-red-400' : ''}`}
+                                    title={parentIdCycle
+                                        ? 'Нельзя: этот слой лежит внутри переносимого слоя (цикл)'
+                                        : dndLocked
+                                            ? `Слой на Уровне ${layerLvl}. Включите режим Drag&Drop (кнопка в панели проекта), чтобы переносить между уровнями`
+                                            : isDescend
+                                                ? warn + 'Слой в собственной ветке: перенос спустит его к потомкам — он станет сиротой-братом в этом слое, его прямые дети отвяжутся и останутся на своих местах'
+                                                : (isCross ? warn + `Слой уровня ${layerLvl}: этот слой переедет на этот уровень (усыновит ветка целевого слоя)` : undefined)}
+                                    onClick={() => {
+                                        if (blocked || dndLocked) return;
+                                        handleLayerParentChange(l.id);
+                                    }}
+                                >
+                                    <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: l.color || '#0284c7' }}></div>
+                                    <span className="truncate flex-1">{l.name || l.id}</span>
+                                    {isDescend ? (
+                                        <span className="px-1 py-px rounded text-[9px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">↓ ветка</span>
+                                    ) : isCross && (
+                                        <span className="px-1 py-px rounded text-[9px] font-mono bg-sky-500/20 text-sky-300 border border-sky-500/40 shrink-0">L{layerLvl}</span>
+                                    )}
+                                </button>
+                                );
+                            })}
+                        </div>
                     )}
                 </div>
 

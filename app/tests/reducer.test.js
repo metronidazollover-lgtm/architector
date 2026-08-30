@@ -1386,6 +1386,26 @@ test('TRANSFER_NODE, сценарий «А1 → Х0»: перенос в кор�
     assert.ok(s2.nodes.A1, 'удаление А больше не каскадится на А1');
 });
 
+test('TRANSFER_NODE: узел, вложенный в переносимый слой через parentId (не ownerId), не раздвигается при переносе слоя на уровень с занятыми местами', () => {
+    let s = makeTransferState();
+    // Слой L0 на уровне 0, с узлом NL0 внутри — назначен на слой через
+    // parentId (координатная группировка, как через поповер «Назначить на
+    // слой»), БЕЗ ownerId — не настоящий потомок-по-владению
+    s.layers.L0 = { id: 'L0', name: 'Слой L0', position: { x: 0, y: 0 }, size: { w: 400, h: 300 }, parentId: 'root' };
+    s.nodes.NL0 = { id: 'NL0', name: 'Узел в L0', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'L0' };
+
+    // Переносим сам слой L0 на уровень 2 (в слой Х2), где на холсте уровня 2
+    // уже стоят А2/Б2 ровно там, где лежит «сырая» позиция NL0 — при старом
+    // баге (hasAncestorIn вместо ownerId-проверки) это ловилось бы как
+    // наложение и NL0 сдвигали бы вправо, хотя его позиция локальна для L0
+    s = reducer(s, { type: 'TRANSFER_NODE', payload: { id: 'L0', targetLayerId: 'X2' } });
+
+    assert.equal(s.nodes.NL0.parentId, 'L0', 'узел остался назначен на тот же слой');
+    assert.ok(!s.nodes.NL0.ownerId, 'узел по-прежнему без владельца (чистая координатная группировка)');
+    assert.deepEqual(s.nodes.NL0.position, { x: 0, y: 0 },
+        'локальная позиция узла внутри слоя не тронута переносом слоя (не должна расталкиваться как будто это холст)');
+});
+
 test('TRANSFER_NODE: слой собственной ветки — «спуск к детям» (узел и дети — братья-сироты)', () => {
     let s = makeTransferState();
     // Слой в ветке самого А1 (слой его детей, уровень 2)
@@ -1654,4 +1674,76 @@ test('Слои: ADD_PORT, ADD_LINK, каскадное удаление и FOCUS
     assert.ok(sUndone.layers.layer1, 'UNDO вернул layer1');
     assert.ok(sUndone.ports.pLayer1, 'UNDO вернул pLayer1');
     assert.ok(sUndone.links.linkL1L2, 'UNDO вернул linkL1L2');
+});
+
+// ============================================================
+// TRANSFER_NODE: СЛОЙ как переносимая сущность (PLAN_LAYERS_AND_CONTEXT_CREATION.md,
+// 2026-08-30 — этап 3 PLAN_DRAG_AND_DROP.md). Тот же механизм, что и для узлов.
+// ============================================================
+
+test('TRANSFER_NODE: слой в слой ТОГО ЖЕ уровня — группировка parentId, родство (ownerId) не меняется', () => {
+    let s = makeTransferState();
+    // Y2 — ещё один слой в ветке Б1 (уровень 2, как и X2)
+    s.layers.Y2 = { id: 'Y2', name: 'Y2', position: { x: 0, y: 200 }, size: { w: 200, h: 150 }, parentId: 'root', ownerId: 'B1' };
+    s = reducer(s, { type: 'TRANSFER_NODE', payload: { id: 'Y2', targetLayerId: 'X2' } });
+
+    assert.equal(s.layers.Y2.parentId, 'X2');
+    assert.equal(s.layers.Y2.ownerId, 'B1', 'родство не изменилось — своего уровня группировка, не усыновление');
+    assert.equal(lvl(s, 'Y2'), 2, 'уровень не изменился');
+});
+
+test('TRANSFER_NODE: слой в слой ЧУЖОГО уровня — усыновление ownerId веткой целевого слоя, каскадный ресайз предков', () => {
+    let s = makeTransferState();
+    // Z2 — родительский слой для X2 (та же ветка Б1), изначально впритык
+    s.layers.Z2 = { id: 'Z2', name: 'Z2', position: { x: 550, y: 150 }, size: { w: 550, h: 450 }, parentId: 'root', ownerId: 'B1' };
+    s.layers.X2.parentId = 'Z2';
+    s = reducer(s, { type: 'TRANSFER_NODE', payload: { id: 'X0', targetLayerId: 'X2' } });
+
+    assert.equal(s.layers.X0.parentId, 'X2');
+    assert.equal(s.layers.X0.ownerId, 'B1', 'усыновлён владельцем ветки слоя X2 (кросс-перенос уровня 0 → 2)');
+    assert.equal(lvl(s, 'X0'), 2);
+
+    assert.ok(s.layers.X2.size.w >= 500 && s.layers.X2.size.h >= 400, 'X2 подрос под X0 (авторазмещение)');
+    const grew = s.layers.Z2.size.w > 550 || s.layers.Z2.size.h > 450;
+    assert.ok(grew, 'Z2 (родитель X2) тоже подрос — bubbleUpLayerResize сработал каскадно до корня');
+});
+
+test('TRANSFER_NODE: слой меняет ВЛАДЕЛЬЦА в пределах своего уровня (newOwnerId), позиция и холст не меняются', () => {
+    let s = makeTransferState();
+    // Y1 — слой уровня 1 (ребёнок А, как А1/Б1), дропнут на узел B (уровень 0):
+    // целевой уровень 1 — тот же, где Y1 уже живёт → смена владельца без переезда
+    s.layers.Y1 = { id: 'Y1', name: 'Y1', position: { x: 60, y: 60 }, size: { w: 200, h: 150 }, parentId: 'root', ownerId: 'A' };
+    const beforePos = { ...s.layers.Y1.position };
+    const beforeParent = s.layers.Y1.parentId;
+    s = reducer(s, { type: 'TRANSFER_NODE', payload: { ids: ['Y1'], targetLevelIndex: 1, newOwnerId: 'B' } });
+
+    assert.equal(s.layers.Y1.ownerId, 'B', 'владелец сменился с A на B (оба уровня 0)');
+    assert.deepEqual(s.layers.Y1.position, beforePos, 'позиция не изменилась — уровень тот же, холст не меняется');
+    assert.equal(s.layers.Y1.parentId, beforeParent, 'координатный контейнер не тронут');
+    assert.equal(lvl(s, 'Y1'), 1, 'уровень не изменился (только родство)');
+});
+
+test('TRANSFER_NODE: попытка вложить слой в слой, лежащий ВНУТРИ него самого (parentId-цикл) — no-op', () => {
+    let s = makeTransferState();
+    // Вложенный слой Inner внутри X0
+    s.layers.Inner = { id: 'Inner', name: 'Inner', position: { x: 10, y: 10 }, size: { w: 100, h: 80 }, parentId: 'X0' };
+    const before = s;
+    const after = reducer(s, { type: 'TRANSFER_NODE', payload: { id: 'X0', targetLayerId: 'Inner' } });
+    assert.equal(after, before, 'реальный parentId-цикл (X0 → Inner, но Inner уже внутри X0) отклонён как no-op');
+});
+
+test('RESTORE_ENTITIES: откат Drag&Drop переноса СЛОЯ — позиция и родство возвращаются к срезу mousedown', () => {
+    let s = makeTransferState();
+    s = { ...s, selectedIds: ['X0'], ui: { ...s.ui, dragDropMode: true } };
+    const snapshotLayers = s.layers;
+    const beforePast = s.past ? s.past.length : 0;
+
+    const gestured = reducer(s, { type: 'SET_DRAG_GESTURE', payload: { ids: ['X0'], target: { kind: 'layer', id: 'X2', valid: true } } });
+    const moved = reducer(gestured, { type: 'UPDATE_LAYER', payload: { id: 'X0', updates: { position: { x: 999, y: 999 } }, skipHistory: true } });
+    const restored = reducer(moved, { type: 'RESTORE_ENTITIES', payload: { nodes: s.nodes, layers: snapshotLayers } });
+
+    assert.equal(restored.layers.X0.position.x, 600, 'X0 вернулся на исходную позицию');
+    assert.equal(restored.layers.X0.parentId, 'root', 'родство/контейнер не изменились');
+    assert.equal(restored.dragGesture, null, 'жест очищен');
+    assert.equal((restored.past || []).length, beforePast, 'отмена жеста не создаёт запись в истории');
 });

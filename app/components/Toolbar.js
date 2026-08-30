@@ -64,6 +64,16 @@ function Toolbar() {
             ? window.HierarchyUtils.getAddContext(state)
             : { ok: true, parentId: 'root', levelIndex: 0, reason: null });
 
+    // PLAN_LAYERS_AND_CONTEXT_CREATION.md, раздел 5: FAB и веер спутников
+    // явно переключаются между 3 контекстами выделения (⚠️ п.0.3 — фикс
+    // «галлюцинации» слоя целиком здесь, getAddContext не тронут). Ровно один
+    // элемент может быть выделен для контекста «узел»/«слой» — при пустом
+    // выделении или множественном выборе действует контекст «ничего».
+    const singleSelId = (state.selectedIds && state.selectedIds.length === 1) ? state.selectedIds[0] : null;
+    const selectedNode = hasProject && singleSelId ? (state.nodes && state.nodes[singleSelId]) || null : null;
+    const selectedLayer = hasProject && singleSelId ? (state.layers && state.layers[singleSelId]) || null : null;
+    const fabContext = selectedNode ? 'node' : (selectedLayer ? 'layer' : 'none');
+
     const addDisabledHint = addCtx.reason === 'no-project'
         ? 'Сначала создайте проект (кнопка «Добавить проект» в этом меню)'
         : (addCtx.reason === 'multi-select'
@@ -132,6 +142,88 @@ function Toolbar() {
         });
     };
 
+    // --- Контекст «выделен узел»: рождение потомка на подуровне L{lvl+1}. ---
+    // Клик по самой «+» переиспользует уже существующий, протестированный
+    // CREATE_NESTED_NODE (раньше он же жил за кнопкой «+» в шапке Node.js,
+    // теперь единственный вход — сюда; ⚠️ п.0.7).
+    const H = window.HierarchyUtils;
+    const nodeChildLevel = selectedNode && H ? H.getEntityLevel(selectedNode.id, state.nodes, state.layers) + 1 : null;
+
+    const addChildNode = () => {
+        if (!selectedNode) return;
+        dispatch({ type: 'CREATE_NESTED_NODE', payload: { parentId: selectedNode.id } });
+    };
+
+    // Слой/ассистент-потомок подуровня — окна для этого уровня может ещё не
+    // быть (раньше оно появлялось только побочным эффектом CREATE_NESTED_NODE),
+    // поэтому досоздаём его тем же ADD_LEVEL_WINDOW, что и кнопка «уровень».
+    const ensureLevelWindow = (levelIndex) => {
+        if (!H) return;
+        const win = H.getWindowOfLevel(levelIndex, state.levelWindows);
+        if (!win) dispatch({ type: 'ADD_LEVEL_WINDOW' });
+    };
+
+    const addChildLayer = () => {
+        if (!selectedNode || nodeChildLevel == null) return;
+        ensureLevelWindow(nodeChildLevel);
+        const levelLayers = {};
+        Object.entries(state.layers || {}).forEach(([id, l]) => {
+            if (H && H.getEntityLevel(id, state.nodes, state.layers) === nodeChildLevel) levelLayers[id] = l;
+        });
+        const pos = H ? H.getSmartLevelPlacement(selectedNode.id, levelLayers) : { x: 80, y: 100 };
+        dispatch({
+            type: 'ADD_LAYER',
+            payload: {
+                name: `Новый слой (потомок «${selectedNode.name}»)`,
+                position: pos,
+                size: { w: 600, h: 400 },
+                color: '#ff9500',
+                parentId: selectedNode.id // normalizeContainer превратит это в ownerId
+            }
+        });
+    };
+
+    const addChildAssistant = () => {
+        if (!selectedNode || nodeChildLevel == null) return;
+        ensureLevelWindow(nodeChildLevel);
+        const levelNodes = {};
+        Object.entries(state.nodes || {}).forEach(([id, n]) => {
+            if (H && H.getEntityLevel(id, state.nodes, state.layers) === nodeChildLevel) levelNodes[id] = n;
+        });
+        const pos = H ? H.getSmartLevelPlacement(selectedNode.id, levelNodes) : { x: 80, y: 100 };
+        dispatch({
+            type: 'ADD_NODE',
+            payload: {
+                name: '💬 AI Assistant Copilot',
+                type: 'ai-agent',
+                position: pos,
+                size: { w: 380, h: 480 },
+                color: '#3b0764',
+                parentId: selectedNode.id // normalizeContainer превратит это в ownerId
+            }
+        });
+    };
+
+    // --- Контекст «выделен слой»: ассистент/подслой ВНУТРИ слоя (parentId,
+    // группировка того же уровня — не смена владения). Узел внутрь слоя уже
+    // создаёт addNode() через addCtx (getAddContext уже отдаёт parentId
+    // слоя), «слой внутрь слоя» — уже addLayer() тем же путём; здесь только
+    // недостающий кейс — ассистент. ---
+    const addAssistantInLayer = () => {
+        if (!selectedLayer) return;
+        dispatch({
+            type: 'ADD_NODE',
+            payload: {
+                name: '💬 AI Assistant Copilot',
+                type: 'ai-agent',
+                position: { x: 40, y: 80 },
+                size: { w: 380, h: 480 },
+                color: '#3b0764',
+                parentId: selectedLayer.id
+            }
+        });
+    };
+
     const toggleAddPortMode = () => {
         dispatch({ type: 'SET_MODE', payload: state.interactionMode === 'add-port' ? 'default' : 'add-port' });
     };
@@ -175,41 +267,63 @@ function Toolbar() {
         return wins.length ? Math.max(...wins.map(w => w.levelIndex || 0)) + 1 : 0;
     })();
     const gateClass = (okClass) => hasProject ? okClass : 'opacity-40 cursor-not-allowed text-gray-500';
+    // Приглушение спутника, нерелевантного текущему контексту выделения
+    // (PLAN_LAYERS_AND_CONTEXT_CREATION.md, разд.5): порт/уровень/проект гасятся,
+    // когда выделен узел или слой — независимо от hasProject.
+    const DIM_CONTEXT = 'opacity-30 cursor-not-allowed text-gray-500';
+    const irrelevantInContext = fabContext !== 'none';
+
+    // «layer»-слот: три разных действия по контексту — независимый слой
+    // (root), дочерний слой на подуровне узла, слой внутрь выделенного слоя.
+    // Одна и та же позиция веера, разный смысл — намеренно раздельные функции,
+    // а не одна веточка if внутри addLayer() (⚠️ п.0.3, фикс «галлюцинации»).
+    const layerSat = fabContext === 'node'
+        ? { title: `Добавить дочерний слой на подуровень (Уровень ${nodeChildLevel})`, onClick: addChildLayer, ok: true }
+        : fabContext === 'layer'
+            ? { title: `Добавить слой внутрь слоя «${selectedLayer.name}»`, onClick: addLayer, ok: true }
+            : { title: addCtx.ok ? 'Добавить независимый слой' : addDisabledHint, onClick: addLayer, ok: addCtx.ok };
+
+    const assistantSat = fabContext === 'node'
+        ? { title: `Добавить дочернего ассистента на подуровень (Уровень ${nodeChildLevel})`, onClick: addChildAssistant, ok: true }
+        : fabContext === 'layer'
+            ? { title: `Добавить ассистента внутрь слоя «${selectedLayer.name}»`, onClick: addAssistantInLayer, ok: true }
+            : { title: hasProject ? 'Добавить ассистента' : addDisabledHint, onClick: addAssistant, ok: hasProject };
+
     const satellites = [
         {
             key: 'port', angleDeg: 260, icon: 'icon-circle',
-            title: hasProject ? 'Добавить порт (Кликните по краю узла)' : addDisabledHint,
-            active: state.interactionMode === 'add-port', disabled: !hasProject,
+            title: irrelevantInContext ? 'Недоступно при этом выделении' : (hasProject ? 'Добавить порт (Кликните по краю узла)' : addDisabledHint),
+            active: state.interactionMode === 'add-port', disabled: !hasProject || irrelevantInContext,
             onClick: toggleAddPortMode,
-            colorClass: gateClass(state.interactionMode === 'add-port' ? 'btn-primary' : 'text-gray-300 hover:text-white')
+            colorClass: irrelevantInContext ? DIM_CONTEXT : gateClass(state.interactionMode === 'add-port' ? 'btn-primary' : 'text-gray-300 hover:text-white')
         },
         {
             key: 'layer', angleDeg: 220, icon: 'icon-layers',
-            title: addCtx.ok ? 'Добавить слой' : addDisabledHint,
-            active: false, disabled: !addCtx.ok,
-            onClick: addLayer,
-            colorClass: addCtx.ok ? 'text-orange-400 hover:text-orange-300 hover:bg-white/5' : 'opacity-40 cursor-not-allowed text-gray-500'
+            title: layerSat.ok ? layerSat.title : addDisabledHint,
+            active: false, disabled: !layerSat.ok,
+            onClick: layerSat.onClick,
+            colorClass: layerSat.ok ? 'text-orange-400 hover:text-orange-300 hover:bg-white/5' : 'opacity-40 cursor-not-allowed text-gray-500'
         },
         {
             key: 'level', angleDeg: 180, icon: 'icon-folder-plus',
-            title: hasProject ? `Добавить уровень (новый пустой Уровень ${nextLevelIndex})` : addDisabledHint,
-            active: false, disabled: !hasProject,
+            title: irrelevantInContext ? 'Недоступно при этом выделении' : (hasProject ? `Добавить уровень (новый пустой Уровень ${nextLevelIndex})` : addDisabledHint),
+            active: false, disabled: !hasProject || irrelevantInContext,
             onClick: addLevel,
-            colorClass: gateClass('text-sky-400 hover:text-sky-300 hover:bg-white/5')
+            colorClass: irrelevantInContext ? DIM_CONTEXT : gateClass('text-sky-400 hover:text-sky-300 hover:bg-white/5')
         },
         {
             key: 'assistant', angleDeg: 140, icon: 'icon-bot',
-            title: hasProject ? 'Добавить ассистента' : addDisabledHint,
-            active: isAssistantSelected, disabled: !hasProject,
-            onClick: addAssistant,
-            colorClass: gateClass('text-purple-400 hover:text-purple-300')
+            title: assistantSat.ok ? assistantSat.title : addDisabledHint,
+            active: isAssistantSelected, disabled: !assistantSat.ok,
+            onClick: assistantSat.onClick,
+            colorClass: assistantSat.ok ? 'text-purple-400 hover:text-purple-300' : 'opacity-40 cursor-not-allowed text-gray-500'
         },
         {
             key: 'project', angleDeg: 100, icon: 'icon-globe',
-            title: 'Добавить проект (новый независимый проект на этом же холсте)',
-            active: false, disabled: false,
+            title: irrelevantInContext ? 'Недоступно при этом выделении' : 'Добавить проект (новый независимый проект на этом же холсте)',
+            active: false, disabled: irrelevantInContext,
             onClick: addProject,
-            colorClass: 'text-emerald-400 hover:text-emerald-300 hover:bg-white/5'
+            colorClass: irrelevantInContext ? DIM_CONTEXT : 'text-emerald-400 hover:text-emerald-300 hover:bg-white/5'
         }
     ];
 
@@ -250,12 +364,25 @@ function Toolbar() {
         }
     };
 
+    // Действие по умолчанию главной «+»: зависит от контекста (⚠️ разд.5) —
+    // узел выделен → его потомок на подуровне (раньше это была кнопка «+» в
+    // шапке Node.js, ⚠️ п.0.7); слой выделен → узел внутрь него (addNode()
+    // уже это делает через addCtx); иначе — обычный узел на текущем холсте.
+    const fabOk = fabContext === 'node' ? true : (fabContext === 'layer' ? true : addCtx.ok);
+    const fabDefaultAction = fabContext === 'node' ? addChildNode : addNode;
+    const fabTitle = fabContext === 'node'
+        ? `Добавить дочерний узел на Уровень ${nodeChildLevel} для «${selectedNode.name}»`
+        : fabContext === 'layer'
+            ? `Добавить узел внутрь слоя «${selectedLayer.name}»`
+            : (addCtx.ok ? 'Быстрый пустой узел (наведите — ещё действия)' : addDisabledHint);
+
     const handleFabClick = () => {
         if (isLongPressRef.current) {
             isLongPressRef.current = false;
             return;
         }
-        addNode();
+        if (!fabOk) return;
+        fabDefaultAction();
         closeMenuImmediately();
     };
 
@@ -314,9 +441,9 @@ function Toolbar() {
 
                 <button
                     className={`btn relative w-12 h-12 p-0 rounded-full shadow-2xl flex items-center justify-center transition-colors z-10 ${
-                        addCtx.ok ? 'btn-primary' : 'opacity-40 cursor-not-allowed text-gray-500'
+                        fabOk ? 'btn-primary' : 'opacity-40 cursor-not-allowed text-gray-500'
                     }`}
-                    title={addCtx.ok ? 'Быстрый пустой узел (наведите — ещё действия)' : addDisabledHint}
+                    title={fabTitle}
                     onClick={handleFabClick}
                     onTouchStart={handleTouchStart}
                     onTouchMove={handleTouchMove}
@@ -324,6 +451,15 @@ function Toolbar() {
                     onTouchCancel={handleTouchEnd}
                 >
                     <div className="icon-square-plus text-2xl"></div>
+                    {/* Бейдж контекста (разд.5): «+» меняет смысл при выделении узла/слоя */}
+                    {fabContext === 'node' && (
+                        <span className="absolute -bottom-1 -right-1 text-[9px] leading-none font-bold bg-slate-900 text-white rounded-full w-4 h-4 flex items-center justify-center border border-white/30">
+                            L{nodeChildLevel}
+                        </span>
+                    )}
+                    {fabContext === 'layer' && (
+                        <div className="icon-layers absolute -bottom-1 -right-1 text-xs bg-slate-900 text-orange-400 rounded-full w-4 h-4 flex items-center justify-center border border-white/30"></div>
+                    )}
                 </button>
             </div>
         </div>

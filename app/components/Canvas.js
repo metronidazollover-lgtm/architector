@@ -758,8 +758,28 @@ function Canvas() {
                         return state.activeProjectId;
                     })();
                     const dragProjectView = getProjectFlatView(dragPid);
+                    // Расширяем перетаскиваемый набор его parentId-вложенными потомками
+                    // (например, узел, назначенный на перетаскиваемый слой) — этот оверлей
+                    // рисуется ПОВЕРХ всех окон и не режется их overflow-hidden, но включает
+                    // только явно перечисленные id; без расширения вложенный узел остаётся
+                    // рендериться исключительно «под» границей своего исходного окна и пропадает
+                    // из виду в момент, когда слой визуально пересекает эту границу (баг: узел,
+                    // назначенный на перетаскиваемый слой, исчезал на время пересечения).
+                    const expandedDragIds = (() => {
+                        const seeds = state.dragGesture.ids;
+                        const keep = new Set(seeds);
+                        if (H.hasAncestorIn) {
+                            Object.keys(dragProjectView.nodes || {}).forEach(nid => {
+                                if (!keep.has(nid) && H.hasAncestorIn(nid, seeds, dragProjectView.nodes, dragProjectView.layers)) keep.add(nid);
+                            });
+                            Object.keys(dragProjectView.layers || {}).forEach(lid => {
+                                if (!keep.has(lid) && H.hasAncestorIn(lid, seeds, dragProjectView.nodes, dragProjectView.layers)) keep.add(lid);
+                            });
+                        }
+                        return Array.from(keep);
+                    })();
                     const byWin = {};
-                    state.dragGesture.ids.forEach(id => {
+                    expandedDragIds.forEach(id => {
                         if (!dragProjectView.nodes[id] && !(dragProjectView.layers && dragProjectView.layers[id])) return;
                         const lvl = H.getEntityLevel(id, dragProjectView.nodes, dragProjectView.layers);
                         const win = H.getWindowOfLevel(lvl, dragProjectView.levelWindows);

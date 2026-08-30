@@ -138,6 +138,86 @@ function Layer(props) {
             else if (state.layers && state.layers[id]) initialPositions[id] = { ...state.layers[id].position };
         });
 
+        // ==== Drag&Drop: перенос СЛОЯ (PLAN_LAYERS_AND_CONTEXT_CREATION.md,
+        // 2026-08-30 — этап 3 PLAN_DRAG_AND_DROP.md). Портировано из Node.js:
+        // резолвер цели, подсветка, подтверждение, откат — тот же паттерн.
+        // «Только верхние» из выделения (свои потомки едут в связке), как в Node.js;
+        // это ОТДЕЛЬНЫЙ набор от allIdsToMove (тот — визуальные пассажиры-соседи
+        // при locked-слое, они не переносятся).
+        const H = window.HierarchyUtils;
+        // Фикс (2026-08-30, по итогам ручного тестирования): расталкивание
+        // соседей должно гаситься ВЕСЬ жест целиком, пока включён режим
+        // Drag&Drop — а не только когда резолвер цели (throttled, раз в кадр)
+        // уже успел найти конкретный валидный слой/узел под курсором. Иначе
+        // расталкивание и резолвер цели гонятся друг за другом, и слой не
+        // получается устойчиво навести на другой слой для вложения. Тумблер
+        // физически нельзя переключить той же рукой, что держит перетаскивание,
+        // поэтому фиксация на старте жеста безопасна.
+        const dragDropModeAtStart = !!(state.ui && state.ui.dragDropMode);
+        const topDraggedIds = (st) => {
+            const sel = (st.selectedIds || []).filter(sid => st.nodes[sid] || (st.layers && st.layers[sid]));
+            const ids = sel.includes(data.id) && sel.length > 0 ? sel : [data.id];
+            return ids.filter(nid => !ids.some(other =>
+                other !== nid && H && H.hasAncestorIn && H.hasAncestorIn(nid, [other], st.nodes, st.layers)));
+        };
+
+        const computeTarget = (ev) => {
+            const st = getProjectFlatView(projectId);
+            const container = document.getElementById('canvas-container');
+            const rect = container ? container.getBoundingClientRect() : { left: 0, top: 0 };
+            const wx = (ev.clientX - rect.left - st.canvas.offset.x) / st.canvas.zoom;
+            const wy = (ev.clientY - rect.top - st.canvas.offset.y) / st.canvas.zoom;
+            const ids = topDraggedIds(st);
+            const target = (H && H.getDropTarget)
+                ? H.getDropTarget(ids, { x: wx, y: wy }, st, { dragDropMode: !!(st.ui && st.ui.dragDropMode) })
+                : null;
+            return { st, ids, target };
+        };
+
+        // Резолвер цели (подсветка/курсор/текст подтверждения) считается не
+        // чаще раза в кадр (raf) — на решение «гасить ли расталкивание» больше
+        // не влияет (см. dragDropModeAtStart выше), это отдельная забота.
+        let lastTargetKey = null;
+        let gesturePending = null;
+        const updateGestureThrottled = (ev) => {
+            const point = { clientX: ev.clientX, clientY: ev.clientY };
+            if (gesturePending !== null) { gesturePending = point; return; }
+            gesturePending = point;
+            requestAnimationFrame(() => {
+                const p = gesturePending;
+                gesturePending = null;
+                if (p) updateGesture(p);
+            });
+        };
+        const updateGesture = (ev) => {
+            const { st, ids, target } = computeTarget(ev);
+            const key = target ? `${target.kind}:${target.id}:${target.valid}` : 'void';
+            if (key === lastTargetKey) return;
+            lastTargetKey = key;
+            dispatch({ type: 'SET_DRAG_GESTURE', payload: { ids, target } });
+            const dndOn = !!(st.ui && st.ui.dragDropMode);
+            document.body.style.cursor = (dndOn && (!target || !target.valid)) ? 'not-allowed' : '';
+        };
+
+        const cleanup = () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+            window.removeEventListener('keydown', handleKeyDown);
+            document.body.style.cursor = '';
+        };
+
+        // Откат жеста: сущности возвращаются к срезу на mousedown (без истории)
+        const restoreGesture = () => {
+            dispatch({ type: 'RESTORE_ENTITIES', payload: { nodes: initialSnapshot.nodes, layers: initialSnapshot.layers } });
+        };
+
+        const handleKeyDown = (kev) => {
+            if (kev.key !== 'Escape') return;
+            cleanup();
+            if (hasMoved) restoreGesture();
+            else dispatch({ type: 'SET_DRAG_GESTURE', payload: null });
+        };
+
         const handleMouseMove = (moveEvent) => {
             hasMoved = true;
             let dx = (moveEvent.clientX - startX) / zoom;
@@ -153,15 +233,27 @@ function Layer(props) {
                 dy = snappedY - initialPositions[data.id].y;
             }
 
-            // Коллизия слоёв: корректируем позицию, чтобы не перекрывать соседей
             const rawX = initialPositions[data.id].x + dx;
             const rawY = initialPositions[data.id].y + dy;
-            const resolved = window.GeometryUtils.resolveLayerCollision(
-                data.id, rawX, rawY, lw, lh, state.layers
-            );
-            const resolvedDx = resolved.x - initialPositions[data.id].x;
-            const resolvedDy = resolved.y - initialPositions[data.id].y;
-            
+
+            // Расталкивание соседей гасится ВСЮ длительность жеста, пока включён
+            // режим Drag&Drop — независимо от того, навелись ли уже точно на
+            // конкретную валидную цель. Так другие слои «пропускают» перетаскиваемый
+            // слой сквозь себя и дают его вложить — ровно как через поповер
+            // «Назначить на слой» (там расталкивания никогда не было).
+            const suppressCollision = dragDropModeAtStart;
+            let resolvedDx, resolvedDy;
+            if (suppressCollision) {
+                resolvedDx = dx;
+                resolvedDy = dy;
+            } else {
+                const resolved = window.GeometryUtils.resolveLayerCollision(
+                    data.id, rawX, rawY, lw, lh, state.layers
+                );
+                resolvedDx = resolved.x - initialPositions[data.id].x;
+                resolvedDy = resolved.y - initialPositions[data.id].y;
+            }
+
             const selectedSet = new Set(allIdsToMove);
             const hasSelectedAncestor = (id) => {
                 let current = (state.nodes && state.nodes[id]) || (state.layers && state.layers[id]);
@@ -186,21 +278,68 @@ function Layer(props) {
                     }
                 }
             });
+
+            updateGestureThrottled(moveEvent);
         };
 
-        const handleMouseUp = () => {
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
-            if (hasMoved) {
-                dispatch({
-                    type: 'COMMIT_HISTORY',
-                    payload: { snapshot: initialSnapshot, logMessage: `Перемещение слоя: ${data.name}` }
-                });
+        const handleMouseUp = (upEvent) => {
+            cleanup();
+
+            if (!hasMoved) return;
+
+            const { st, ids, target } = computeTarget(upEvent);
+            const dndOn = !!(st.ui && st.ui.dragDropMode);
+            const clearGesture = () => dispatch({ type: 'SET_DRAG_GESTURE', payload: null });
+
+            const isTransfer = target && target.valid && !(target.kind === 'window' && target.isMove);
+            if (isTransfer && H) {
+                const text = H.buildTransferConfirmText
+                    ? H.buildTransferConfirmText(ids, target, st)
+                    : 'Перенести выбранные элементы?';
+                if (window.confirm(text)) {
+                    clearGesture();
+                    const basePayload = {
+                        ids,
+                        historySnapshot: {
+                            nodes: initialSnapshot.nodes,
+                            layers: initialSnapshot.layers,
+                            ports: initialSnapshot.ports,
+                            links: initialSnapshot.links
+                        }
+                    };
+                    if (target.kind === 'node') {
+                        const ownerLvl = H.getEntityLevel(target.id, st.nodes, st.layers);
+                        dispatch({ type: 'TRANSFER_NODE', payload: { ...basePayload, targetLevelIndex: ownerLvl + 1, newOwnerId: target.id } });
+                    } else if (target.kind === 'layer') {
+                        dispatch({ type: 'TRANSFER_NODE', payload: { ...basePayload, targetLayerId: target.id } });
+                    } else {
+                        const win = st.levelWindows[target.id];
+                        const positionsById = H.computeDropPositions
+                            ? H.computeDropPositions(ids, win, st)
+                            : null;
+                        dispatch({ type: 'TRANSFER_NODE', payload: { ...basePayload, targetLevelIndex: win.levelIndex, ...(positionsById ? { positionsById } : {}) } });
+                    }
+                } else {
+                    restoreGesture();
+                }
+                return;
             }
+
+            if (dndOn && (!target || !target.valid)) {
+                restoreGesture();
+                return;
+            }
+
+            clearGesture();
+            dispatch({
+                type: 'COMMIT_HISTORY',
+                payload: { snapshot: initialSnapshot, logMessage: `Перемещение слоя: ${data.name}` }
+            });
         };
 
         window.addEventListener('mousemove', handleMouseMove);
         window.addEventListener('mouseup', handleMouseUp);
+        window.addEventListener('keydown', handleKeyDown);
     };
 
     const handleResizeMouseDown = (e) => {
@@ -258,7 +397,7 @@ function Layer(props) {
             : Object.values(state.nodes || {}).filter(n => n.parentId === data.id);
         if (layerNodes.length === 0) return;
         
-        const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, data, state.nodes);
+        const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, data, state.nodes, state.layers);
         
         dispatch({ type: 'UPDATE_LAYER', payload: { id: data.id, updates: { size: newLayerSize } } });
         dispatch({ type: 'MASS_UPDATE', payload: { ids: layerNodes.map(n=>n.id), updatesById } });

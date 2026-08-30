@@ -148,7 +148,7 @@ function AIAgentNodeContent({ nodeId }) {
                     if (layer) {
                         const layerNodes = Object.values(latestState.nodes || {}).filter(n => n && n.parentId === lId);
                         if (layerNodes.length > 0 && window.GeometryUtils && window.GeometryUtils.getSmartPlacement) {
-                            const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, layer, latestState.nodes);
+                            const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, layer, latestState.nodes, latestState.layers);
                             dispatch({ type: 'UPDATE_LAYER', payload: { id: lId, updates: { size: newLayerSize }, skipHistory: true } });
                             dispatch({ type: 'MASS_UPDATE', payload: { ids: layerNodes.map(n => n.id), updatesById, skipHistory: true } });
                         }

@@ -1300,10 +1300,20 @@ const reducer = (state, action) => {
             const id = action.payload.id || 'layer-' + Date.now() + Math.floor(Math.random() * 1000);
             const historyState = saveHistory(state, `Добавлен слой: ${action.payload.name}`);
             const parentId = action.payload.parentId !== undefined ? action.payload.parentId : 'root';
+            const newLayers = { ...state.layers, [id]: normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true }, state.nodes) };
+            // Вложение подслоя (parentId — другой слой, из FAB «Добавить слой
+            // внутрь этого слоя»): цепочка родителей подрастает под содержимое.
+            const H = getHierarchy();
+            if (parentId !== 'root' && newLayers[parentId] && H && H.bubbleUpLayerResize) {
+                const sizeUpdates = H.bubbleUpLayerResize(id, { nodes: state.nodes, layers: newLayers });
+                Object.entries(sizeUpdates).forEach(([lid, size]) => {
+                    if (newLayers[lid]) newLayers[lid] = { ...newLayers[lid], size };
+                });
+            }
             return {
                 ...state,
                 ...historyState,
-                layers: { ...state.layers, [id]: normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true }, state.nodes) },
+                layers: newLayers,
                 selectedIds: [id]
             };
         }
@@ -1385,7 +1395,7 @@ const reducer = (state, action) => {
                 const layer = state.layers[parentId];
                 const layerNodes = Object.values(updatedNodes).filter(n => n && n.parentId === parentId);
                 if (layerNodes.length > 0 && geom && geom.getSmartPlacement) {
-                    const { updatesById, newLayerSize } = geom.getSmartPlacement(layerNodes, layer, updatedNodes);
+                    const { updatesById, newLayerSize } = geom.getSmartPlacement(layerNodes, layer, updatedNodes, updatedLayers);
                     updatedLayers[parentId] = { ...layer, size: newLayerSize };
                     Object.keys(updatesById).forEach(nId => {
                         if (updatedNodes[nId]) {
@@ -2124,15 +2134,57 @@ const reducer = (state, action) => {
             const G = getGeometry();
             if (!H) return state;
 
+            // Сущность — узел ИЛИ слой (PLAN_LAYERS_AND_CONTEXT_CREATION.md,
+            // 2026-08-30 — этап 3 PLAN_DRAG_AND_DROP.md: перенос слоя тем же
+            // механизмом, что и узла). Массовый/смешанный перенос слоя(ёв)
+            // вместе с чем-то ещё — этап 4, вне объёма: отклоняем как no-op.
+            const isNodeId = (eid) => !!(state.nodes && state.nodes[eid]);
+            const isLayerId = (eid) => !!(state.layers && state.layers[eid]);
+            const getEntity = (eid) => (state.nodes && state.nodes[eid]) || (state.layers && state.layers[eid]);
+            // newNodes/newLayers объявляются ниже (const, тот же блок) — замыкания
+            // читают/пишут их по ссылке, вызываются только ПОСЛЕ объявления.
+            const getNew = (eid) => (isNodeId(eid) ? newNodes[eid] : newLayers[eid]);
+            const setNew = (eid, val) => { if (isNodeId(eid)) newNodes[eid] = val; else newLayers[eid] = val; };
+
+            // Потомок ИМЕННО по владению (ownerId-цепочка) — настоящий переезд
+            // на новый уровень вслед за владельцем. НЕ то же самое, что общая
+            // HierarchyUtils.hasAncestorIn: та считает потомком и того, кто
+            // просто вложен в переехавший слой через parentId (координатная
+            // группировка) — такой уже корректно следует за слоем композицией
+            // позиций, у него другая система координат (локальная для слоя, а
+            // не холста), и раздвигать/трогать его здесь нельзя (баг: узел,
+            // назначенный на переносимый слой, «вылетал» из него после дропа).
+            const isOwnerDescendant = (eid, ancestorId) => {
+                let current = getEntity(eid);
+                const visited = new Set();
+                while (current && current.ownerId && !visited.has(current.id)) {
+                    visited.add(current.id);
+                    if (current.ownerId === ancestorId) return true;
+                    current = getEntity(current.ownerId);
+                }
+                return false;
+            };
+
             const rawIds = Array.isArray(p.ids) ? p.ids : (p.id ? [p.id] : []);
-            const ids = rawIds.filter(nid => state.nodes && state.nodes[nid]);
+            const ids = rawIds.filter(nid => getEntity(nid));
             if (ids.length === 0) return state;
+            const draggedLayerIds = ids.filter(isLayerId);
+            if (draggedLayerIds.length > 0 && ids.length > 1) return state;
 
             const targetLayer = (p.targetLayerId && state.layers) ? state.layers[p.targetLayerId] : null;
             const targetLevel = targetLayer
                 ? H.getEntityLevel(targetLayer.id, state.nodes, state.layers)
                 : (typeof p.targetLevelIndex === 'number' ? p.targetLevelIndex : null);
             if (targetLevel === null || targetLevel < 0) return state;
+
+            // Защита от циклов parentId: слой нельзя бросить в слой, который
+            // сам лежит внутри него (координатный контейнер, не ownerId-ветка —
+            // для той у cross-level уже есть «спуск» ниже). У узлов такого риска
+            // нет: parentId никогда не указывает на узел (normalizeContainer).
+            if (targetLayer && draggedLayerIds.some(lid =>
+                H.isDescendantOf(targetLayer.id, lid, state.nodes, state.layers))) {
+                return state;
+            }
 
             // «Только верхние»: у кого в этом же наборе есть предок по владению — пропускаем
             const topIds = ids.filter(nid => !ids.some(other =>
@@ -2221,14 +2273,14 @@ const reducer = (state, action) => {
                     const wLvl = H.getEntityLevel(w.id, state.nodes, state.layers);
                     newLayers[w.id] = dropGap({ ...newLayers[w.id], ownerId: null, homeLevel: wLvl });
                 });
-                // Сам узел: сирота в целевом слое (уровень даёт контейнер)
-                newNodes[nid] = dropGap({ ...newNodes[nid], ownerId: null, homeLevel: targetLevel, parentId: targetLayer.id });
+                // Сама сущность (узел или слой): сирота в целевом слое
+                setNew(nid, dropGap({ ...getNew(nid), ownerId: null, homeLevel: targetLevel, parentId: targetLayer.id }));
                 intoLayerIds.push(nid);
             });
 
             // 2. Последователи спустившегося усыновителя: сироты-братья в слое
             followerIds.forEach(nid => {
-                newNodes[nid] = dropGap({ ...newNodes[nid], ownerId: null, homeLevel: targetLevel, parentId: targetLayer.id });
+                setNew(nid, dropGap({ ...getNew(nid), ownerId: null, homeLevel: targetLevel, parentId: targetLayer.id }));
                 intoLayerIds.push(nid);
             });
 
@@ -2238,13 +2290,13 @@ const reducer = (state, action) => {
             normalIds.forEach(nid => {
                 const orphan = targetLevel === 0 || !adoptOwner;
                 const dropPos = (p.positionsById && p.positionsById[nid]) || p.position;
-                newNodes[nid] = dropGap({
-                    ...newNodes[nid],
+                setNew(nid, dropGap({
+                    ...getNew(nid),
                     ownerId: orphan ? null : adoptOwner,
                     ...(orphan ? { homeLevel: targetLevel } : {}),
                     parentId: targetLayer ? targetLayer.id : 'root',
                     ...(dropPos ? { position: dropPos } : {})
-                });
+                }));
                 if (targetLayer) intoLayerIds.push(nid);
             });
 
@@ -2253,32 +2305,49 @@ const reducer = (state, action) => {
             //    группировка (только контейнер)
             sameLevelIds.forEach(nid => {
                 if (p.newOwnerId && adoptOwner) {
-                    newNodes[nid] = dropGap({ ...newNodes[nid], ownerId: adoptOwner });
+                    setNew(nid, dropGap({ ...getNew(nid), ownerId: adoptOwner }));
                     return;
                 }
-                newNodes[nid] = { ...newNodes[nid], parentId: targetLayer ? targetLayer.id : 'root' };
+                setNew(nid, { ...getNew(nid), parentId: targetLayer ? targetLayer.id : 'root' });
                 if (targetLayer) intoLayerIds.push(nid);
             });
 
             // Авторазмещение положенных в слой + подгонка размера слоя
             if (targetLayer && intoLayerIds.length > 0 && G && G.getSmartPlacement) {
-                const placed = intoLayerIds.map(nid => newNodes[nid]);
-                const { updatesById, newLayerSize } = G.getSmartPlacement(placed, newLayers[targetLayer.id], newNodes);
+                const placed = intoLayerIds.map(nid => getNew(nid)).filter(Boolean);
+                const { updatesById, newLayerSize } = G.getSmartPlacement(placed, newLayers[targetLayer.id], newNodes, newLayers);
                 newLayers[targetLayer.id] = { ...newLayers[targetLayer.id], size: newLayerSize };
                 Object.entries(updatesById || {}).forEach(([nid, upd]) => {
-                    if (newNodes[nid]) newNodes[nid] = { ...newNodes[nid], ...upd };
+                    const cur = getNew(nid);
+                    if (cur) setNew(nid, { ...cur, ...upd });
                 });
+                // Положенная сущность может быть слоем — её собственный родитель
+                // (и вся цепочка выше) должен подрасти под новое содержимое.
+                if (H.bubbleUpLayerResize) {
+                    intoLayerIds.forEach(nid => {
+                        const sizeUpdates = H.bubbleUpLayerResize(nid, { nodes: newNodes, layers: newLayers });
+                        Object.entries(sizeUpdates).forEach(([lid, size]) => {
+                            if (newLayers[lid]) newLayers[lid] = { ...newLayers[lid], size };
+                        });
+                    });
+                }
             }
 
             // Расталкивание потомков переехавших узлов: они сохранили координаты,
             // но оказались на других холстах — сдвигаем группу каждого уровня
-            // единым блоком вправо от занятых мест, если наложились на местных
+            // единым блоком вправо от занятых мест, если наложились на местных.
+            // ⚠️ Только настоящие ownerId-потомки (переехали вслед за владельцем
+            // на новый уровень, координаты — холста, сравнимы с локальными).
+            // Тот, кто просто вложен в переехавший СЛОЙ через parentId, сюда не
+            // входит — его координаты локальные для слоя, а не холста, и он и
+            // так корректно едет за слоем композицией позиций (isOwnerDescendant,
+            // не общая hasAncestorIn — та считает потомком и parentId-вложенных).
             const movedIds = [...normalIds, ...followerIds];
             if (movedIds.length > 0) {
                 const byLevel = {};
                 Object.keys(newNodes).forEach(nid => {
                     if (movedIds.includes(nid)) return;
-                    if (movedIds.some(tid => H.hasAncestorIn && H.hasAncestorIn(nid, [tid], newNodes, newLayers))) {
+                    if (movedIds.some(tid => isOwnerDescendant(nid, tid))) {
                         const lvl = H.getEntityLevel(nid, newNodes, newLayers);
                         (byLevel[lvl] = byLevel[lvl] || []).push(nid);
                     }
@@ -2298,15 +2367,16 @@ const reducer = (state, action) => {
                     const locals = Object.values(newNodes).filter(n => n && !group.includes(n.id) &&
                         H.getEntityLevel(n.id, newNodes, newLayers) === lvl);
                     if (locals.length === 0) return;
-                    const gBox = bboxOf(group.map(nid => newNodes[nid]));
+                    const gBox = bboxOf(group.map(nid => getNew(nid)).filter(Boolean));
                     const lBox = bboxOf(locals);
                     const overlaps = gBox.minX < lBox.maxX && gBox.maxX > lBox.minX &&
                         gBox.minY < lBox.maxY && gBox.maxY > lBox.minY;
                     if (overlaps) {
                         const dx = (lBox.maxX + 60) - gBox.minX;
                         group.forEach(nid => {
-                            const n = newNodes[nid];
-                            newNodes[nid] = { ...n, position: { x: (n.position ? n.position.x : 0) + dx, y: n.position ? n.position.y : 0 } };
+                            const n = getNew(nid);
+                            if (!n) return;
+                            setNew(nid, { ...n, position: { x: (n.position ? n.position.x : 0) + dx, y: n.position ? n.position.y : 0 } });
                         });
                     }
                 });

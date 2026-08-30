@@ -164,9 +164,18 @@ const GeometryUtils = {
      * Авторасстановка узлов внутри слоя без перекрытий.
      * С формата v10 работает в координатах, относительных к слою:
      * и existingNodes (дети слоя), и результат — относительные позиции.
+     *
+     * `allLayers` (опционально, PLAN_LAYERS_AND_CONTEXT_CREATION.md, 2026-08-30):
+     * вложенные слои этого же слоя-контейнера учитываются в bounding-box и
+     * проверке перекрытия наравне с узлами, чтобы новый узел не лёг поверх
+     * уже существующего вложенного слоя. Без аргумента поведение не меняется
+     * (обратная совместимость с существующими вызовами).
      */
-    getSmartPlacement: (nodesToPlace, layer, allNodes) => {
+    getSmartPlacement: (nodesToPlace, layer, allNodes, allLayers = null) => {
         const existingNodes = Object.values(allNodes).filter(n => n.parentId === layer.id && !nodesToPlace.find(ntp => ntp.id === n.id));
+        const existingLayers = allLayers
+            ? Object.values(allLayers).filter(l => l.id !== layer.id && l.parentId === layer.id)
+            : [];
 
         const padding = 20;
         const startX = padding;
@@ -176,7 +185,10 @@ const GeometryUtils = {
         let layerH = layer.size?.h || 400;
 
         const updatesById = {};
-        const placedRects = existingNodes.map(n => ({ x: n.position.x, y: n.position.y, w: n.size?.w || 200, h: n.size?.h || 100 }));
+        const placedRects = [
+            ...existingNodes.map(n => ({ x: n.position.x, y: n.position.y, w: n.size?.w || 200, h: n.size?.h || 100 })),
+            ...existingLayers.map(l => ({ x: l.position.x, y: l.position.y, w: l.size?.w || 600, h: l.size?.h || 400 }))
+        ];
 
         const checkOverlap = (x, y, w, h) => {
             for (let r of placedRects) {
