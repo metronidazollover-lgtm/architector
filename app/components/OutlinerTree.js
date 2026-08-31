@@ -100,30 +100,30 @@ function OutlinerTree({ onSelect }) {
     };
 
 
+    // v13 (Фаза 5.3): REPARENT_ENTITY принимает любой контейнер как цель —
+    // больше нет отдельной ветки TRANSFER_NODE для «слоя чужого уровня»
+    // (её больше не существует как отдельного случая, см. AGENTS.md, строка
+    // REPARENT_ENTITY). canTransferToLayer заменена на подготовленную в
+    // Фазе 3 canReparentTo (self/цикл/существование цели, единая проверка
+    // и для узлов, и для слоёв, и для окон-якорей).
     const canDropOn = (targetId) => {
         const dragId = dragIdRef.current;
         if (!dragId || dragId === targetId) return false;
         const dragged = state.nodes[dragId] || (state.layers && state.layers[dragId]);
         if (!dragged || dragged.parentId === targetId) return false;
-        if (targetId !== 'root' && H.isDescendantOf(targetId, dragId, state.nodes, state.layers)) return false;
-        // Слой в ветке перетаскиваемого узла принять его не может
-        // («стань собственным ребёнком») — цель не подсвечивается
-        if (state.layers && state.layers[targetId] && state.nodes[dragId] && H.canTransferToLayer) {
-            if (!H.canTransferToLayer(dragId, targetId, state.nodes, state.layers).ok) return false;
-        }
+        if (!H.canReparentTo(dragId, targetId, state.nodes, state.layers, state.levelWindows).ok) return false;
         // Кросс-уровневый сброс (перенос между уровнями) доступен только при
         // включённом режиме Drag&Drop — иначе цель не подсвечивается.
-        // Сброс на «Главный холст» (root) меняет только контейнер (уровень
-        // задаётся владельцем) — он не гейтится.
+        // Сброс на «Главный холст» (root) меняет только контейнер уровня,
+        // на котором сущность уже находится — он не гейтится.
         if (!(state.ui && state.ui.dragDropMode) && H.getEntityLevel && targetId !== 'root') {
-            const targetLvl = H.getEntityLevel(targetId, state.nodes, state.layers);
-            const dragLvl = H.getEntityLevel(dragId, state.nodes, state.layers);
-            const targetIsLayer = !!(state.layers && state.layers[targetId]);
-            if (targetIsLayer) {
-                if (targetLvl !== dragLvl) return false; // слой чужого уровня
-            } else if (targetLvl + 1 !== dragLvl) {
-                return false; // вложение в узел = смена уровня ребёнка
-            }
+            const targetIsNode = !!(state.nodes && state.nodes[targetId]);
+            const targetLvl = H.getEntityLevel(targetId, state.nodes, state.layers, state.levelWindows);
+            const dragLvl = H.getEntityLevel(dragId, state.nodes, state.layers, state.levelWindows);
+            // Вложение В УЗЕЛ — это спуск на его подуровень (targetLvl + 1);
+            // вложение в слой/окно-якорь — группировка на ЕГО СОБСТВЕННОМ уровне.
+            const requiredDragLvl = targetIsNode ? targetLvl + 1 : targetLvl;
+            if (dragLvl !== requiredDragLvl) return false;
         }
         return true;
     };
@@ -131,18 +131,7 @@ function OutlinerTree({ onSelect }) {
     const handleDrop = (targetId) => {
         if (canDropOn(targetId)) {
             const dragId = dragIdRef.current;
-            const H = window.HierarchyUtils;
-            const isTargetLayer = !!(state.layers && state.layers[targetId]);
-            const isDragNode = !!(state.nodes && state.nodes[dragId]);
-            // Сброс узла на слой ЧУЖОГО уровня — это перенос между уровнями:
-            // узел усыновляет ветка слоя, поддерево и связи переезжают сами
-            // (TRANSFER_NODE). В остальных случаях — обычное перевложение.
-            if (isTargetLayer && isDragNode && H && H.getEntityLevel &&
-                H.getEntityLevel(targetId, state.nodes, state.layers) !== H.getEntityLevel(dragId, state.nodes, state.layers)) {
-                dispatch({ type: 'TRANSFER_NODE', payload: { id: dragId, targetLayerId: targetId } });
-            } else {
-                dispatch({ type: 'REPARENT_ENTITY', payload: { id: dragId, newParentId: targetId } });
-            }
+            dispatch({ type: 'REPARENT_ENTITY', payload: { id: dragId, targetParentId: targetId } });
         }
         dragIdRef.current = null;
         setDropTargetId(null);
