@@ -366,4 +366,37 @@ test('Фаза 3: Быстрые пространственные индексы
     assert.equal(HierarchyUtils.getLayersByParentId(layers), layersByParent);
 });
 
+test('getInitialMultiState: активированная migrateToV13 санитизирует v11-сохранение при загрузке (Фаза 5, финал)', () => {
+    mockStorage.clear();
+    const stateToSave = {
+        formatVersion: 12,
+        projectOrder: ['proj-1'],
+        activeProjectId: 'proj-1',
+        projects: {
+            'proj-1': {
+                id: 'proj-1',
+                projectName: 'v11-проект',
+                nodes: {
+                    root1: { id: 'root1', name: 'Root1', parentId: 'root', ownerId: null, position: { x: 0, y: 0 }, size: { w: 200, h: 100 } },
+                    child1: { id: 'child1', name: 'Child1', parentId: 'root', ownerId: 'root1', position: { x: 10, y: 10 }, size: { w: 200, h: 100 } }
+                },
+                layers: {},
+                ports: {},
+                links: {},
+                levelWindows: { 'lvlwin-root': { id: 'lvlwin-root', levelIndex: 0, position: { x: 0, y: 0 }, size: { w: 1000, h: 700 } } },
+                levelViews: defaultState.levelViews
+            }
+        }
+    };
+    localStorage.setItem(STORAGE_KEY_V12, JSON.stringify(stateToSave));
+
+    const loaded = getInitialMultiState();
+    const proj = loaded.projects['proj-1'];
+
+    assert.equal(loaded.formatVersion, 13, 'миграция реально применилась при загрузке, не осталась дремлющей функцией');
+    assert.equal(proj.nodes.child1.parentId, 'root1', 'v11 ownerId-цепочка превратилась в прямой v13 parentId');
+    assert.equal(proj.nodes.child1.ownerId, undefined, 'ownerId убран');
+    assert.equal(HierarchyUtils.getEntityLevel('child1', proj.nodes, proj.layers, proj.levelWindows), 1, 'уровень сохранён');
+});
+
 

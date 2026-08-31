@@ -3657,15 +3657,15 @@ const getInitialMultiState = () => {
                             return base;
                         })()
                     };
-                    // migrateToV13 НЕ вызывается здесь намеренно: HierarchyUtils (getLevel,
-                    // getEntityLevel, getDropTarget и др.) до Фазы 3 ещё читает
-                    // ownerId/ownerGap/homeLevel — включить миграцию на живом старте
-                    // раньше, чем ядро иерархии научится понимать чистый parentId, значит
-                    // молча ломать уровень сирот-якорей (parentId станет id окна, а старый
-                    // getLevel такое значение не распознает и посчитает уровень нулевым).
-                    // Функция готова и покрыта тестами (migration.test.js) — подключение
-                    // сюда и в LOAD_STATE/ADD_PROJECT_FROM_FILE переносится в конец Фазы 3.
-                    return {
+                    // migrateToV13 активирована: TRANSFER_NODE физически удалён из
+                    // редьюсера и ни один живой путь создания сущности (ADD_NODE,
+                    // ADD_LAYER, CREATE_NESTED_NODE, REPARENT_ENTITY) больше не пишет
+                    // ownerId/ownerGap/homeLevel — HierarchyUtils понимает чистый parentId
+                    // (включая id окна для сирот-якорей), а REMOVE_LEVEL_WINDOW/
+                    // CLEAR_LEVEL_WINDOW/REMOVE_ROOT_CANVAS ре-якорят обе формы одинаково
+                    // (structuralParentOf). Санитизация здесь однократна: миграция читает
+                    // формат ДО того, как он попадёт в mergeActiveView/компоненты.
+                    return migrateToV13({
                         ...globalDefaults(),
                         canvas: parsed.canvas || defaultState.canvas,
                         aiChatHistory: parsed.aiChatHistory || defaultState.aiChatHistory,
@@ -3682,7 +3682,7 @@ const getInitialMultiState = () => {
                         pendingConnection: null,
                         dragGesture: null,
                         formatVersion: 12
-                    };
+                    });
                 }
             }
         } catch (e) {
@@ -3690,9 +3690,8 @@ const getInitialMultiState = () => {
             try { localStorage.removeItem(STORAGE_KEY_V12); } catch (_) {}
         }
     }
-    // Легаси-путь: getInitialState читает v11/v10/v9 и возвращает плоское состояние.
-    // migrateToV13 намеренно не вызывается здесь — см. комментарий выше.
-    return wrapFlatToMulti(getInitialState());
+    // Легаси-путь: getInitialState читает v11/v10/v9 и возвращает плоское состояние
+    return migrateToV13(wrapFlatToMulti(getInitialState()));
 };
 
 const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, FORMAT_VERSION_V13, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, migrateToV13, normalizeLevelWindows };
