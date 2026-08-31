@@ -600,58 +600,16 @@ const HierarchyUtils = {
     },
 
     /**
-     * Можно ли перенести узел ИЛИ слой в этот слой (для UI и валидации).
+     * v13: может ли entityId получить `parentId = targetParentId`. Заменила
+     * `canTransferToLayer` (удалена — TRANSFER_NODE физически убран из
+     * редьюсера, все места диспатча переведены на REPARENT_ENTITY) во всех
+     * живых местах: `getDropTarget`, `ContextActionBar.js`, `OutlinerTree.js`.
      *
-     * Перенос невозможен, когда целевой слой находится в ветке САМОЙ переносимой
-     * сущности (или её потомка): усыновителем стала бы сама сущность — «стань
-     * собственным ребёнком», а уровень слоя, вычисляемый через неё, уехал бы
-     * по кругу. Консистентной автоматической интерпретации у такой операции нет —
-     * UI должен показывать причину, а не молча отклонять.
-     *
-     * @param {string} entityId id переносимого узла или слоя
-     * @param {string} layerId
-     * @param {Object<string, NodeEntity>} nodes
-     * @param {?Object<string, LayerEntity>} [layers]
-     * @returns {{ ok: boolean, reason: ?string }}
-     */
-    canTransferToLayer: (entityId, layerId, nodes, layers = null) => {
-        const layer = layers && layers[layerId];
-        const entity = (nodes && nodes[entityId]) || (layers && layers[entityId]);
-        if (!layer || !entity) return { ok: false, reason: 'not-found' };
-        // Слой/узел нельзя перенести в самого себя.
-        if (entityId === layerId) return { ok: false, reason: 'self' };
-
-        const layerLevel = HierarchyUtils.getEntityLevel(layerId, nodes, layers);
-        const entityLevel = HierarchyUtils.getEntityLevel(entityId, nodes, layers);
-        if (layerLevel === entityLevel) return { ok: true, reason: null }; // группировка своего уровня
-
-        if (layerLevel > 0) {
-            const adoptOwner = HierarchyUtils.getBranchOwner(layerId, nodes, layers);
-            if (adoptOwner && (adoptOwner === entityId ||
-                HierarchyUtils.hasAncestorIn(adoptOwner, [entityId], nodes, layers))) {
-                // Слой в СОБСТВЕННОЙ ветке узла/слоя: обычное усыновление невозможно
-                // (сущность стала бы своим же потомком), выполняется «спуск» — она
-                // становится сиротой в слое, её прямые подопечные отвязываются
-                // и якорятся по месту (homeLevel), их поддеревья не меняются.
-                return { ok: true, reason: 'descend' };
-            }
-        }
-        return { ok: true, reason: null };
-    },
-
-    /**
-     * v13: может ли entityId получить `parentId = targetParentId` (готовит
-     * замену `canTransferToLayer` для REPARENT_ENTITY, Фазы 4–5 плана
-     * `PLAN_V12_CLEAN_HIERARCHY_AND_INTERACTIONS.md` — см.
-     * docs/IDEAL_INTERACTIONS.md §1.2 и §2). `canTransferToLayer` пока не
-     * удаляется: её всё ещё вызывают живые места диспатча `TRANSFER_NODE`
-     * (`ContextActionBar.js`, `OutlinerTree.js`) — снос отложен до перевода
-     * этих мест на `REPARENT_ENTITY` (DOCS_UPDATE_CHECKLIST.md, «После Фазы 5»).
-     *
-     * В отличие от v11-версии здесь нет проверки «слой чужого уровня»: при
-     * едином `parentId` вторая, конфликтующая система координат (`ownerId`)
-     * просто не существует, поэтому вложение в любой контейнер валидно, пока
-     * не образует цикл.
+     * В отличие от v11-версии здесь нет ни отдельного «спуска в собственную
+     * ветку» (цикл просто отклоняется целиком, reason: 'cycle'), ни проверки
+     * «слой чужого уровня»: при едином `parentId` вторая, конфликтующая
+     * система координат (`ownerId`) просто не существует, поэтому вложение
+     * в любой контейнер валидно, пока не образует цикл.
      *
      * @param {string} entityId
      * @param {string} targetParentId `'root'`, id слоя, id узла или id окна уровня
@@ -1174,11 +1132,9 @@ const HierarchyUtils = {
      * - свёрнутые окна не принимают дроп;
      * - dragDropMode=false: доступна только группировка в слои СВОЕГО уровня и
      *   перемещение по своему окну; всё межуровневое и вложения — invalid ('dnd-off');
-     * - слои в роли переносимых, ОДИНОЧНО (этап 3 плана `PLAN_DRAG_AND_DROP.md`,
-     *   реализовано 2026-08-30 вместе с `PLAN_LAYERS_AND_CONTEXT_CREATION.md`):
-     *   валидируются ТЕМ ЖЕ путём, что и узлы (`canTransferToLayer`/`hasAncestorIn`,
-     *   расширенные на слои) — узел/слой/окно как цель, свой уровень = группировка
-     *   (`parentId`), чужой = усыновление (`ownerId`) или сирота-якорь на чужом окне;
+     * - слои в роли переносимых, ОДИНОЧНО: валидируются ТЕМ ЖЕ путём, что и узлы
+     *   (`canReparentTo`/`isDescendantOf`) — узел/слой/окно как цель, любой
+     *   контейнер валиден, пока не образует цикл (v13, docs/IDEAL_INTERACTIONS.md §2);
      * - массовый/смешанный перенос слоя(ёв) вместе с чем-то ещё (`dragged.length > 1`
      *   и хотя бы один — слой) — всё ещё invalid ('layer-transfer-later'): это
      *   этап 4 плана (пока не реализован).
@@ -1201,7 +1157,7 @@ const HierarchyUtils = {
         // PLAN_DRAG_AND_DROP.md, вне объёма (реализован только перенос ОДНОГО
         // «верхнего» слоя — PLAN_LAYERS_AND_CONTEXT_CREATION.md, 2026-08-30).
         const unsupportedMixedLayer = dragged.length > 1 && dragged.some(id => !!layers[id]);
-        const draggedLevels = dragged.map(id => HierarchyUtils.getEntityLevel(id, nodes, layers));
+        const draggedLevels = dragged.map(id => HierarchyUtils.getEntityLevel(id, nodes, layers, state.levelWindows));
 
         // Исключаются сами переносимые и их потомки: по владению/слоям
         // (hasAncestorIn) и по координатным контейнерам (isDescendantOf)
@@ -1260,19 +1216,19 @@ const HierarchyUtils = {
         // 2. Слой-приёмник
         const layerTarget = pickBest(layers);
         if (layerTarget) {
-            const make = (valid, reason, descend) => ({ kind: /** @type {'layer'} */ ('layer'), id: layerTarget, valid, reason: reason || null, descend: !!descend });
+            const make = (valid, reason) => ({ kind: /** @type {'layer'} */ ('layer'), id: layerTarget, valid, reason: reason || null });
             if (unsupportedMixedLayer) return make(false, 'layer-transfer-later');
-            const layerLevel = HierarchyUtils.getEntityLevel(layerTarget, nodes, layers);
+            const layerLevel = HierarchyUtils.getEntityLevel(layerTarget, nodes, layers, state.levelWindows);
             const crossLevel = draggedLevels.some(lvl => lvl !== layerLevel);
             if (!dragDropMode && crossLevel) return make(false, 'dnd-off');
             if (dragged.every(id => (nodes[id] || layers[id])?.parentId === layerTarget)) return make(false, 'same-parent');
-            let descend = false;
+            // v13: нет отдельного «спуска в собственную ветку» — canReparentTo
+            // либо разрешает вложение, либо отклоняет цикл целиком (self/cycle).
             for (const id of dragged) {
-                const verdict = HierarchyUtils.canTransferToLayer(id, layerTarget, nodes, layers);
+                const verdict = HierarchyUtils.canReparentTo(id, layerTarget, nodes, layers, state.levelWindows);
                 if (!verdict.ok) return make(false, verdict.reason);
-                if (verdict.reason === 'descend') descend = true;
             }
-            return make(true, null, descend);
+            return make(true, null);
         }
 
         // 3. Окно уровня — по указателю; при наложении окон побеждает верхнее

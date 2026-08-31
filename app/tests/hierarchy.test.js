@@ -620,21 +620,23 @@ test('bubbleUpLayerResize: содержимое уже помещается — 
     assert.equal(Object.keys(updates).length, 0, 'N с запасом помещается в Mid — расти некуда');
 });
 
-test('canTransferToLayer: слой в самого себя — reason self; слой в слой СОБСТВЕННОЙ ветки — reason descend (не блокировка)', () => {
+test('canReparentTo: слой в самого себя — reason self; слой в слой СОБСТВЕННОЙ ветки (parentId-цикл) — отклонён целиком, без «спуска»', () => {
+    // v13: у canReparentTo нет отдельного «спуска в собственную ветку» (v11
+    // canTransferToLayer) — parentId-цикл просто отклоняется как cycle.
     const nodes = {};
     const layers = {
         A: { id: 'A', name: 'A', parentId: 'root' },
-        B: { id: 'B', name: 'B', parentId: 'root', ownerId: 'A' } // B — в ветке А
+        B: { id: 'B', name: 'B', parentId: 'A' } // B физически внутри А
     };
-    const self = HierarchyUtils.canTransferToLayer('A', 'A', nodes, layers);
+    const self = HierarchyUtils.canReparentTo('A', 'A', nodes, layers);
     assert.equal(self.ok, false);
     assert.equal(self.reason, 'self');
 
-    const descend = HierarchyUtils.canTransferToLayer('A', 'B', nodes, layers);
-    assert.equal(descend.ok, true, '«спуск» разрешён, это не блокировка цикла');
-    assert.equal(descend.reason, 'descend');
+    const cycle = HierarchyUtils.canReparentTo('A', 'B', nodes, layers);
+    assert.equal(cycle.ok, false, 'B лежит внутри A — вложение A в B образовало бы цикл');
+    assert.equal(cycle.reason, 'cycle');
 
-    const sameLevel = HierarchyUtils.canTransferToLayer('A', 'C', nodes, { ...layers, C: { id: 'C', parentId: 'root' } });
+    const sameLevel = HierarchyUtils.canReparentTo('A', 'C', nodes, { ...layers, C: { id: 'C', parentId: 'root' } });
     assert.equal(sameLevel.ok, true);
     assert.equal(sameLevel.reason, null, 'группировка своего уровня — обычный перенос');
 });

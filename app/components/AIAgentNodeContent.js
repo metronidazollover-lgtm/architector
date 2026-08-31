@@ -187,9 +187,9 @@ function AIAgentNodeContent({ nodeId }) {
             'REPARENT_ENTITY', 'ALIGN_LAYERS',
             'REMOVE_NODE', 'REMOVE_LAYER', 'REMOVE_PORT', 'REMOVE_LINK',
             'MASS_UPDATE',
-            // v11: уровни и вложенность (используются системным промптом ассистента)
+            // v13: уровни и вложенность (используются системным промптом ассистента)
             'CREATE_NESTED_NODE', 'FOCUS_CHILDREN_OF_NODE',
-            'CLEAR_LEVEL_WINDOW', 'REMOVE_LEVEL_WINDOW', 'REMOVE_ROOT_CANVAS', 'CLEAR_PROJECT', 'TRANSFER_NODE'
+            'CLEAR_LEVEL_WINDOW', 'REMOVE_LEVEL_WINDOW', 'REMOVE_ROOT_CANVAS', 'CLEAR_PROJECT'
         ]);
 
         // Экшены, у которых payload — просто строка-идентификатор
@@ -477,7 +477,9 @@ function AIAgentNodeContent({ nodeId }) {
             if (isLocalMode) {
                 const addNestedChildren = (parentId) => {
                     Object.values(state.nodes).forEach(n => {
-                        // v11: родство — ownerId; parentId оставлен для легаси-вложенности
+                        // Структурный ребёнок: ownerId (ещё не мигрированные v11-узлы)
+                        // ИЛИ parentId напрямую на узел (v13) — n.parentId === parentId
+                        // здесь безопасно, т.к. parentId всегда id УЗЛА (родство), а не слоя.
                         if ((n.ownerId === parentId || n.parentId === parentId) && !connectedNodes.has(n)) {
                             connectedNodes.add(n);
                             addNestedChildren(n.id);
@@ -488,14 +490,14 @@ function AIAgentNodeContent({ nodeId }) {
                 initialNodes.forEach(n => addNestedChildren(n.id));
             }
 
-            // v11: в сводку входят владелец (родство) и уровень иерархии
+            // v13: в сводку входят структурный родитель и уровень иерархии
             const H = window.HierarchyUtils;
             const describeNode = (n) => ({
                 id: n.id,
                 name: n.name,
-                ownerId: n.ownerId || null,
-                layerId: (n.parentId && n.parentId !== 'root') ? n.parentId : null,
-                level: H ? H.getEntityLevel(n.id, state.nodes, state.layers) : 0,
+                parentNodeId: n.ownerId || ((n.parentId && state.nodes[n.parentId]) ? n.parentId : null),
+                layerId: (n.parentId && n.parentId !== 'root' && state.layers[n.parentId]) ? n.parentId : null,
+                level: H ? H.getEntityLevel(n.id, state.nodes, state.layers, state.levelWindows) : 0,
                 type: n.type || 'default'
             });
             const nodesSummary = (isLocalMode ? Array.from(connectedNodes) : Object.values(state.nodes)).map(describeNode);
@@ -505,7 +507,7 @@ function AIAgentNodeContent({ nodeId }) {
                 .sort((a, b) => a.levelIndex - b.levelIndex)
                 .map(w => {
                     const count = Object.keys(state.nodes || {}).filter(id =>
-                        (H ? H.getEntityLevel(id, state.nodes, state.layers) : 0) === w.levelIndex).length;
+                        (H ? H.getEntityLevel(id, state.nodes, state.layers, state.levelWindows) : 0) === w.levelIndex).length;
                     return `L${w.levelIndex} «${w.name || (w.levelIndex === 0 ? 'Главный холст' : 'Уровень ' + w.levelIndex)}» — узлов: ${count}`;
                 }).join('; ');
 
@@ -524,21 +526,21 @@ function AIAgentNodeContent({ nodeId }) {
 
             let aiResponse = '';
 
-            let systemPrompt = `Вы — ИИ-ассистент (Copilot) для визуального редактора иерархических графов Architector (модель данных v11: пространственные окна уровней).
+            let systemPrompt = `Вы — ИИ-ассистент (Copilot) для визуального редактора иерархических графов Architector (модель данных v13: пространственные окна уровней, единый источник родства parentId).
 
 УСТРОЙСТВО ИЕРАРХИИ (важно для понимания проекта):
 - Каждый уровень иерархии — отдельное окно-холст: L0 «Главный холст» (корневые родители), L1 (их дети), L2 (внуки) и глубже.
-- Родство выражается полем ownerId: узел с ownerId = X является РЕБЁНКОМ узла X и живёт на уровне ниже (level владельца + 1). Узлы без ownerId — корневые (уровень 0).
-- Поле parentId — это НЕ родство, а координатный контейнер: "root" (холст своего уровня) или ID слоя-рамки, в котором узел лежит визуально.
-- Поле level в сводке узлов — готовый номер уровня каждого узла.
-- Сирота-якорь: узел/слой БЕЗ ownerId с полем homeLevel = N живёт на уровне N как глава независимой ветки (его дети — на N+1). Без homeLevel сирота живёт на уровне 0.
+- Родство выражается ЕДИНСТВЕННЫМ полем parentId: "root" (корень своего уровня), ID слоя (группировка — координата, уровень не меняется) или ID узла (структурный шаг — сущность живёт на СЛЕДУЮЩЕМ уровне, level родителя + 1).
+- Поле level в сводке узлов — готовый номер уровня каждого узла, вычислен автоматически по цепочке parentId.
+- Сирота-якорь: узел/слой без структурного родителя-узла, явно привязанный к уровню N через REPARENT_ENTITY (targetLevelIndex: N) — глава независимой ветки на этом уровне, его дети (если есть) — на N+1.
+- В сводке узлов ниже поле parentNodeId (не путать с сырым parentId!) содержит id структурного родителя-узла (null, если узел корневой или лежит только в слое); отдельно layerId — id слоя-контейнера, если узел визуально сгруппирован в слое.
 
 Уровни проекта: ${levelsSummary || 'только Главный холст (пусто)'}
 
 Текущее состояние холста:
 ${contextStr}
 
-Доступный список узлов (id, name, ownerId — родитель, layerId — слой-контейнер, level — уровень, type):
+Доступный список узлов (id, name, parentNodeId — структурный родитель, layerId — слой-контейнер, level — уровень, type):
 ${JSON.stringify(nodesSummary)}
 
 `;
@@ -555,7 +557,7 @@ ${JSON.stringify(nodesSummary)}
   { "type": "ADD_NODE", "payload": { "id": "node-1", "name": "Canvas Viewport", "content": "Интерактивный холст", "color": "#0f172a", "position": {"x": 90, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle", "mediaUrl": "https://...", "mediaHeight": 70 } },
   { "type": "ADD_NODE", "payload": { "id": "node-2", "name": "Store Provider", "content": "Хранилище состояния", "color": "#0f172a", "position": {"x": 370, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle" } },
   { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "node-1", "id": "node-sub-1", "name": "Sub-Component" } },
-  { "type": "ADD_NODE", "payload": { "id": "node-sub-2", "name": "Второй ребёнок", "content": "Брат node-sub-1", "color": "#0284c7", "position": {"x": 380, "y": 120}, "size": {"w": 250, "h": 120}, "parentId": "root", "ownerId": "node-1", "shape": "rectangle" } },
+  { "type": "ADD_NODE", "payload": { "id": "node-sub-2", "name": "Второй ребёнок", "content": "Брат node-sub-1", "color": "#0284c7", "position": {"x": 380, "y": 120}, "size": {"w": 250, "h": 120}, "parentId": "node-1", "shape": "rectangle" } },
   { "type": "ADD_PORT", "payload": { "id": "port-1-out", "nodeId": "node-1", "type": "output", "edge": "right", "position": 0.5, "name": "Events Out", "color": "#38bdf8" } },
   { "type": "ADD_PORT", "payload": { "id": "port-2-in", "nodeId": "node-2", "type": "input", "edge": "left", "position": 0.5, "name": "Actions In", "color": "#0284c7" } },
   { "type": "ADD_LINK", "payload": { "id": "link-1-to-2", "sourcePortId": "port-1-out", "targetPortId": "port-2-in", "name": "Redux Dispatch", "linkStyle": "orthogonal", "color": "#38bdf8" } },
@@ -568,18 +570,18 @@ ${JSON.stringify(nodesSummary)}
 
 СТРОГИЕ ПРАВИЛА И ИНВАРИАНТЫ (модель v11):
 1. ФОРМА УЗЛОВ (shape): все узлы СТРОГО прямоугольные (shape: "rectangle").
-2. ИЕРАРХИЯ РОДСТВА — через ownerId, НЕ через parentId:
-   - Корневой узел (уровень 0, Главный холст): без ownerId, parentId = "root" или ID слоя.
-   - Ребёнок узла X: ЛУЧШИЙ способ — { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "X", "id": "...", "name": "..." } } — узел сам попадёт на следующий уровень с автоматическим размещением, окно уровня создастся при необходимости.
-   - Альтернатива (когда нужна точная позиция): ADD_NODE с "ownerId": "X" и "parentId": "root" — position тогда задаётся в координатах ХОЛСТА УРОВНЯ ребёнка (не внутри родителя!): x: 60..900, y: 80..600, братьев разносите сеткой с шагом ~280 по x.
-   - НЕ указывайте ID узла в parentId — это легаси; parentId только "root" или ID слоя.
+2. ИЕРАРХИЯ РОДСТВА — через parentId, ЕДИНСТВЕННОЕ поле родства:
+   - Корневой узел (уровень 0, Главный холст): parentId = "root" или ID слоя.
+   - Ребёнок узла X (порождает следующий уровень): ЛУЧШИЙ способ — { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "X", "id": "...", "name": "..." } } — узел сам попадёт на следующий уровень с автоматическим размещением, окно уровня создастся при необходимости.
+   - Альтернатива (когда нужна точная позиция): ADD_NODE с "parentId": "X" (id узла-родителя напрямую) — position тогда задаётся в координатах ХОЛСТА УРОВНЯ ребёнка (не внутри родителя!): x: 60..900, y: 80..600, братьев разносите сеткой с шагом ~280 по x.
+   - parentId может быть "root", ID слоя (группировка на ТОМ ЖЕ уровне) ИЛИ ID узла (следующий уровень) — все три варианта равноправны.
 3. ПОЗИЦИИ: локальны холсту уровня, на котором живёт узел. Узлы одного родителя (братья) лежат на одном уровне рядом друг с другом.
 4. ОБЯЗАТЕЛЬНОЕ СОЗДАНИЕ ПОРТОВ (ADD_PORT): для каждого узла создавайте порты на его гранях! Порт можно поставить и на СЛОЙ — тем же ADD_PORT, где nodeId = id слоя (поле называется nodeId по историческим причинам, но принимает id узла ИЛИ слоя). Слой — полноправный участник графа связей наравне с узлом.
 5. СВЯЗИ СОЕДИНЯЮТ ТОЛЬКО ПОРТЫ (ADD_LINK): sourcePortId и targetPortId содержат СТРОГО ID портов, независимо от того, узлу или слою эти порты принадлежат. Допустимы любые комбинации: Узел↔Узел, Слой↔Слой, Узел↔Слой. Связи между узлами/слоями разных уровней допустимы (рисуются пунктиром через прокси-порты на рамках окон).
-6. УДАЛЕНИЕ И ОЧИСТКА: REMOVE_NODE удаляет узел с портами и всеми потомками по ownerId. Экшены уровней: CLEAR_LEVEL_WINDOW { "index": N } — очистить уровень N: удаляются ТОЛЬКО его сущности, потомки на нижних уровнях выживают на своих местах (пере-якорятся на ближайшего живого предка со «связью через поколение» — поле ownerGap: владелец может быть на 2+ уровня выше; без живых предков потомок становится сиротой-якорем homeLevel, сохранив свою ветку); REMOVE_LEVEL_WINDOW { "index": N } — удалить уровень N (включая Главный холст index: 0): его сущности удаляются, потомки и уровни ниже поднимаются на один (Уровень 1 становится Главным холстом); REMOVE_ROOT_CANVAS {} — удалить Главный холст (аналог REMOVE_LEVEL_WINDOW { "index": 0 }); CLEAR_PROJECT {} — полная очистка содержимого ВСЕХ уровней (окна и настройки остаются); REMOVE_PROJECT { "id": "..." } — удалить проект целиком.
+6. УДАЛЕНИЕ И ОЧИСТКА: REMOVE_NODE каскадно удаляет узел со всеми его потомками (вся ветка по parentId). Экшены уровней: CLEAR_LEVEL_WINDOW { "index": N } — очистить уровень N: удаляются ТОЛЬКО его сущности, потомки на нижних уровнях выживают на своих местах (пере-якорятся на ближайшего живого предка; без живых предков потомок становится независимым сиротой-якорем на своём уровне, сохранив свою ветку); REMOVE_LEVEL_WINDOW { "index": N } — удалить уровень N (включая Главный холст index: 0): его сущности удаляются, потомки и уровни ниже поднимаются на один (Уровень 1 становится Главным холстом); REMOVE_ROOT_CANVAS {} — удалить Главный холст (аналог REMOVE_LEVEL_WINDOW { "index": 0 }); CLEAR_PROJECT {} — полная очистка содержимого ВСЕХ уровней (окна и настройки остаются); REMOVE_PROJECT { "id": "..." } — удалить проект целиком.
 7. ФОКУСИРОВКА: FOCUS_CHILDREN_OF_NODE { "parentId": "X" } — показать детей узла X на следующем уровне.
-8. ПЕРЕНОС МЕЖДУ УРОВНЯМИ: TRANSFER_NODE { "ids": ["n1"], "targetLayerId": "layer-x" } — перенести узлы в слой (свой уровень — группировка без смены родства; чужой уровень — узел усыновляется веткой слоя, его поддерево и связи переезжают автоматически; слой собственной ветки — «спуск»: узел и его прямые дети становятся сиротами-братьями). Вместо targetLayerId можно указать "targetLevelIndex": N — перенос на холст уровня (без владельца узел станет сиротой-якорем).
-9. НЕЗАВИСИМЫЕ ВЕТКИ: чтобы создать узел на уровне N без родителя, задайте в ADD_NODE "homeLevel": N (и не задавайте ownerId).
+8. ПЕРЕНОС МЕЖДУ КОНТЕЙНЕРАМИ И УРОВНЯМИ: REPARENT_ENTITY { "id": "n1", "targetParentId": "layer-x" } (или "ids": [...] для нескольких) — перенести узел(ы)/слой(и) в любой контейнер: id слоя (группировка, уровень наследуется от слоя), id узла (переезд на следующий уровень, вложение в узел) или "root". Вместо targetParentId можно указать "targetLevelIndex": N — перенос на пустой холст уровня N (без явного родителя узел станет сиротой-якорем на этом уровне). По умолчанию переносится вся ветка потомков вместе с узлом (mode не указывайте — используется "deep").
+9. НЕЗАВИСИМЫЕ ВЕТКИ: чтобы создать узел на уровне N без родителя, используйте REPARENT_ENTITY с "targetLevelIndex": N сразу после создания узла на Главном холсте — он станет сиротой-якорем на нужном уровне.
 10. ЛИМИТ ПАКЕТА: не более ${MAX_AI_BATCH_SIZE} команд в одном ответе — всё сверх этого числа отбрасывается. Если задача крупнее, выполните её частями: выдайте первую порцию и предложите продолжить следующим сообщением. Весь пакет применяется одним шагом истории и отменяется одним Ctrl+Z.
 11. ПОДТВЕРЖДЕНИЕ: по умолчанию пользователь видит список ваших команд и подтверждает их вручную. Формулируйте пояснение так, чтобы по нему было понятно, что именно изменится на холсте, — особенно для удаляющих команд.
 12. Выдайте короткий вежливый пояснительный текстовый ответ, а в самом конце — ТОЛЬКО один блок \`\`\`json ... \`\`\`.`;
