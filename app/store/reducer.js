@@ -3585,6 +3585,219 @@ const applyRemoveProject = (m, id) => {
     return reconcilePendingGateways(next);
 };
 
+/**
+ * Кросс-проектный перенос сущности/ветки (Фаза 6.3): REPARENT_ENTITY, чей
+ * targetProjectId отличается от sourceProjectId. Перехватывается в
+ * multiReducer ДО delegateToActiveProject — обычный (внутрипроектный)
+ * REPARENT_ENTITY продолжает идти через неё без изменений.
+ *
+ * Мирит два разных мира: живой Drag&Drop-жест (Node.js/Layer.js) и
+ * однопроектный `case 'REPARENT_ENTITY'` в `reducer` — та же семантика
+ * Deep/Shallow, та же findFreePosition-логика для всплытия детей и
+ * размещения на новом месте, но словари читаются/пишутся в ДВА разных
+ * проекта, а не в один state.
+ *
+ * @param {Object} m мультисостояние
+ * @param {Object} p action.payload — { ids|id, sourceProjectId, targetProjectId,
+ *   targetParentId?, targetLevelIndex?, mode?, position?, positionsById? }
+ * @returns {Object}
+ */
+const applyCrossProjectReparent = (m, p) => {
+    const sourceProjectId = p.sourceProjectId;
+    const targetProjectId = p.targetProjectId;
+    if (!sourceProjectId || !targetProjectId || sourceProjectId === targetProjectId) return m;
+    if (!m.projects[sourceProjectId] || !m.projects[targetProjectId]) return m;
+
+    const H = getHierarchy();
+    const G = getGeometry();
+    if (!H || !G) return m;
+
+    const sourceView = projectFlatView(m, sourceProjectId);
+    const targetView = projectFlatView(m, targetProjectId);
+
+    const mode = p.mode === 'shallow' ? 'shallow' : 'deep';
+    let targetParentId = p.targetParentId !== undefined ? p.targetParentId : p.newParentId;
+    if (targetParentId === undefined && typeof p.targetLevelIndex === 'number') {
+        const win = resolveWindow(targetView, p.targetLevelIndex);
+        targetParentId = win ? win.id : (p.targetLevelIndex === 0 ? 'root' : undefined);
+    }
+    if (!targetParentId) return m;
+
+    const getEntity = (eid) => (sourceView.nodes && sourceView.nodes[eid]) || (sourceView.layers && sourceView.layers[eid]);
+
+    const rawIds = Array.isArray(p.ids) ? p.ids : (p.id ? [p.id] : []);
+    const requestedIds = rawIds.filter(eid => getEntity(eid));
+    if (requestedIds.length === 0) return m;
+
+    // «Только верхние» — как в однопроектном REPARENT_ENTITY: у кого в этом
+    // же наборе есть предок по цепочке parentId, тот переедет вместе с ним.
+    const topIds = requestedIds.filter(eid => !requestedIds.some(other =>
+        other !== eid && H.isDescendantOf(eid, other, sourceView.nodes, sourceView.layers)));
+
+    // canReparentTo: существование сущности — в SOURCE (entityDicts), цели и
+    // цикл — в TARGET; цикл геометрически невозможен между двумя разными
+    // проектами (canReparentTo сама это распознаёт по разным словарям).
+    // «Уже там» (entity.parentId === targetParentId) для cross-project не
+    // проверяется — совпадение строк id между двумя проектами ничего не значит.
+    const validIds = topIds.filter(eid => {
+        const entity = getEntity(eid);
+        if (!entity) return false;
+        return H.canReparentTo(eid, targetParentId, targetView.nodes, targetView.layers, targetView.levelWindows,
+            { nodes: sourceView.nodes, layers: sourceView.layers }).ok;
+    });
+    if (validIds.length === 0) return m;
+
+    const srcNodes = { ...sourceView.nodes };
+    const srcLayers = { ...sourceView.layers };
+    const srcPorts = { ...sourceView.ports };
+    const srcLinks = { ...sourceView.links };
+    const tgtNodes = { ...targetView.nodes };
+    const tgtLayers = { ...targetView.layers };
+    const tgtPorts = { ...targetView.ports };
+    const tgtLinks = { ...targetView.links };
+    const movedPortIds = new Set();
+
+    const stripLegacy = (e) => { const { ownerId, ownerGap, homeLevel, ...rest } = e; return rest; };
+    const rectsIn = (nodesDict, layersDict, containerId) => {
+        const rects = [];
+        Object.values(nodesDict).forEach(n => { if (n && n.parentId === containerId) rects.push({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }); });
+        Object.values(layersDict).forEach(l => { if (l && l.parentId === containerId) rects.push({ x: l.position.x, y: l.position.y, w: (l.size && l.size.w) || 600, h: (l.size && l.size.h) || 400 }); });
+        return rects;
+    };
+    // Ветка = сущность + всё, что остаётся привязано к ней по parentId-цепочке
+    // ПОСЛЕ возможного Shallow-всплытия прямых детей (см. ниже) — тот же обход,
+    // что и рекурсивный поиск потомков в DELETE_SELECTED, но по живым id.
+    const collectSubtree = (rootId) => {
+        const ids = new Set([rootId]);
+        let changed = true;
+        while (changed) {
+            changed = false;
+            Object.values(srcNodes).forEach(n => { if (n && ids.has(n.parentId) && !ids.has(n.id)) { ids.add(n.id); changed = true; } });
+            Object.values(srcLayers).forEach(l => { if (l && ids.has(l.parentId) && !ids.has(l.id)) { ids.add(l.id); changed = true; } });
+        }
+        return ids;
+    };
+
+    validIds.forEach(eid => {
+        const entity = getEntity(eid);
+        const oldParentId = entity.parentId;
+
+        if (mode === 'shallow') {
+            // Прямые дети переносимой сущности усыновляются её ПРЕЖНИМ
+            // родителем ВНУТРИ исходного проекта — раньше, чем верхняя
+            // сущность вообще успевает уехать (findFreePosition предотвращает
+            // наложение всплывающих детей на то, что уже стоит у деда).
+            const directChildren = [
+                ...Object.values(srcNodes).filter(n => n && n.parentId === eid),
+                ...Object.values(srcLayers).filter(l => l && l.parentId === eid)
+            ];
+            if (directChildren.length > 0) {
+                const siblingRects = rectsIn(srcNodes, srcLayers, oldParentId);
+                directChildren.forEach(child => {
+                    const pos = G.findFreePosition(child.size, child.position, siblingRects);
+                    siblingRects.push({ x: pos.x, y: pos.y, w: (child.size && child.size.w) || 200, h: (child.size && child.size.h) || 100 });
+                    const updated = stripLegacy({ ...child, parentId: oldParentId, position: pos });
+                    if (srcNodes[child.id]) srcNodes[child.id] = updated; else srcLayers[child.id] = updated;
+                });
+            }
+        }
+
+        // Позиция ВЕРХНЕЙ сущности ветки в целевом проекте: явная (drop под
+        // курсором) либо findFreePosition на корне targetParentId — в другом
+        // проекте совпадение мировых координат ничего не значит, экономить
+        // на toRelativePosition (как делает внутрипроектный путь) незачем.
+        let position;
+        if (p.positionsById && p.positionsById[eid]) {
+            position = p.positionsById[eid];
+        } else if (validIds.length === 1 && p.position) {
+            position = p.position;
+        } else {
+            position = G.findFreePosition(entity.size, entity.position, rectsIn(tgtNodes, tgtLayers, targetParentId));
+        }
+
+        const branchIds = collectSubtree(eid);
+        branchIds.forEach(id => {
+            const isNode = !!srcNodes[id];
+            const dict = isNode ? srcNodes : srcLayers;
+            const e = dict[id];
+            const moved = id === eid ? stripLegacy({ ...e, parentId: targetParentId, position }) : stripLegacy(e);
+            if (isNode) { tgtNodes[id] = moved; delete srcNodes[id]; }
+            else { tgtLayers[id] = moved; delete srcLayers[id]; }
+
+            Object.keys(srcPorts).forEach(portId => {
+                const port = srcPorts[portId];
+                if (port && port.nodeId === id) {
+                    tgtPorts[portId] = port;
+                    delete srcPorts[portId];
+                    movedPortIds.add(portId);
+                }
+            });
+        });
+    });
+
+    // Связи, у которых ОБА порта теперь в целевом проекте, переезжают целиком;
+    // связи, у которых порты после переноса разошлись по разным проектам,
+    // стали бы битыми (обычная links-запись не умеет адресовать чужой
+    // проект — для этого есть отдельная crossProjectLinks, Фаза 6.1) и
+    // удаляются, как раньше в этом случае поступал TRANSFER_NODE.
+    Object.keys(srcLinks).forEach(linkId => {
+        const link = srcLinks[linkId];
+        if (!link) return;
+        const sMoved = movedPortIds.has(link.sourcePortId);
+        const tMoved = movedPortIds.has(link.targetPortId);
+        if (sMoved && tMoved) { tgtLinks[linkId] = link; delete srcLinks[linkId]; }
+        else if (sMoved || tMoved) { delete srcLinks[linkId]; }
+    });
+
+    const targetNormalized = normalizeLevelWindows(targetView.levelWindows, tgtNodes, tgtLayers, targetView.levelViews);
+
+    let next = writeProjectView(m, sourceProjectId, { ...sourceView, nodes: srcNodes, layers: srcLayers, ports: srcPorts, links: srcLinks });
+    next = writeProjectView(next, targetProjectId, {
+        ...targetView, nodes: tgtNodes, layers: tgtLayers, ports: tgtPorts, links: tgtLinks,
+        levelWindows: targetNormalized.levelWindows, levelViews: targetNormalized.levelViews
+    });
+
+    // Кросс-проектные связи/штекеры (Фаза 6.1/6.2), чей порт уехал вместе с
+    // веткой, переписываются на новый projectId — перенос не должен рвать ни
+    // живую связь, ни висящий штекер. Как и создание/удаление таких связей,
+    // этот шаг не входит в Undo ни одного из двух проектов (см. AGENTS.md).
+    if (movedPortIds.size > 0) {
+        const crossProjectLinks = { ...(next.crossProjectLinks || {}) };
+        Object.keys(crossProjectLinks).forEach(id => {
+            const link = crossProjectLinks[id];
+            if (!link) return;
+            let changed = false;
+            let updated = link;
+            if (link.sourceProjectId === sourceProjectId && movedPortIds.has(link.sourcePortId)) { updated = { ...updated, sourceProjectId: targetProjectId }; changed = true; }
+            if (link.targetProjectId === sourceProjectId && movedPortIds.has(link.targetPortId)) { updated = { ...updated, targetProjectId: targetProjectId }; changed = true; }
+            if (changed) crossProjectLinks[id] = updated;
+        });
+        next = { ...next, crossProjectLinks };
+
+        const remainingSourcePending = { ...(next.projects[sourceProjectId].pendingGateways || {}) };
+        const movingPending = {};
+        Object.keys(remainingSourcePending).forEach(linkId => {
+            const gw = remainingSourcePending[linkId];
+            if (gw && movedPortIds.has(gw.portId)) {
+                movingPending[linkId] = gw;
+                delete remainingSourcePending[linkId];
+            }
+        });
+        if (Object.keys(movingPending).length > 0) {
+            next = {
+                ...next,
+                projects: {
+                    ...next.projects,
+                    [sourceProjectId]: { ...next.projects[sourceProjectId], pendingGateways: remainingSourcePending },
+                    [targetProjectId]: { ...next.projects[targetProjectId], pendingGateways: { ...(next.projects[targetProjectId].pendingGateways || {}), ...movingPending } }
+                }
+            };
+        }
+    }
+
+    return pruneContainerIsolation(next);
+};
+
 const multiReducer = (m, action) => {
     switch (action.type) {
         case 'FOR_PROJECT': {
@@ -3808,6 +4021,18 @@ const multiReducer = (m, action) => {
             const id = typeof action.payload === 'string' ? action.payload : (action.payload && action.payload.id);
             if (!id || !m.projects[id] || id === m.activeProjectId) return m;
             return { ...m, activeProjectId: id, selectedIds: [], isolatedIds: [] };
+        }
+        case 'REPARENT_ENTITY': {
+            // Кросс-проектный перенос (Фаза 6.3): targetProjectId задан и
+            // отличается от sourceProjectId — перехватывается ЗДЕСЬ, до
+            // delegateToActiveProject, поскольку трогает ДВА проекта разом.
+            // Обычный (внутрипроектный) REPARENT_ENTITY, для которого этих
+            // полей нет, падает в default — поведение не меняется.
+            const p = action.payload || {};
+            if (p.sourceProjectId && p.targetProjectId && p.sourceProjectId !== p.targetProjectId) {
+                return applyCrossProjectReparent(m, p);
+            }
+            return delegateToActiveProject(m, action);
         }
         default:
             return delegateToActiveProject(m, action);

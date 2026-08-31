@@ -522,7 +522,10 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
     // дропе) подсвечивается КАК при выделении шапки — но панель свойств уровня
     // не открывается, выделение элементов не трогается
     const dropT = state.dragGesture && state.dragGesture.target;
-    const isDropHighlight = !!(dropT && dropT.kind === 'window' && dropT.id === windowData.id && dropT.valid);
+    // projectId (Фаза 6.3): dragGesture — глобальное поле, видно во всех
+    // проектах разом; сверка проекта нужна против гипотетического совпадения id.
+    const isDropHighlight = !!(dropT && dropT.kind === 'window' && dropT.id === windowData.id && dropT.valid
+        && (!dropT.projectId || dropT.projectId === projectId));
 
     return (
         <div

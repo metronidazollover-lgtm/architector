@@ -6,7 +6,7 @@
 // и сравнивается поверхностно: пока эти значения не изменились, узел не
 // перерисовывается. Изменение далёкого предка меняет здесь localPos — то есть
 // «рябь» доходит до узла именно потому, что сравнивается РЕЗУЛЬТАТ.
-const computeNodeDerived = (view, nodeId) => {
+const computeNodeDerived = (view, nodeId, projectId) => {
     const empty = {
         node: null, portIdsKey: '', interactionMode: 'default', zoom: 1, isSelected: false, isExplicitlySelected: false,
         localX: 0, localY: 0, childCount: 0, isDropReceiver: false
@@ -66,7 +66,11 @@ const computeNodeDerived = (view, nodeId) => {
         localX: localPos.x,
         localY: localPos.y,
         childCount,
-        isDropReceiver: !!(dropTarget && dropTarget.kind === 'node' && dropTarget.id === nodeId && dropTarget.valid)
+        // projectId (Фаза 6.3): dragGesture — глобальное поле, видно во всех
+        // проектах разом. Без сверки проекта чисто гипотетическое совпадение
+        // id между двумя проектами подсветило бы не тот узел.
+        isDropReceiver: !!(dropTarget && dropTarget.kind === 'node' && dropTarget.id === nodeId && dropTarget.valid
+            && (!dropTarget.projectId || dropTarget.projectId === projectId))
     };
 };
 
@@ -77,7 +81,7 @@ function NodeView(props) {
 
     // Все хуки — ДО раннего выхода: порядок хуков между рендерами обязан совпадать
     const nodeId = props.nodeId || (props.data && props.data.id) || (props.node && props.node.id) || null;
-    const selectDerived = React.useCallback((view) => computeNodeDerived(view, nodeId), [nodeId]);
+    const selectDerived = React.useCallback((view) => computeNodeDerived(view, nodeId, projectId), [nodeId, projectId]);
     const derived = useProjectSelector(selectDerived);
 
     const data = derived.node || props.data || props.node;
@@ -163,9 +167,15 @@ function NodeView(props) {
             const wx = (ev.clientX - rect.left - st.canvas.offset.x) / st.canvas.zoom;
             const wy = (ev.clientY - rect.top - st.canvas.offset.y) / st.canvas.zoom;
             const ids = topDraggedIds(st);
-            const target = (H && H.getDropTarget)
-                ? H.getDropTarget(ids, { x: wx, y: wy }, st, { dragDropMode: !!(st.ui && st.ui.dragDropMode) })
-                : null;
+            const opts = { dragDropMode: !!(st.ui && st.ui.dragDropMode) };
+            // Кросс-проектный резолвер (Фаза 6.3): сканирует ВСЕ открытые
+            // проекты, не только свой — на mousedown исходный проект уже стал
+            // активным (см. handleMouseDown выше), поэтому st.activeProjectId
+            // здесь и есть sourceProjectId.
+            const rootState = (typeof architectorStore !== 'undefined') ? architectorStore.getState() : null;
+            const target = (H && H.getDropTargetAcrossProjects && rootState)
+                ? H.getDropTargetAcrossProjects(ids, { x: wx, y: wy }, rootState, st.activeProjectId, opts)
+                : (H && H.getDropTarget ? H.getDropTarget(ids, { x: wx, y: wy }, st, opts) : null);
             return { st, ids, target };
         };
 
@@ -293,30 +303,39 @@ function NodeView(props) {
             const isTransfer = target && target.valid && !(target.kind === 'window' && target.isMove);
             if (isTransfer && H) {
                 const mode = shallowMode ? 'shallow' : 'deep';
+                const sourceProjectId = st.activeProjectId;
+                // Кросс-проектный перенос (Фаза 6.3): цель резолвилась в ДРУГОМ
+                // проекте — её словари (для окна/имён в тексте подтверждения)
+                // читаются из getProjectFlatView(target.projectId), а не из st.
+                const isCrossProject = !!(target.projectId && target.projectId !== sourceProjectId);
+                const targetView = isCrossProject ? window.getProjectFlatView(target.projectId) : st;
                 const text = H.buildTransferConfirmText
-                    ? H.buildTransferConfirmText(ids, target, st, mode)
+                    ? H.buildTransferConfirmText(ids, target, st, mode, isCrossProject ? targetView : null)
                     : 'Перенести выбранные элементы?';
                 if (window.confirm(text)) {
                     clearGesture();
                     const basePayload = {
                         ids,
                         mode,
-                        // Весь жест (движение + перенос) — один шаг Undo
+                        // Весь жест (движение + перенос) — один шаг Undo (внутрипроектно;
+                        // кросс-проектный REPARENT_ENTITY в Undo не участвует вовсе —
+                        // historySnapshot им просто игнорируется, см. AGENTS.md).
                         historySnapshot: {
                             nodes: initialSnapshot.nodes,
                             layers: initialSnapshot.layers,
                             ports: initialSnapshot.ports,
                             links: initialSnapshot.links
-                        }
+                        },
+                        ...(isCrossProject ? { sourceProjectId, targetProjectId: target.projectId } : {})
                     };
                     // v13 REPARENT_ENTITY: цель узла/слоя — это напрямую targetParentId
                     // (единственное поле родства), окно резолвится в targetLevelIndex.
                     if (target.kind === 'node' || target.kind === 'layer') {
                         dispatch({ type: 'REPARENT_ENTITY', payload: { ...basePayload, targetParentId: target.id } });
                     } else {
-                        const win = st.levelWindows[target.id];
+                        const win = targetView.levelWindows[target.id];
                         const positionsById = H.computeDropPositions
-                            ? H.computeDropPositions(ids, win, st)
+                            ? H.computeDropPositions(ids, win, targetView, isCrossProject ? st : null)
                             : null;
                         dispatch({ type: 'REPARENT_ENTITY', payload: { ...basePayload, targetLevelIndex: win.levelIndex, ...(positionsById ? { positionsById } : {}) } });
                     }

@@ -613,23 +613,33 @@ const HierarchyUtils = {
      *
      * @param {string} entityId
      * @param {string} targetParentId `'root'`, id слоя, id узла или id окна уровня
-     * @param {Object<string, NodeEntity>} nodes
+     * @param {Object<string, NodeEntity>} nodes словари ЦЕЛИ (куда переносим)
      * @param {?Object<string, LayerEntity>} [layers]
      * @param {?Object<string, Object>} [levelWindows]
+     * @param {?{nodes: Object, layers: Object}} [entityDicts] словари САМОЙ
+     *   сущности, если отличаются от целевых (Фаза 6.3, кросс-проектный
+     *   перенос — entityId и targetParentId живут в РАЗНЫХ проектах). Без
+     *   аргумента (внутрипроектный вызов) — та же пара nodes/layers.
      * @returns {{ ok: boolean, reason: ?string }}
      */
-    canReparentTo: (entityId, targetParentId, nodes, layers = null, levelWindows = null) => {
+    canReparentTo: (entityId, targetParentId, nodes, layers = null, levelWindows = null, entityDicts = null) => {
         const safeNodes = nodes || {};
         const safeLayers = layers || {};
         const safeWindows = levelWindows || {};
-        const entity = safeNodes[entityId] || safeLayers[entityId];
+        const eNodes = (entityDicts && entityDicts.nodes) || safeNodes;
+        const eLayers = (entityDicts && entityDicts.layers) || safeLayers;
+        const entity = eNodes[entityId] || eLayers[entityId];
         if (!entity) return { ok: false, reason: 'not-found' };
         if (entityId === targetParentId) return { ok: false, reason: 'self' };
         if (targetParentId !== 'root' && !safeLayers[targetParentId]
             && !safeNodes[targetParentId] && !safeWindows[targetParentId]) {
             return { ok: false, reason: 'not-found' };
         }
-        if (HierarchyUtils.isDescendantOf(targetParentId, entityId, safeNodes, safeLayers)) {
+        // Кросс-проектный вызов (entityDicts задан и реально отличается от
+        // целевых словарей): цикл геометрически невозможен — сущность и цель
+        // живут в РАЗНЫХ, никак не связанных деревьях.
+        if (eNodes === safeNodes && eLayers === safeLayers
+            && HierarchyUtils.isDescendantOf(targetParentId, entityId, safeNodes, safeLayers)) {
             return { ok: false, reason: 'cycle' };
         }
         return { ok: true, reason: null };
@@ -1141,31 +1151,41 @@ const HierarchyUtils = {
      *
      * @param {Array<string>} draggedIds выделенные «верхние» переносимые id
      * @param {Point} pointerWorld указатель мыши в мировых координатах
-     * @param {Object} state
+     * @param {Object} state словари ЦЕЛИ — где ищутся кандидаты дропа
      * @param {{dragDropMode?: boolean}} [opts]
+     * @param {?Object} [sourceState] словари переносимых сущностей, если
+     *   отличаются от `state` (Фаза 6.3, кросс-проектный перенос —
+     *   перетаскиваемые узлы физически лежат в ДРУГОМ проекте, чем то окно,
+     *   над которым сейчас курсор). Без аргумента (внутрипроектный вызов,
+     *   как раньше) — совпадает с `state`.
      * @returns {?{ kind: 'node'|'layer'|'window', id: string, valid: boolean, reason: ?string, isMove?: boolean, descend?: boolean }}
      */
-    getDropTarget: (draggedIds, pointerWorld, state, opts = {}) => {
+    getDropTarget: (draggedIds, pointerWorld, state, opts = {}, sourceState = null) => {
         if (!state || !draggedIds || draggedIds.length === 0 || !pointerWorld) return null;
         const dragDropMode = opts.dragDropMode !== false;
+        const srcState = sourceState || state;
+        const srcNodes = srcState.nodes || {};
+        const srcLayers = srcState.layers || {};
         const nodes = state.nodes || {};
         const layers = state.layers || {};
 
-        const dragged = draggedIds.filter(id => nodes[id] || layers[id]);
+        const dragged = draggedIds.filter(id => srcNodes[id] || srcLayers[id]);
         if (dragged.length === 0) return null;
         // Массовый/смешанный перенос слоя(ёв) вместе с чем-то ещё — этап 4
         // PLAN_DRAG_AND_DROP.md, вне объёма (реализован только перенос ОДНОГО
         // «верхнего» слоя — PLAN_LAYERS_AND_CONTEXT_CREATION.md, 2026-08-30).
-        const unsupportedMixedLayer = dragged.length > 1 && dragged.some(id => !!layers[id]);
-        const draggedLevels = dragged.map(id => HierarchyUtils.getEntityLevel(id, nodes, layers, state.levelWindows));
+        const unsupportedMixedLayer = dragged.length > 1 && dragged.some(id => !!srcLayers[id]);
+        const draggedLevels = dragged.map(id => HierarchyUtils.getEntityLevel(id, srcNodes, srcLayers, srcState.levelWindows));
 
         // Исключаются сами переносимые и их потомки: по владению/слоям
-        // (hasAncestorIn) и по координатным контейнерам (isDescendantOf)
+        // (hasAncestorIn) и по координатным контейнерам (isDescendantOf).
+        // Проверяется в словарях ЦЕЛИ (id — кандидат ИЗ state), но кросс-
+        // проектные dragged-id там попросту не встречаются — natural no-op.
         const isExcluded = (id) => dragged.includes(id)
             || HierarchyUtils.hasAncestorIn(id, dragged, nodes, layers)
             || dragged.some(d => HierarchyUtils.isDescendantOf(id, d, nodes, layers));
 
-        const dragRects = dragged.map(id => HierarchyUtils.getEntityWorldBounds(id, state)).filter(Boolean);
+        const dragRects = dragged.map(id => HierarchyUtils.getEntityWorldBounds(id, srcState)).filter(Boolean);
         if (dragRects.length === 0) return null;
 
         const intersects = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
@@ -1204,7 +1224,7 @@ const HierarchyUtils = {
             // мигрированная v11-сущность: ownerId (с gap===1, «через поколение»
             // не считается «уже там»).
             const allChildren = dragged.every(id => {
-                const e = nodes[id] || layers[id];
+                const e = srcNodes[id] || srcLayers[id];
                 return e.ownerId
                     ? (e.ownerId === nodeTarget && HierarchyUtils.getOwnerGap(e) === 1)
                     : e.parentId === nodeTarget;
@@ -1221,11 +1241,11 @@ const HierarchyUtils = {
             const layerLevel = HierarchyUtils.getEntityLevel(layerTarget, nodes, layers, state.levelWindows);
             const crossLevel = draggedLevels.some(lvl => lvl !== layerLevel);
             if (!dragDropMode && crossLevel) return make(false, 'dnd-off');
-            if (dragged.every(id => (nodes[id] || layers[id])?.parentId === layerTarget)) return make(false, 'same-parent');
+            if (dragged.every(id => (srcNodes[id] || srcLayers[id])?.parentId === layerTarget)) return make(false, 'same-parent');
             // v13: нет отдельного «спуска в собственную ветку» — canReparentTo
             // либо разрешает вложение, либо отклоняет цикл целиком (self/cycle).
             for (const id of dragged) {
-                const verdict = HierarchyUtils.canReparentTo(id, layerTarget, nodes, layers, state.levelWindows);
+                const verdict = HierarchyUtils.canReparentTo(id, layerTarget, nodes, layers, state.levelWindows, { nodes: srcNodes, layers: srcLayers });
                 if (!verdict.ok) return make(false, verdict.reason);
             }
             return make(true, null);
@@ -1251,7 +1271,15 @@ const HierarchyUtils = {
             const make = (valid, reason, isMove) => ({ kind: /** @type {'window'} */ ('window'), id: winTarget.id, valid, reason: reason || null, isMove: !!isMove });
             const view = HierarchyUtils.getLevelView(winTarget.id, state);
             if (view.isCollapsed) return make(false, 'collapsed');
-            const ownWindow = draggedLevels.every(lvl => lvl === winTarget.levelIndex);
+            // «Своё окно» — буквально ТО ЖЕ окно (по id, глобально уникален
+            // между проектами), а не совпадение номера уровня: у кросс-
+            // проектного дропа номер уровня цели может случайно совпасть с
+            // номером уровня источника, оставаясь при этом другим окном.
+            const ownWindow = dragged.every(id => {
+                const lvl = HierarchyUtils.getEntityLevel(id, srcNodes, srcLayers, srcState.levelWindows);
+                const win = HierarchyUtils.getWindowOfLevel(lvl, srcState.levelWindows);
+                return !!win && win.id === winTarget.id;
+            });
             if (ownWindow) return make(true, null, true); // обычное перемещение
             if (unsupportedMixedLayer) return make(false, 'layer-transfer-later');
             if (!dragDropMode) return make(false, 'dnd-off');
@@ -1259,6 +1287,48 @@ const HierarchyUtils = {
         }
 
         return null; // пустота мира
+    },
+
+    /**
+     * getDropTarget, расширенный на сканирование ВСЕХ открытых проектов
+     * (Фаза 6.3): неактивные проекты уже полностью рендерятся на общем
+     * холсте в единой мировой системе координат, так что перетащить узел
+     * из одного проекта в другой физически ничем не отличается от переноса
+     * внутри одного — разница только в том, из чьих словарей резолвится
+     * ЦЕЛЬ. Приоритет между проектами тот же, что и внутри одного вызова
+     * getDropTarget: валидный кандидат побеждает невалидный, среди валидных —
+     * node > layer > window.
+     * @param {Array<string>} draggedIds
+     * @param {Point} pointerWorld
+     * @param {Object} multiState корневое мультисостояние (state.projects/projectOrder)
+     * @param {string} sourceProjectId проект переносимых сущностей
+     * @param {{dragDropMode?: boolean}} [opts]
+     * @returns {?Object} тот же формат, что getDropTarget, плюс `projectId` цели
+     */
+    getDropTargetAcrossProjects: (draggedIds, pointerWorld, multiState, sourceProjectId, opts = {}) => {
+        if (!multiState || !sourceProjectId || !draggedIds || draggedIds.length === 0 || !pointerWorld) return null;
+        const getFlat = (typeof window !== 'undefined' && window.getProjectFlatView) ? window.getProjectFlatView : null;
+        if (!getFlat) return null;
+        const sourceView = getFlat(sourceProjectId);
+        if (!sourceView) return null;
+
+        const priority = { node: 3, layer: 2, window: 1 };
+        let best = null;
+        (multiState.projectOrder || []).forEach(pid => {
+            const proj = multiState.projects && multiState.projects[pid];
+            if (!proj) return;
+            if (multiState.containerIsolation && HierarchyUtils.isProjectVisible
+                && !HierarchyUtils.isProjectVisible(pid, multiState.containerIsolation, proj.levelWindows)) return;
+            const view = pid === sourceProjectId ? sourceView : getFlat(pid);
+            if (!view) return;
+            const t = HierarchyUtils.getDropTarget(draggedIds, pointerWorld, view, opts, sourceView);
+            if (!t) return;
+            const candidate = { ...t, projectId: pid };
+            if (!best) { best = candidate; return; }
+            if (candidate.valid && !best.valid) { best = candidate; return; }
+            if (candidate.valid === best.valid && priority[candidate.kind] > priority[best.kind]) best = candidate;
+        });
+        return best;
     },
 
     /**
@@ -1271,8 +1341,13 @@ const HierarchyUtils = {
      * @param {Object} state
      * @returns {?Object<string, Point>}
      */
-    computeDropPositions: (ids, win, state) => {
+    computeDropPositions: (ids, win, state, sourceState = null) => {
         if (!ids || !win || !state) return null;
+        // sourceState (Фаза 6.3): переносимые сущности живут в ДРУГОМ проекте,
+        // чем целевое окно — их мировые координаты резолвятся из своего же
+        // проекта, камера/зум целевого окна — из state. Без аргумента (как
+        // раньше) оба совпадают.
+        const srcState = sourceState || state;
         const view = HierarchyUtils.getLevelView(win.id, state);
         const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
         const z = view.innerZoom || 1;
@@ -1282,7 +1357,7 @@ const HierarchyUtils = {
         const winY = win.position?.y || 0;
         const result = {};
         ids.forEach(id => {
-            const b = HierarchyUtils.getEntityWorldBounds(id, state);
+            const b = HierarchyUtils.getEntityWorldBounds(id, srcState);
             if (!b) return;
             result[id] = {
                 x: Math.round((b.x - winX - borderW - offX) / z),
@@ -1296,40 +1371,53 @@ const HierarchyUtils = {
      * Текст вопроса-подтверждения перед Drag&Drop-переносом: что произойдёт
      * (смена родителя/уровня) и какие родственные связи будут разорваны.
      * @param {Array<string>} ids переносимые «верхние» id
-     * @param {{kind: string, id: string, descend?: boolean}} target цель дропа
-     * @param {Object} state
+     * @param {{kind: string, id: string, descend?: boolean, projectId?: string}} target цель дропа
+     * @param {Object} state словари переносимых сущностей
+     * @param {string} mode
+     * @param {?Object} [targetState] словари ЦЕЛИ, если это ДРУГОЙ проект
+     *   (Фаза 6.3, кросс-проектный перенос) — без аргумента (как раньше)
+     *   совпадает с `state`.
      * @returns {string}
      */
-    buildTransferConfirmText: (ids, target, state, mode) => {
+    buildTransferConfirmText: (ids, target, state, mode, targetState = null) => {
         const nodes = state.nodes || {};
         const layers = state.layers || {};
+        const tState = targetState || state;
+        const tNodes = tState.nodes || {};
+        const tLayers = tState.layers || {};
         const nameOf = (id) => {
             const e = nodes[id] || layers[id];
+            return (e && e.name) ? `«${e.name}»` : `«${id}»`;
+        };
+        const targetNameOf = (id) => {
+            const e = tNodes[id] || tLayers[id];
             return (e && e.name) ? `«${e.name}»` : `«${id}»`;
         };
         const label = ids.length === 1
             ? `${layers[ids[0]] ? 'Слой' : 'Узел'} ${nameOf(ids[0])}`
             : `${ids.length} элементов`;
+        const crossProjectSuffix = (targetState && targetState !== state && tState.projectName)
+            ? ` (проект «${tState.projectName}»)` : '';
 
         let head = '';
         let ownerWillChange = true;
         if (target.kind === 'node') {
-            const lvl = HierarchyUtils.getEntityLevel(target.id, nodes, layers) + 1;
-            head = `${label}: станет ребёнком узла ${nameOf(target.id)} (Уровень ${lvl}).`;
+            const lvl = HierarchyUtils.getEntityLevel(target.id, tNodes, tLayers) + 1;
+            head = `${label}: станет ребёнком узла ${targetNameOf(target.id)}${crossProjectSuffix} (Уровень ${lvl}).`;
         } else if (target.kind === 'layer') {
-            const lvl = HierarchyUtils.getEntityLevel(target.id, nodes, layers);
-            const cross = ids.some(id => HierarchyUtils.getEntityLevel(id, nodes, layers) !== lvl);
+            const lvl = HierarchyUtils.getEntityLevel(target.id, tNodes, tLayers);
+            const cross = targetState && targetState !== state ? true : ids.some(id => HierarchyUtils.getEntityLevel(id, nodes, layers) !== lvl);
             ownerWillChange = cross;
             head = cross
-                ? `${label}: перенос в слой ${nameOf(target.id)} на Уровень ${lvl}.`
-                : `${label}: положить в слой ${nameOf(target.id)} (уровень не меняется).`;
+                ? `${label}: перенос в слой ${targetNameOf(target.id)}${crossProjectSuffix} на Уровень ${lvl}.`
+                : `${label}: положить в слой ${targetNameOf(target.id)} (уровень не меняется).`;
             if (target.descend) {
                 head += ' Слой в собственной ветке: элемент спустится к потомкам, его прямые дети отвяжутся и останутся на местах.';
             }
         } else {
-            const win = state.levelWindows && state.levelWindows[target.id];
+            const win = tState.levelWindows && tState.levelWindows[target.id];
             const lvl = win ? win.levelIndex : 0;
-            head = `${label}: перенос на Уровень ${lvl} (без родителя — ${ids.length === 1 ? 'сиротой' : 'сиротами'}).`;
+            head = `${label}: перенос на Уровень ${lvl}${crossProjectSuffix} (без родителя — ${ids.length === 1 ? 'сиротой' : 'сиротами'}).`;
         }
 
         const broken = [];

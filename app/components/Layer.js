@@ -1,4 +1,4 @@
-const computeLayerDerived = (view, layerId) => {
+const computeLayerDerived = (view, layerId, projectId) => {
     if (!layerId || !view) return { ok: false };
     const layers = view.layers || {};
     const layer = layers[layerId];
@@ -36,7 +36,10 @@ const computeLayerDerived = (view, layerId) => {
     const absPos = (H && H.getLocalPosition) ? H.getLocalPosition(layerId, nodes, layers) : (layer.position || { x: 0, y: 0 });
     const interactionMode = view.interactionMode || 'default';
     const dropTargetL = view.dragGesture && view.dragGesture.target;
-    const isDropReceiver = !!(dropTargetL && dropTargetL.kind === 'layer' && dropTargetL.id === layerId && dropTargetL.valid);
+    // projectId (Фаза 6.3): dragGesture — глобальное поле, видно во всех
+    // проектах разом; сверка проекта нужна против гипотетического совпадения id.
+    const isDropReceiver = !!(dropTargetL && dropTargetL.kind === 'layer' && dropTargetL.id === layerId && dropTargetL.valid
+        && (!dropTargetL.projectId || dropTargetL.projectId === projectId));
 
     return {
         ok: true,
@@ -59,8 +62,8 @@ function Layer(props) {
     const projectId = React.useContext(ProjectContext);
 
     const selectDerived = React.useCallback(
-        (view) => computeLayerDerived(view, layerId),
-        [layerId]
+        (view) => computeLayerDerived(view, layerId, projectId),
+        [layerId, projectId]
     );
     const derived = useProjectSelector(selectDerived);
 
@@ -182,9 +185,13 @@ function Layer(props) {
             const wx = (ev.clientX - rect.left - st.canvas.offset.x) / st.canvas.zoom;
             const wy = (ev.clientY - rect.top - st.canvas.offset.y) / st.canvas.zoom;
             const ids = topDraggedIds(st);
-            const target = (H && H.getDropTarget)
-                ? H.getDropTarget(ids, { x: wx, y: wy }, st, { dragDropMode: !!(st.ui && st.ui.dragDropMode) })
-                : null;
+            const opts = { dragDropMode: !!(st.ui && st.ui.dragDropMode) };
+            // Кросс-проектный резолвер (Фаза 6.3): mousedown уже сделал
+            // projectId активным (см. выше), так что это и есть sourceProjectId.
+            const rootState = (typeof architectorStore !== 'undefined') ? architectorStore.getState() : null;
+            const target = (H && H.getDropTargetAcrossProjects && rootState)
+                ? H.getDropTargetAcrossProjects(ids, { x: wx, y: wy }, rootState, projectId, opts)
+                : (H && H.getDropTarget ? H.getDropTarget(ids, { x: wx, y: wy }, st, opts) : null);
             return { st, ids, target };
         };
 
@@ -317,8 +324,11 @@ function Layer(props) {
             const isTransfer = target && target.valid && !(target.kind === 'window' && target.isMove);
             if (isTransfer && H) {
                 const mode = shallowMode ? 'shallow' : 'deep';
+                const sourceProjectId = projectId;
+                const isCrossProject = !!(target.projectId && target.projectId !== sourceProjectId);
+                const targetView = isCrossProject ? window.getProjectFlatView(target.projectId) : st;
                 const text = H.buildTransferConfirmText
-                    ? H.buildTransferConfirmText(ids, target, st, mode)
+                    ? H.buildTransferConfirmText(ids, target, st, mode, isCrossProject ? targetView : null)
                     : 'Перенести выбранные элементы?';
                 if (window.confirm(text)) {
                     clearGesture();
@@ -330,16 +340,17 @@ function Layer(props) {
                             layers: initialSnapshot.layers,
                             ports: initialSnapshot.ports,
                             links: initialSnapshot.links
-                        }
+                        },
+                        ...(isCrossProject ? { sourceProjectId, targetProjectId: target.projectId } : {})
                     };
                     // v13 REPARENT_ENTITY: цель узла/слоя — напрямую targetParentId
                     // (единственное поле родства), окно резолвится в targetLevelIndex.
                     if (target.kind === 'node' || target.kind === 'layer') {
                         dispatch({ type: 'REPARENT_ENTITY', payload: { ...basePayload, targetParentId: target.id } });
                     } else {
-                        const win = st.levelWindows[target.id];
+                        const win = targetView.levelWindows[target.id];
                         const positionsById = H.computeDropPositions
-                            ? H.computeDropPositions(ids, win, st)
+                            ? H.computeDropPositions(ids, win, targetView, isCrossProject ? st : null)
                             : null;
                         dispatch({ type: 'REPARENT_ENTITY', payload: { ...basePayload, targetLevelIndex: win.levelIndex, ...(positionsById ? { positionsById } : {}) } });
                     }
