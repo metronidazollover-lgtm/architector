@@ -4022,6 +4022,31 @@ const multiReducer = (m, action) => {
             if (!id || !m.projects[id] || id === m.activeProjectId) return m;
             return { ...m, activeProjectId: id, selectedIds: [], isolatedIds: [] };
         }
+        case 'LOAD_GLOBAL_STATE': {
+            // Глобальный импорт рабочего пространства (Фаза 6.4): файл от
+            // handleExportWorkspace — все проекты разом, а не один. Полностью
+            // ЗАМЕНЯЕТ текущее рабочее пространство (деструктивно — UI
+            // спрашивает подтверждение ДО диспатча, здесь его уже нет).
+            const data = action.payload;
+            if (!data || !data.projects || !Array.isArray(data.projectOrder)) return m;
+            const { projects, projectOrder } = sanitizeLoadedProjects(data.projects, data.projectOrder);
+            if (projectOrder.length === 0) return m;
+            const activeProjectId = projects[data.activeProjectId] ? data.activeProjectId : projectOrder[0];
+            const next = pruneContainerIsolation({
+                ...m,
+                projects, projectOrder, activeProjectId,
+                projectCounter: data.projectCounter || projectOrder.length,
+                crossProjectLinks: data.crossProjectLinks || {},
+                canvas: data.canvas || m.canvas,
+                selectedIds: [], isolatedIds: [],
+                interactionMode: 'default',
+                pendingConnection: null,
+                dragGesture: null
+            });
+            // Файл мог сохранить неразрешённые штекеры с прошлого раза —
+            // если обе половины нашлись внутри ЭТОГО ЖЕ импорта, примиряем сразу.
+            return reconcilePendingGateways(next);
+        }
         case 'REPARENT_ENTITY': {
             // Кросс-проектный перенос (Фаза 6.3): targetProjectId задан и
             // отличается от sourceProjectId — перехватывается ЗДЕСЬ, до
@@ -4041,6 +4066,36 @@ const multiReducer = (m, action) => {
 
 // Начальное мультипроектное состояние: сохранённое v12 -> санитизация;
 // иначе легаси (v9/v10/v11 через getInitialState) -> обёртка в один проект.
+/**
+ * Санитизация словаря проектов из сырых сохранённых/импортированных данных:
+ * нормализация окон уровней и связей, транзиентные поля (past/future) с
+ * чистого листа. Общая для загрузки из localStorage (getInitialMultiState) и
+ * глобального импорта рабочего пространства (LOAD_GLOBAL_STATE, Фаза 6.4) —
+ * оба читают тот же формат v12-мультипроектного JSON.
+ * @param {Object<string, Object>} rawProjects
+ * @param {Array<string>} rawProjectOrder
+ * @returns {{ projects: Object<string, Object>, projectOrder: Array<string> }}
+ */
+const sanitizeLoadedProjects = (rawProjects, rawProjectOrder) => {
+    const projects = {};
+    Object.entries(rawProjects || {}).forEach(([pid, p]) => {
+        if (!p) return;
+        const norm = normalizeLevelWindows(p.levelWindows, p.nodes, p.layers, p.levelViews);
+        projects[pid] = {
+            ...p,
+            id: pid,
+            origin: p.origin || { x: 0, y: 0 },
+            links: normalizeLinks(p.links),
+            levelWindows: norm.levelWindows,
+            levelViews: norm.levelViews,
+            past: [], future: [],
+            historyLogs: p.historyLogs || ['Проект загружен']
+        };
+    });
+    const projectOrder = (rawProjectOrder || []).filter(pid => projects[pid]);
+    return { projects, projectOrder };
+};
+
 const getInitialMultiState = () => {
     if (typeof localStorage !== 'undefined') {
         try {
@@ -4048,22 +4103,7 @@ const getInitialMultiState = () => {
             if (savedMulti) {
                 const parsed = JSON.parse(savedMulti);
                 if (parsed && parsed.projects && Array.isArray(parsed.projectOrder)) {
-                    const projects = {};
-                    Object.entries(parsed.projects).forEach(([pid, p]) => {
-                        if (!p) return;
-                        const norm = normalizeLevelWindows(p.levelWindows, p.nodes, p.layers, p.levelViews);
-                        projects[pid] = {
-                            ...p,
-                            id: pid,
-                            origin: p.origin || { x: 0, y: 0 },
-                            links: normalizeLinks(p.links),
-                            levelWindows: norm.levelWindows,
-                            levelViews: norm.levelViews,
-                            past: [], future: [],
-                            historyLogs: p.historyLogs || ['Проект загружен']
-                        };
-                    });
-                    const projectOrder = parsed.projectOrder.filter(pid => projects[pid]);
+                    const { projects, projectOrder } = sanitizeLoadedProjects(parsed.projects, parsed.projectOrder);
                     const activeProjectId = projects[parsed.activeProjectId]
                         ? parsed.activeProjectId
                         : (projectOrder[0] || null);

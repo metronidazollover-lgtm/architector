@@ -845,3 +845,77 @@ test('HierarchyUtils.computeDropPositions: с sourceState резолвит по�
     assert.ok(positions.nodeA, 'позиция посчитана из sourceState для сущности, которой нет в targetState');
 });
 
+// === Фаза 6.4: глобальный экспорт/импорт рабочего пространства ===
+
+test('LOAD_GLOBAL_STATE: заменяет всё рабочее пространство целиком, включая crossProjectLinks', () => {
+    const { m: source, pidA, pidB } = makeTwoProjectsWithPorts();
+    const withLink = multiReducer(source, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(withLink.crossProjectLinks)[0];
+
+    // «Файл», как его строит handleExportWorkspace — те же поля один в один
+    const fileData = {
+        formatVersion: 13, kind: 'global',
+        projects: withLink.projects, projectOrder: withLink.projectOrder,
+        activeProjectId: withLink.activeProjectId, projectCounter: withLink.projectCounter,
+        crossProjectLinks: withLink.crossProjectLinks, canvas: withLink.canvas
+    };
+
+    // Импорт в СОВЕРШЕННО ДРУГОЕ пространство (третий, не связанный проект)
+    let target = wrapFlatToMulti(makeFlat());
+    target = multiReducer(target, { type: 'SET_SELECTED', payload: 'nodeA' });
+    target = multiReducer(target, { type: 'LOAD_GLOBAL_STATE', payload: fileData });
+
+    assert.deepEqual(target.projectOrder.slice().sort(), [pidA, pidB].sort(), 'ровно те же два проекта, что в файле');
+    assert.equal(target.projects[pidA].ports.portA1.name, 'PortA1', 'содержимое проекта A перенеслось');
+    assert.ok(target.projects[pidB].nodes.nodeB, 'содержимое проекта B перенеслось');
+    assert.ok(target.crossProjectLinks[linkId], 'кросс-проектная связь восстановилась');
+    assert.deepEqual(target.selectedIds, [], 'выделение (указывавшее на сущность из СТАРОГО пространства) сброшено');
+});
+
+test('LOAD_GLOBAL_STATE: невалидный файл — no-op; activeProjectId не из файла — фолбэк на первый проект', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const before = m;
+
+    const m1 = multiReducer(m, { type: 'LOAD_GLOBAL_STATE', payload: { projects: {} } }); // нет projectOrder
+    assert.equal(m1, before, 'no-op: не массив projectOrder');
+
+    const m2 = multiReducer(m, { type: 'LOAD_GLOBAL_STATE', payload: null });
+    assert.equal(m2, before, 'no-op: пустой payload');
+
+    const { m: twoProj, pidA } = makeTwoProjectsWithPorts();
+    const fileData = {
+        projects: twoProj.projects, projectOrder: twoProj.projectOrder,
+        activeProjectId: 'проект-которого-нет-в-файле', projectCounter: 2
+    };
+    const m3 = multiReducer(m, { type: 'LOAD_GLOBAL_STATE', payload: fileData });
+    assert.equal(m3.activeProjectId, m3.projectOrder[0], 'activeProjectId, которого нет среди загруженных, откатился на первый');
+});
+
+test('LOAD_GLOBAL_STATE: неразрешённые pendingGateways в самом файле примиряются сразу после загрузки', () => {
+    const { m: twoProj, pidA, pidB } = makeTwoProjectsWithPorts();
+    let m = {
+        ...twoProj,
+        projects: {
+            ...twoProj.projects,
+            [pidA]: { ...twoProj.projects[pidA], pendingGateways: {
+                'xlink-1': { linkId: 'xlink-1', portId: 'portA1', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'portB1', remoteProjectName: 'B', remotePortName: 'PortB1' }
+            } },
+            [pidB]: { ...twoProj.projects[pidB], pendingGateways: {
+                'xlink-1': { linkId: 'xlink-1', portId: 'portB1', direction: 'in', remoteProjectId: 'ghost2', remotePortId: 'portA1', remoteProjectName: 'A', remotePortName: 'PortA1' }
+            } }
+        }
+    };
+    const fileData = { projects: m.projects, projectOrder: m.projectOrder, activeProjectId: m.activeProjectId, projectCounter: 2 };
+
+    let target = wrapFlatToMulti(makeFlat());
+    target = multiReducer(target, { type: 'LOAD_GLOBAL_STATE', payload: fileData });
+
+    const link = target.crossProjectLinks['xlink-1'];
+    assert.ok(link, 'обе половины штекера нашлись в одном и том же импорте и пересобрались в живую связь');
+    assert.deepEqual(target.projects[pidA].pendingGateways, {});
+    assert.deepEqual(target.projects[pidB].pendingGateways, {});
+});
+
