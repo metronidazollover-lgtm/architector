@@ -3,8 +3,27 @@ const assert = require('node:assert/strict');
 
 global.HierarchyUtils = require('../utils/hierarchy.js');
 global.GeometryUtils = require('../utils/geometry.js');
-const { migrateToV10, reducer, defaultState, FORMAT_VERSION } = require('../store/reducer.js');
+const { migrateToV10, migrateToV13, reducer, defaultState, FORMAT_VERSION } = require('../store/reducer.js');
 const H = global.HierarchyUtils;
+
+// Эталонная реализация уровня v13 (docs/IDEAL_INTERACTIONS.md §1.1), НЕЗАВИСИМАЯ
+// от hierarchy.js: до Фазы 3 getLevel всё ещё читает ownerId/homeLevel и не умеет
+// разрешать parentId, указывающий на id окна уровня. Тесты ниже проверяют, что
+// migrateToV13 сохраняет уровень КАЖДОЙ сущности, сверяясь с этой независимой
+// реализацией целевого алгоритма, а не с текущим (устаревающим) getLevel.
+const getV13Level = (id, nodes, layers, levelWindows, seen = new Set()) => {
+    if (seen.has(id)) return 0; // защита от цикла в тестовых фикстурах
+    seen.add(id);
+    const e = nodes[id] || layers[id];
+    if (!e) return 0;
+    const pid = e.parentId;
+    if (pid === 'root') return 0;
+    const win = Object.values(levelWindows || {}).find(w => w && w.id === pid);
+    if (win) return win.levelIndex;
+    if (layers[pid]) return getV13Level(pid, nodes, layers, levelWindows, seen);
+    if (nodes[pid]) return getV13Level(pid, nodes, layers, levelWindows, seen) + 1;
+    return 0;
+};
 
 // Проект в формате v9: все позиции мировые
 const v9project = () => ({
@@ -137,4 +156,179 @@ test('getRawChainSum: цикл parentId не зацикливает', () => {
     };
     const p = H.getRawChainSum('a', nodes, {});
     assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y));
+});
+
+// ---------------------------------------------------------------------------
+// migrateToV13 (v12 -> v13): ownerId/ownerGap/homeLevel -> единый parentId.
+// См. docs/IDEAL_INTERACTIONS.md §1 и комментарий над migrateProjectEntitiesToV13
+// в app/store/reducer.js.
+// ---------------------------------------------------------------------------
+
+const win = (id, levelIndex) => ({ id, levelIndex, position: { x: 0, y: 0 }, size: { w: 800, h: 600 } });
+
+// Проект в формате v11/v12: 4-уровневое дерево со слоями (Тест 1 из Фазы 2 §2.3)
+// L0: root1 (обычный узел, владелец слоя L)                        уровень 0
+//     L (слой на root1, ownerId: root1)                            уровень 1 (владелец — узел)
+//         inLayerChild (parentId: L, ownerId: 'ghost' — «лапша»:   уровень 1 (координата решает,
+//                        координатно в слое, но структурно чужой)              ownerId отбрасывается)
+//     child1 (ownerId: root1, gap=1)                                уровень 1
+//         grandchild1 (ownerId: child1, gap=1)                      уровень 2
+const complexTreeProject = () => ({
+    levelWindows: { w0: win('w0', 0), w1: win('w1', 1), w2: win('w2', 2) },
+    layers: {
+        L: { id: 'L', name: 'L', parentId: 'root', ownerId: 'root1', position: { x: 0, y: 0 }, size: { w: 400, h: 300 } }
+    },
+    nodes: {
+        root1: { id: 'root1', name: 'Root1', parentId: 'root', ownerId: null, position: { x: 0, y: 0 }, size: { w: 200, h: 100 } },
+        inLayerChild: { id: 'inLayerChild', name: 'InLayerChild', parentId: 'L', ownerId: 'ghost-does-not-exist', position: { x: 30, y: 80 }, size: { w: 200, h: 100 } },
+        child1: { id: 'child1', name: 'Child1', parentId: 'root', ownerId: 'root1', position: { x: 10, y: 10 }, size: { w: 200, h: 100 } },
+        grandchild1: { id: 'grandchild1', name: 'Grandchild1', parentId: 'root', ownerId: 'child1', position: { x: 5, y: 5 }, size: { w: 200, h: 100 } }
+    },
+    ports: {}, links: {}, past: [], future: [], historyLogs: []
+});
+
+const multiState = (proj) => ({
+    projects: { p1: proj },
+    projectOrder: ['p1'],
+    activeProjectId: 'p1',
+    projectCounter: 1,
+    formatVersion: 12
+});
+
+test('migrateToV13: узел в слое со «спагетти»-ownerId — координата побеждает, ownerId отброшен', () => {
+    const before = complexTreeProject();
+    const m = migrateToV13(multiState(before));
+    const after = m.projects.p1;
+
+    assert.equal(after.nodes.inLayerChild.parentId, 'L');
+    assert.equal(after.nodes.inLayerChild.ownerId, undefined);
+    assert.equal(after.nodes.inLayerChild.ownerGap, undefined);
+    assert.equal(after.nodes.inLayerChild.homeLevel, undefined);
+    assert.deepEqual(after.nodes.inLayerChild.position, before.nodes.inLayerChild.position);
+});
+
+test('migrateToV13: обычная цепочка ownerId (gap=1) переходит в прямой parentId', () => {
+    const before = complexTreeProject();
+    const m = migrateToV13(multiState(before));
+    const after = m.projects.p1;
+
+    assert.equal(after.layers.L.parentId, 'root1');
+    assert.equal(after.nodes.child1.parentId, 'root1');
+    assert.equal(after.nodes.grandchild1.parentId, 'child1');
+    ['ownerId', 'ownerGap', 'homeLevel'].forEach(f => {
+        assert.equal(after.layers.L[f], undefined);
+        assert.equal(after.nodes.child1[f], undefined);
+        assert.equal(after.nodes.grandchild1[f], undefined);
+    });
+});
+
+test('migrateToV13: уровень каждой сущности сохранён (сверка со старым getLevel и с эталонным v13-алгоритмом)', () => {
+    const before = complexTreeProject();
+    const oldLevels = {};
+    ['root1', 'child1', 'grandchild1'].forEach(id => { oldLevels[id] = H.getLevel(id, before.nodes, before.layers); });
+    oldLevels.L = H.getLevel('L', before.nodes, before.layers);
+    oldLevels.inLayerChild = H.getLevel('inLayerChild', before.nodes, before.layers);
+
+    const m = migrateToV13(multiState(before));
+    const after = m.projects.p1;
+
+    Object.keys(oldLevels).forEach(id => {
+        const newLevel = getV13Level(id, after.nodes, after.layers, after.levelWindows);
+        assert.equal(newLevel, oldLevels[id], `уровень ${id} должен остаться ${oldLevels[id]}, получено ${newLevel}`);
+    });
+});
+
+test('migrateToV13: позиции и связи не меняются — только структура родства', () => {
+    const before = complexTreeProject();
+    const m = migrateToV13(multiState(before));
+    const after = m.projects.p1;
+
+    Object.keys(before.nodes).forEach(id => {
+        assert.deepEqual(after.nodes[id].position, before.nodes[id].position);
+        assert.deepEqual(after.nodes[id].size, before.nodes[id].size);
+    });
+    assert.deepEqual(after.layers.L.position, before.layers.L.position);
+    assert.equal(m.formatVersion, 13);
+});
+
+// Тест 2 из Фазы 2 §2.3: сирота с ownerGap > 1 (после очистки промежуточного уровня)
+test('migrateToV13: ownerGap > 1 конвертируется в явный якорь на своём уровне окна, а не в прямую ссылку на владельца', () => {
+    const before = {
+        levelWindows: { w0: win('w0', 0), w1: win('w1', 1), w2: win('w2', 2) },
+        layers: {},
+        nodes: {
+            root1: { id: 'root1', name: 'Root1', parentId: 'root', ownerId: null, position: { x: 0, y: 0 }, size: { w: 200, h: 100 } },
+            // «внук» после удаления уровня 1: владелец root1 (уровень 0), но сам живёт на уровне 2
+            grandchildGap: { id: 'grandchildGap', name: 'GrandchildGap', parentId: 'root', ownerId: 'root1', ownerGap: 2, position: { x: 15, y: 15 }, size: { w: 200, h: 100 } }
+        },
+        ports: {}, links: {}, past: [], future: [], historyLogs: []
+    };
+    const oldLevel = H.getLevel('grandchildGap', before.nodes, before.layers);
+    assert.equal(oldLevel, 2);
+
+    const m = migrateToV13(multiState(before));
+    const after = m.projects.p1;
+
+    // НЕ прямая ссылка на root1 (это дало бы уровень 1, а не 2) — явный якорь на окно уровня 2
+    assert.equal(after.nodes.grandchildGap.parentId, 'w2');
+    assert.equal(getV13Level('grandchildGap', after.nodes, after.layers, after.levelWindows), 2);
+    assert.deepEqual(after.nodes.grandchildGap.position, before.nodes.grandchildGap.position);
+});
+
+// Классический сирота-якорь (homeLevel), без ownerId вовсе
+test('migrateToV13: сирота-якорь (homeLevel) конвертируется в parentId = id окна своего уровня', () => {
+    const before = {
+        levelWindows: { w0: win('w0', 0), w1: win('w1', 1), w2: win('w2', 2) },
+        layers: {},
+        nodes: {
+            anchor2: { id: 'anchor2', name: 'Anchor2', parentId: 'root', ownerId: null, homeLevel: 2, position: { x: 1, y: 1 }, size: { w: 200, h: 100 } }
+        },
+        ports: {}, links: {}, past: [], future: [], historyLogs: []
+    };
+    const m = migrateToV13(multiState(before));
+    const after = m.projects.p1;
+
+    assert.equal(after.nodes.anchor2.parentId, 'w2');
+    assert.equal(after.nodes.anchor2.homeLevel, undefined);
+    assert.equal(getV13Level('anchor2', after.nodes, after.layers, after.levelWindows), 2);
+});
+
+// Мёртвая ссылка на владельца — тот же путь, что истинный сирота
+test('migrateToV13: узел с мёртвой ownerId-ссылкой мигрирует как обычный сирота на своём (нулевом) уровне', () => {
+    const before = {
+        levelWindows: { w0: win('w0', 0) },
+        layers: {},
+        nodes: {
+            deadOwner: { id: 'deadOwner', name: 'DeadOwner', parentId: 'root', ownerId: 'ghost-missing', position: { x: 2, y: 2 }, size: { w: 200, h: 100 } }
+        },
+        ports: {}, links: {}, past: [], future: [], historyLogs: []
+    };
+    const m = migrateToV13(multiState(before));
+    assert.equal(m.projects.p1.nodes.deadOwner.parentId, 'root');
+    assert.equal(m.projects.p1.nodes.deadOwner.ownerId, undefined);
+});
+
+test('migrateToV13: идемпотентность по formatVersion — состояние уже v13 возвращается той же ссылкой', () => {
+    const already = { projects: {}, projectOrder: [], activeProjectId: null, formatVersion: 13 };
+    assert.equal(migrateToV13(already), already);
+});
+
+test('migrateToV13: несколько проектов мигрируют независимо', () => {
+    const projA = complexTreeProject();
+    const projB = {
+        levelWindows: { w0: win('w0', 0) },
+        layers: {},
+        nodes: { solo: { id: 'solo', name: 'Solo', parentId: 'root', ownerId: null, position: { x: 9, y: 9 }, size: { w: 100, h: 50 } } },
+        ports: {}, links: {}, past: [], future: [], historyLogs: []
+    };
+    const m = migrateToV13({
+        projects: { a: projA, b: projB },
+        projectOrder: ['a', 'b'],
+        activeProjectId: 'a',
+        projectCounter: 2,
+        formatVersion: 12
+    });
+    assert.equal(m.projects.a.nodes.child1.parentId, 'root1');
+    assert.equal(m.projects.b.nodes.solo.parentId, 'root');
+    assert.equal(m.formatVersion, 13);
 });

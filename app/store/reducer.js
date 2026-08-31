@@ -3282,6 +3282,80 @@ const wrapFlatToMulti = (flat) => {
     };
 };
 
+const FORMAT_VERSION_V13 = 13;
+
+/**
+ * Миграция v12 -> v13: единый источник родства `parentId`, отказ от
+ * ownerId/ownerGap/homeLevel (см. docs/IDEAL_INTERACTIONS.md §1).
+ * Правило переноса на одну сущность (узел или слой):
+ *   1. Координатно вложена в РЕАЛЬНЫЙ слой (parentId указывает на layers[pid]) —
+ *      контейнер остаётся как есть, ownerId/ownerGap отбрасываются (в v13 нельзя
+ *      одновременно числиться в слое и структурно принадлежать другому узлу —
+ *      это и есть устраняемая «лапша», побеждает координатный контейнер).
+ *   2. Иначе, есть живой ownerId И getOwnerGap === 1 (обычное родство без
+ *      «прыжка через поколение») — parentId становится = ownerId напрямую.
+ *   3. Иначе (истинный сирота, мёртвая ссылка на владельца, ИЛИ ownerGap > 1
+ *      после очистки промежуточных уровней) — сущность «якорится» на СВОЙ
+ *      текущий уровень явно: parentId = id окна уровня с этим levelIndex.
+ *      Уровень считается ДО миграции (HierarchyUtils.getLevel по старым
+ *      данным), поэтому мировые координаты не смещаются ни на пиксель —
+ *      меняется только то, ЧЕМ выражено родство, а не где сущность рисуется.
+ * Позиции, размеры, связи и любые другие поля не трогаются.
+ */
+const migrateProjectEntitiesToV13 = (proj) => {
+    const H = getHierarchy();
+    const oldNodes = proj.nodes || {};
+    const oldLayers = proj.layers || {};
+    const levelWindows = proj.levelWindows || {};
+    const windowByLevel = {};
+    Object.values(levelWindows).forEach(w => {
+        if (w && windowByLevel[w.levelIndex] === undefined) windowByLevel[w.levelIndex] = w.id;
+    });
+
+    const migrateEntity = (e) => {
+        if (!e) return e;
+        const { ownerId, ownerGap, homeLevel, ...rest } = e;
+        const pid = e.parentId;
+
+        // 1. Координатная вложенность в слой побеждает — уже разрешённый пост-v11 инвариант.
+        if (pid && pid !== 'root' && oldLayers[pid]) {
+            return { ...rest, parentId: pid };
+        }
+
+        // 2. Прямое родство без прыжка через поколение.
+        const gap = H.getOwnerGap(e);
+        const owner = ownerId ? (oldNodes[ownerId] || oldLayers[ownerId]) : null;
+        if (owner && gap === 1) {
+            return { ...rest, parentId: ownerId };
+        }
+
+        // 3. Сирота-якорь (в т.ч. бывший ownerGap > 1) — привязка к своему уровню явно.
+        // Уровень 0 — самый частый случай (обычный узел без владельца на Главном
+        // холсте) — компактно остаётся литералом 'root' (это тот же самый
+        // levelWindows[LEVEL0_WINDOW_ID], просто без явного упоминания id).
+        const lvl = H.getLevel(e.id, oldNodes, oldLayers);
+        if (lvl === 0) return { ...rest, parentId: 'root' };
+        const winId = windowByLevel[lvl];
+        return { ...rest, parentId: winId !== undefined ? winId : 'root' };
+    };
+
+    const nodes = {};
+    Object.entries(oldNodes).forEach(([k, n]) => { nodes[k] = migrateEntity(n); });
+    const layers = {};
+    Object.entries(oldLayers).forEach(([k, l]) => { layers[k] = migrateEntity(l); });
+
+    return { ...proj, nodes, layers };
+};
+
+const migrateToV13 = (state) => {
+    if (!state || (state.formatVersion || 0) >= FORMAT_VERSION_V13) return state;
+    const projects = {};
+    Object.entries(state.projects || {}).forEach(([pid, proj]) => {
+        projects[pid] = proj ? migrateProjectEntitiesToV13(proj) : proj;
+    });
+    return { ...state, projects, formatVersion: FORMAT_VERSION_V13 };
+};
+
 // Плоский вид: глобальные поля + поля активного проекта (для компонентов и
 // внутреннего редьюсера). Без активного проекта — безопасные пустые значения.
 const mergeActiveView = (m) => {
@@ -3709,6 +3783,14 @@ const getInitialMultiState = () => {
                             return base;
                         })()
                     };
+                    // migrateToV13 НЕ вызывается здесь намеренно: HierarchyUtils (getLevel,
+                    // getEntityLevel, getDropTarget и др.) до Фазы 3 ещё читает
+                    // ownerId/ownerGap/homeLevel — включить миграцию на живом старте
+                    // раньше, чем ядро иерархии научится понимать чистый parentId, значит
+                    // молча ломать уровень сирот-якорей (parentId станет id окна, а старый
+                    // getLevel такое значение не распознает и посчитает уровень нулевым).
+                    // Функция готова и покрыта тестами (migration.test.js) — подключение
+                    // сюда и в LOAD_STATE/ADD_PROJECT_FROM_FILE переносится в конец Фазы 3.
                     return {
                         ...globalDefaults(),
                         canvas: parsed.canvas || defaultState.canvas,
@@ -3734,10 +3816,11 @@ const getInitialMultiState = () => {
             try { localStorage.removeItem(STORAGE_KEY_V12); } catch (_) {}
         }
     }
-    // Легаси-путь: getInitialState читает v11/v10/v9 и возвращает плоское состояние
+    // Легаси-путь: getInitialState читает v11/v10/v9 и возвращает плоское состояние.
+    // migrateToV13 намеренно не вызывается здесь — см. комментарий выше.
     return wrapFlatToMulti(getInitialState());
 };
 
-const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, normalizeLevelWindows };
+const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, FORMAT_VERSION_V13, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, migrateToV13, normalizeLevelWindows };
 if (typeof window !== 'undefined') window.ArchitectorStore = ArchitectorStore;
 if (typeof module !== 'undefined') module.exports = ArchitectorStore;
