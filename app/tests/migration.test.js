@@ -249,6 +249,26 @@ test('REPARENT_ENTITY (shallow): Undo одним шагом возвращает
     assert.equal(s3.nodes.grandchild1.parentId, 'root1');
 });
 
+test('REPARENT_ENTITY: historySnapshot делает Drag&Drop-жест (движение + перенос) одним шагом Undo', () => {
+    const s0 = { ...v13TreeState(), selectedIds: ['lonely'] };
+    // Жест: движение мышью (skipHistory) + сам перенос — как в живом драге
+    // (Node.js/Layer.js dispatch REPARENT_ENTITY с p.historySnapshot = срез mousedown)
+    const s1 = reducer(s0, { type: 'MOVE_SELECTED', payload: { dx: 100, dy: 0, skipHistory: true } });
+    const s2 = reducer(s1, {
+        type: 'REPARENT_ENTITY',
+        payload: {
+            id: 'lonely',
+            targetParentId: 'L',
+            historySnapshot: { nodes: s0.nodes, layers: s0.layers, ports: s0.ports, links: s0.links }
+        }
+    });
+    assert.equal(s2.nodes.lonely.parentId, 'L', 'перенос состоялся');
+    assert.equal(s2.past.length, s0.past.length + 1, 'ровно один шаг истории на весь жест');
+
+    const s3 = reducer(s2, { type: 'UNDO' });
+    assert.deepEqual(s3.nodes.lonely, s0.nodes.lonely, 'Undo вернул ИСХОДНОЕ состояние до mousedown, а не промежуточное движение');
+});
+
 test('MOVE_SELECTED: потомок выделенного предка не двигается дважды', () => {
     const m = migrateToV10(v9project());
     const s0 = { ...defaultState, nodes: m.nodes, layers: m.layers, selectedIds: ['inLayer', 'child'] };

@@ -2494,9 +2494,13 @@ const reducer = (state, action) => {
             if (validIds.length === 0) return state;
 
             const firstEntity = getEntity(validIds[0]);
+            // p.historySnapshot — срез на начало Drag&Drop-жеста (mousedown), как у
+            // TRANSFER_NODE: движение мышью пишется с skipHistory, поэтому без среза
+            // «до» в past попало бы промежуточное положение вместо исходного, и один
+            // Ctrl+Z не откатывал бы весь жест целиком.
             const historyState = saveHistory(state, validIds.length === 1
                 ? `Элемент перевложен: ${firstEntity.name}`
-                : `Перевложено элементов: ${validIds.length}`);
+                : `Перевложено элементов: ${validIds.length}`, p.historySnapshot || null);
 
             const newNodes = { ...state.nodes };
             const newLayers = { ...state.layers };
