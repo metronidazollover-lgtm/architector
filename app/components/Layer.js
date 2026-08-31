@@ -153,7 +153,21 @@ function Layer(props) {
         // получается устойчиво навести на другой слой для вложения. Тумблер
         // физически нельзя переключить той же рукой, что держит перетаскивание,
         // поэтому фиксация на старте жеста безопасна.
-        const dragDropModeAtStart = !!(state.ui && state.ui.dragDropMode);
+        // Значение НЕ приводим к boolean: тумблер трёхпозиционный
+        // (false / 'deep' / 'shallow' — PLAN_SHALLOW_TRANSFER_DND.md), а не
+        // только вкл/выкл, и конкретный выбранный режим переноса нужен ниже,
+        // в handleMouseUp, для TRANSFER_NODE (премортем, риск 7: хоткеем можно
+        // сменить режим второй рукой посреди жеста — исход уже начатого
+        // переноса от этого меняться не должен).
+        const dragDropModeAtStart = (state.ui && state.ui.dragDropMode) || false;
+
+        // Deep/Shallow (v13, REPARENT_ENTITY): в отличие от тумблера DnD, режим
+        // переноса ЖИВОЙ — Alt можно нажать или отпустить в процессе перетаскивания,
+        // не только держать с самого начала (PLAN_V12_CLEAN_HIERARCHY_AND_INTERACTIONS.md,
+        // Фаза 5.2). Читается в момент mouseup, а не фиксируется на старте.
+        let shallowMode = e.altKey;
+        let lastMoveEvent = e;
+
         const topDraggedIds = (st) => {
             const sel = (st.selectedIds || []).filter(sid => st.nodes[sid] || (st.layers && st.layers[sid]));
             const ids = sel.includes(data.id) && sel.length > 0 ? sel : [data.id];
@@ -190,11 +204,12 @@ function Layer(props) {
             });
         };
         const updateGesture = (ev) => {
+            lastMoveEvent = ev;
             const { st, ids, target } = computeTarget(ev);
-            const key = target ? `${target.kind}:${target.id}:${target.valid}` : 'void';
+            const key = (target ? `${target.kind}:${target.id}:${target.valid}` : 'void') + ':' + (shallowMode ? 'shallow' : 'deep');
             if (key === lastTargetKey) return;
             lastTargetKey = key;
-            dispatch({ type: 'SET_DRAG_GESTURE', payload: { ids, target } });
+            dispatch({ type: 'SET_DRAG_GESTURE', payload: { ids, target, mode: shallowMode ? 'shallow' : 'deep' } });
             const dndOn = !!(st.ui && st.ui.dragDropMode);
             document.body.style.cursor = (dndOn && (!target || !target.valid)) ? 'not-allowed' : '';
         };
@@ -203,6 +218,7 @@ function Layer(props) {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
             window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
             document.body.style.cursor = '';
         };
 
@@ -212,10 +228,22 @@ function Layer(props) {
         };
 
         const handleKeyDown = (kev) => {
-            if (kev.key !== 'Escape') return;
-            cleanup();
-            if (hasMoved) restoreGesture();
-            else dispatch({ type: 'SET_DRAG_GESTURE', payload: null });
+            if (kev.key === 'Escape') {
+                cleanup();
+                if (hasMoved) restoreGesture();
+                else dispatch({ type: 'SET_DRAG_GESTURE', payload: null });
+                return;
+            }
+            if (kev.key === 'Alt' && !shallowMode) {
+                shallowMode = true;
+                if (hasMoved) updateGestureThrottled(lastMoveEvent);
+            }
+        };
+        const handleKeyUp = (kev) => {
+            if (kev.key === 'Alt' && shallowMode) {
+                shallowMode = false;
+                if (hasMoved) updateGestureThrottled(lastMoveEvent);
+            }
         };
 
         const handleMouseMove = (moveEvent) => {
@@ -241,7 +269,7 @@ function Layer(props) {
             // конкретную валидную цель. Так другие слои «пропускают» перетаскиваемый
             // слой сквозь себя и дают его вложить — ровно как через поповер
             // «Назначить на слой» (там расталкивания никогда не было).
-            const suppressCollision = dragDropModeAtStart;
+            const suppressCollision = !!dragDropModeAtStart;
             let resolvedDx, resolvedDy;
             if (suppressCollision) {
                 resolvedDx = dx;
@@ -288,13 +316,15 @@ function Layer(props) {
 
             const isTransfer = target && target.valid && !(target.kind === 'window' && target.isMove);
             if (isTransfer && H) {
+                const mode = shallowMode ? 'shallow' : 'deep';
                 const text = H.buildTransferConfirmText
-                    ? H.buildTransferConfirmText(ids, target, st)
+                    ? H.buildTransferConfirmText(ids, target, st, mode)
                     : 'Перенести выбранные элементы?';
                 if (window.confirm(text)) {
                     clearGesture();
                     const basePayload = {
                         ids,
+                        mode,
                         historySnapshot: {
                             nodes: initialSnapshot.nodes,
                             layers: initialSnapshot.layers,
@@ -302,17 +332,16 @@ function Layer(props) {
                             links: initialSnapshot.links
                         }
                     };
-                    if (target.kind === 'node') {
-                        const ownerLvl = H.getEntityLevel(target.id, st.nodes, st.layers);
-                        dispatch({ type: 'TRANSFER_NODE', payload: { ...basePayload, targetLevelIndex: ownerLvl + 1, newOwnerId: target.id } });
-                    } else if (target.kind === 'layer') {
-                        dispatch({ type: 'TRANSFER_NODE', payload: { ...basePayload, targetLayerId: target.id } });
+                    // v13 REPARENT_ENTITY: цель узла/слоя — напрямую targetParentId
+                    // (единственное поле родства), окно резолвится в targetLevelIndex.
+                    if (target.kind === 'node' || target.kind === 'layer') {
+                        dispatch({ type: 'REPARENT_ENTITY', payload: { ...basePayload, targetParentId: target.id } });
                     } else {
                         const win = st.levelWindows[target.id];
                         const positionsById = H.computeDropPositions
                             ? H.computeDropPositions(ids, win, st)
                             : null;
-                        dispatch({ type: 'TRANSFER_NODE', payload: { ...basePayload, targetLevelIndex: win.levelIndex, ...(positionsById ? { positionsById } : {}) } });
+                        dispatch({ type: 'REPARENT_ENTITY', payload: { ...basePayload, targetLevelIndex: win.levelIndex, ...(positionsById ? { positionsById } : {}) } });
                     }
                 } else {
                     restoreGesture();
@@ -335,6 +364,7 @@ function Layer(props) {
         window.addEventListener('mousemove', handleMouseMove);
         window.addEventListener('mouseup', handleMouseUp);
         window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
     };
 
     const handleResizeMouseDown = (e) => {

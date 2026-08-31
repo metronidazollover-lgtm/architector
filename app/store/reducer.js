@@ -397,18 +397,19 @@ const migrateToV11 = (data) => {
 };
 
 /**
- * Инвариант модели v11: parentId — это КОНТЕЙНЕР ('root' или слой) и никогда не узел.
- * Указатель на узел означает семантическое владение и переезжает в ownerId.
- * Нормализация живёт в одном месте: её проходят и тулбар, и ИИ-агент, и импорт,
- * поэтому ни один путь создания сущности не может завести «узел внутри узла».
+ * v13 (docs/IDEAL_INTERACTIONS.md §1): parentId — единственный источник родства.
+ * `'root'`, id слоя И id узла (порождение подуровня) — все три одинаково валидны
+ * напрямую, без расщепления на ownerId. Нормализация живёт в одном месте: её
+ * проходят и тулбар, и ИИ-агент, и импорт, поэтому ни один путь создания
+ * сущности не заводит устаревшее поле ownerId у новых сущностей.
+ *
+ * Безопасно с REMOVE_LEVEL_WINDOW/CLEAR_LEVEL_WINDOW/REMOVE_ROOT_CANVAS —
+ * их ре-якорение потомков понимает и ownerId (v11), и parentId-на-узел (v13)
+ * одинаково через structuralParentOf (см. коммит, переписавший обе функции).
  */
-const normalizeContainer = (entity, nodes) => {
+const normalizeContainer = (entity) => {
     if (!entity) return entity;
-    const pid = entity.parentId;
-    if (pid && pid !== 'root' && nodes && nodes[pid]) {
-        return { ...entity, parentId: 'root', ownerId: pid };
-    }
-    return { ...entity, parentId: pid || 'root', ownerId: entity.ownerId || null };
+    return { ...entity, parentId: entity.parentId || 'root' };
 };
 
 /**
@@ -1045,6 +1046,24 @@ const saveHistory = (state, logMessage, snapshotOverride = null) => {
     };
 };
 
+/**
+ * Структурный родитель сущности («на уровень выше через УЗЕЛ», семантический
+ * шаг v13, см. docs/IDEAL_INTERACTIONS.md §1.1) — единообразно для ещё не
+ * мигрированных v11-сущностей (ownerId) и уже v13-сущностей (parentId
+ * указывает прямо на узел, что сегодня может произойти только через
+ * REPARENT_ENTITY — TRANSFER_NODE/CREATE_NESTED_NODE пока всегда пишут
+ * ownerId). parentId, указывающий на СЛОЙ, — координата, не родство,
+ * сюда не попадает (слои не меняют уровень, см. правило семантического шага).
+ * @param {Object} entity
+ * @param {Object<string, Object>} nodes
+ * @returns {?string}
+ */
+const structuralParentOf = (entity, nodes) => {
+    if (entity.ownerId) return entity.ownerId;
+    if (entity.parentId && entity.parentId !== 'root' && nodes && nodes[entity.parentId]) return entity.parentId;
+    return null;
+};
+
 // Общая реализация удаления уровня: используется экшеном REMOVE_LEVEL_WINDOW
 // и клавишей Delete (DELETE_SELECTED при выделенном окне уровня). Вынесена из
 // switch, чтобы редьюсер не ссылался сам на себя (самовызов ломал загрузку
@@ -1078,36 +1097,66 @@ const applyRemoveLevelWindow = (state, win, allowRoot = true) => {
     Object.keys(state.nodes || {}).forEach(eid => { if (levelOf(eid) === removedLevel) removedIds.add(eid); });
     Object.keys(state.layers || {}).forEach(eid => { if (levelOf(eid) === removedLevel) removedIds.add(eid); });
 
-    // 2. Выжившие сущности; осиротевшие цепочки владения пере-якорятся
+    // 2. Выжившие сущности; осиротевшие структурные цепочки пере-якорятся.
+    // structuralParentOf унифицирует ownerId (v11) и parentId-на-узел (v13,
+    // сегодня возможно только через REPARENT_ENTITY) — «внук — деду» работает
+    // одинаково независимо от того, какой цепочкой сущность сюда попала.
+    // v11 несёт свою дистанцию до родителя в ownerGap; v13 (нет ownerId) её не
+    // хранит вовсе — расстояние всегда ровно 1 по определению модели.
+    const gapOf2 = (ent) => (ent && ent.ownerId ? gapOf(ent) : 1);
+
     const reanchor = (entity) => {
         let e = entity;
-        if (e.ownerId && removedIds.has(e.ownerId)) {
-            const deadOwner = (state.nodes && state.nodes[e.ownerId]) || (state.layers && state.layers[e.ownerId]);
-            if (deadOwner && deadOwner.ownerId) {
-                // «Внук — деду»: дистанции складываются, минус один снятый уровень
-                e = withGap({ ...e, ownerId: deadOwner.ownerId }, gapOf(e) + gapOf(deadOwner) - 1);
+        const myParent = structuralParentOf(e, state.nodes);
+        if (myParent && removedIds.has(myParent)) {
+            const deadParent = (state.nodes && state.nodes[myParent]) || (state.layers && state.layers[myParent]);
+            const grandparent = deadParent ? structuralParentOf(deadParent, state.nodes) : null;
+            // v13 (нет ownerId у e): прямая ссылка parentId=дед безопасна ТОЛЬКО
+            // если реальная дистанция дед→мёртвый родитель ровно 1 — иначе v13
+            // не может выразить растянутую дистанцию (gap у неё не существует)
+            // и сущность обязана явно заякориться (см. else-ветку), как и
+            // migrateToV13 делает для ownerGap > 1.
+            const canDirectLink = !!e.ownerId || gapOf2(deadParent) === 1;
+            if (grandparent && !removedIds.has(grandparent) && canDirectLink) {
+                if (e.ownerId) {
+                    // «Внук — деду» (v11): дистанции складываются, минус один снятый уровень
+                    e = withGap({ ...e, ownerId: grandparent }, gapOf(e) + gapOf(deadParent) - 1);
+                } else {
+                    // v13: связь всегда прямая (дистанция ровно 1, gap не существует)
+                    e = { ...e, parentId: grandparent };
+                }
             } else {
-                // Владелец был корневым/сиротой-якорем удаляемого уровня:
+                // Родитель был корневым/сиротой-якорем удаляемого уровня:
                 // ребёнок сам становится якорем на ТЕКУЩЕМ уровне (removedLevel +
                 // дистанция); общий блок сдвига якорей ниже опустит значение на
-                // один вместе с остальными уровнями — двойного сдвига нет
-                e = withGap({ ...e, ownerId: null, homeLevel: removedLevel + gapOf(e) }, 1);
+                // один вместе с остальными уровнями — двойного сдвига нет.
+                // Мёртвую parentId-ссылку (если структурная связь была через
+                // parentId, не ownerId) тоже нужно снять — homeLevel становится
+                // единственным источником уровня сироты-якоря.
+                e = withGap({
+                    ...e,
+                    ownerId: null,
+                    homeLevel: removedLevel + gapOf2(e),
+                    ...(e.ownerId ? {} : { parentId: 'root' })
+                }, 1);
             }
-        } else if (e.ownerId) {
-            // Владелец жив. Если связь через поколение ПЕРЕПРЫГИВАЛА удаляемый
-            // уровень (владелец выше, сущность ниже), дистанция сокращается на
-            // один вместе со сдвигом уровней.
-            const owner = (state.nodes && state.nodes[e.ownerId]) || (state.layers && state.layers[e.ownerId]);
-            if (owner) {
-                const ownerLvl = levelOf(e.ownerId);
+        } else if (myParent) {
+            // Родитель жив. Если связь через поколение (только ownerId, v11)
+            // ПЕРЕПРЫГИВАЛА удаляемый уровень, дистанция сокращается на один
+            // вместе со сдвигом уровней. v13 (parentId-на-узел): дистанция
+            // всегда ровно 1 по определению, «перепрыгивания» не бывает.
+            if (e.ownerId) {
+                const ownerLvl = levelOf(myParent);
                 const myLvl = levelOf(e.id);
                 if (ownerLvl < removedLevel && myLvl > removedLevel) {
                     e = withGap({ ...e }, gapOf(e) - 1);
                 }
             }
         }
-        // Координатный контейнер удалён — сущность встаёт на холст уровня
-        if (e.parentId && e.parentId !== 'root' && removedIds.has(e.parentId)) {
+        // Координатный контейнер (СЛОЙ) удалён — сущность встаёт на холст
+        // уровня. Узел уже обработан выше (структурная ветка) — здесь остаются
+        // только слои (и живой parentId, не заменённый на grandparent/'root' там).
+        if (e.parentId && e.parentId !== 'root' && removedIds.has(e.parentId) && !(state.nodes && state.nodes[e.parentId])) {
             e = { ...e, parentId: 'root' };
         }
         // Якоря независимых веток сдвигаются вместе с уровнями
@@ -1299,7 +1348,7 @@ const reducer = (state, action) => {
             const id = action.payload.id || 'layer-' + Date.now() + Math.floor(Math.random() * 1000);
             const historyState = saveHistory(state, `Добавлен слой: ${action.payload.name}`);
             const parentId = action.payload.parentId !== undefined ? action.payload.parentId : 'root';
-            const newLayers = { ...state.layers, [id]: normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true }, state.nodes) };
+            const newLayers = { ...state.layers, [id]: normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true }) };
             // Вложение подслоя (parentId — другой слой, из FAB «Добавить слой
             // внутрь этого слоя»): цепочка родителей подрастает под содержимое.
             const H = getHierarchy();
@@ -1309,10 +1358,14 @@ const reducer = (state, action) => {
                     if (newLayers[lid]) newLayers[lid] = { ...newLayers[lid], size };
                 });
             }
+            // parentId на узел (v13) мог создать новую глубину — окна достраиваются
+            const normalizedAddLayer = normalizeLevelWindows(state.levelWindows, state.nodes, newLayers, state.levelViews);
             return {
                 ...state,
                 ...historyState,
                 layers: newLayers,
+                levelWindows: normalizedAddLayer.levelWindows,
+                levelViews: normalizedAddLayer.levelViews,
                 selectedIds: [id]
             };
         }
@@ -1379,7 +1432,7 @@ const reducer = (state, action) => {
             const historyState = saveHistory(state, `Добавлен узел: ${action.payload.name}`);
             const parentId = action.payload.parentId !== undefined ? action.payload.parentId : 'root';
             
-            const nodeData = normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true }, state.nodes);
+            const nodeData = normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true });
             if (nodeData.type !== 'ai-agent') {
                 nodeData.size = calculateNodeSize(nodeData.name, nodeData.content, nodeData.mediaUrl, nodeData.mediaHeight, nodeData.fontSize, nodeData.fontFamily);
             } else if (!nodeData.size) {
@@ -1404,11 +1457,15 @@ const reducer = (state, action) => {
                 }
             }
 
+            // parentId на узел (v13) мог создать новую глубину — окна достраиваются
+            const normalizedAddNode = normalizeLevelWindows(state.levelWindows, updatedNodes, updatedLayers, state.levelViews);
             return {
                 ...state,
                 ...historyState,
                 nodes: updatedNodes,
                 layers: updatedLayers,
+                levelWindows: normalizedAddNode.levelWindows,
+                levelViews: normalizedAddNode.levelViews,
                 selectedIds: [id]
             };
         }
@@ -2107,278 +2164,148 @@ const reducer = (state, action) => {
                 dragGesture: null
             };
         }
-        case 'TRANSFER_NODE': {
-            // Перенос узлов в слой / на другой уровень с корректным родством.
+        case 'REPARENT_ENTITY': {
+            // v13 (PLAN_V12_CLEAN_HIERARCHY_AND_INTERACTIONS.md): единственный
+            // атомарный экшен переноса. Заменил TRANSFER_NODE (физически удалён
+            // из редьюсера — все 5 мест диспатча в UI переведены на этот экшен).
             //
-            // ЕДИНОЕ ПРАВИЛО: ownerId переписывается ТОЛЬКО при смене уровня —
-            // усыновляет владелец ветки целевого слоя; перенос на уровень 0 или
-            // на холст без владельца делает узел СИРОТОЙ-ЯКОРЕМ (homeLevel).
-            // В пределах своего уровня назначение на слой — чистая группировка.
+            // Обратная совместимость: одиночный { id, newParentId } нормализуется
+            // в { ids: [id], targetParentId: newParentId } — старый контракт первых
+            // тестов (см. app/tests/migration.test.js) продолжает работать как есть.
             //
-            // «СПУСК В СОБСТВЕННУЮ ВЕТКУ»: если целевой слой лежит в ветке
-            // переносимого узла (усыновителем стал бы он сам или его потомок),
-            // узел спускается сиротой в слой, а его ПРЯМЫЕ подопечные
-            // отвязываются: узлы уровня слоя ложатся в этот же слой братьями,
-            // остальные якорятся по месту (homeLevel). Поддеревья подопечных
-            // не меняются.
-            //
-            // Дети переносимых узлов не трогаются (уровень вычисляется цепочкой),
-            // связи не трогаются (вид пересчитывается при рендере).
-            // Массовое выделение: переносятся «только верхние».
+            // payload: { ids | id, targetParentId | newParentId, targetLevelIndex?,
+            //            mode?: 'deep' | 'shallow', position?, positionsById?, historySnapshot? }
+            // positionsById — целевые позиции по id (Drag&Drop с курсором под
+            // элементами при переносе НЕСКОЛЬКИХ сущностей); при одиночном переносе
+            // проще передать один `position`. historySnapshot — срез на mousedown,
+            // чтобы весь жест (движение + перенос) был одним шагом Undo.
             const p = action.payload || {};
             const H = getHierarchy();
             const G = getGeometry();
-            if (!H) return state;
+            if (!H || !G) return state;
 
-            // Сущность — узел ИЛИ слой (PLAN_LAYERS_AND_CONTEXT_CREATION.md,
-            // 2026-08-30 — этап 3 PLAN_DRAG_AND_DROP.md: перенос слоя тем же
-            // механизмом, что и узла). Массовый/смешанный перенос слоя(ёв)
-            // вместе с чем-то ещё — этап 4, вне объёма: отклоняем как no-op.
+            const mode = p.mode === 'shallow' ? 'shallow' : 'deep';
+            let targetParentId = p.targetParentId !== undefined ? p.targetParentId : p.newParentId;
+            if (targetParentId === undefined && typeof p.targetLevelIndex === 'number') {
+                const win = resolveWindow(state, p.targetLevelIndex);
+                targetParentId = win ? win.id : (p.targetLevelIndex === 0 ? 'root' : undefined);
+            }
+            if (!targetParentId) return state;
+
             const isNodeId = (eid) => !!(state.nodes && state.nodes[eid]);
-            const isLayerId = (eid) => !!(state.layers && state.layers[eid]);
             const getEntity = (eid) => (state.nodes && state.nodes[eid]) || (state.layers && state.layers[eid]);
-            // newNodes/newLayers объявляются ниже (const, тот же блок) — замыкания
-            // читают/пишут их по ссылке, вызываются только ПОСЛЕ объявления.
-            const getNew = (eid) => (isNodeId(eid) ? newNodes[eid] : newLayers[eid]);
-            const setNew = (eid, val) => { if (isNodeId(eid)) newNodes[eid] = val; else newLayers[eid] = val; };
-
-            // Потомок ИМЕННО по владению (ownerId-цепочка) — настоящий переезд
-            // на новый уровень вслед за владельцем. НЕ то же самое, что общая
-            // HierarchyUtils.hasAncestorIn: та считает потомком и того, кто
-            // просто вложен в переехавший слой через parentId (координатная
-            // группировка) — такой уже корректно следует за слоем композицией
-            // позиций, у него другая система координат (локальная для слоя, а
-            // не холста), и раздвигать/трогать его здесь нельзя (баг: узел,
-            // назначенный на переносимый слой, «вылетал» из него после дропа).
-            const isOwnerDescendant = (eid, ancestorId) => {
-                let current = getEntity(eid);
-                const visited = new Set();
-                while (current && current.ownerId && !visited.has(current.id)) {
-                    visited.add(current.id);
-                    if (current.ownerId === ancestorId) return true;
-                    current = getEntity(current.ownerId);
-                }
-                return false;
-            };
 
             const rawIds = Array.isArray(p.ids) ? p.ids : (p.id ? [p.id] : []);
-            const ids = rawIds.filter(nid => getEntity(nid));
-            if (ids.length === 0) return state;
-            const draggedLayerIds = ids.filter(isLayerId);
-            if (draggedLayerIds.length > 0 && ids.length > 1) return state;
+            const requestedIds = rawIds.filter(eid => getEntity(eid));
+            if (requestedIds.length === 0) return state;
 
-            const targetLayer = (p.targetLayerId && state.layers) ? state.layers[p.targetLayerId] : null;
-            const targetLevel = targetLayer
-                ? H.getEntityLevel(targetLayer.id, state.nodes, state.layers)
-                : (typeof p.targetLevelIndex === 'number' ? p.targetLevelIndex : null);
-            if (targetLevel === null || targetLevel < 0) return state;
+            // «Только верхние»: у кого в этом же наборе есть предок по parentId-
+            // цепочке (единственная цепочка в v13 — координата и родство слиты) —
+            // тот переедет вместе со своим предком, отдельно его не трогаем.
+            const topIds = requestedIds.filter(eid => !requestedIds.some(other =>
+                other !== eid && H.isDescendantOf(eid, other, state.nodes, state.layers)));
 
-            // Защита от циклов parentId: слой нельзя бросить в слой, который
-            // сам лежит внутри него (координатный контейнер, не ownerId-ветка —
-            // для той у cross-level уже есть «спуск» ниже). У узлов такого риска
-            // нет: parentId никогда не указывает на узел (normalizeContainer).
-            if (targetLayer && draggedLayerIds.some(lid =>
-                H.isDescendantOf(targetLayer.id, lid, state.nodes, state.layers))) {
-                return state;
-            }
-
-            // «Только верхние»: у кого в этом же наборе есть предок по владению — пропускаем
-            const topIds = ids.filter(nid => !ids.some(other =>
-                other !== nid && H.hasAncestorIn && H.hasAncestorIn(nid, [other], state.nodes, state.layers)));
-
-            // Владелец-усыновитель для узлов, меняющих уровень
-            let adoptOwner = null;
-            if (targetLevel > 0) {
-                if (p.newOwnerId && state.nodes[p.newOwnerId] &&
-                    H.getEntityLevel(p.newOwnerId, state.nodes, state.layers) === targetLevel - 1) {
-                    adoptOwner = p.newOwnerId;
-                } else if (targetLayer && H.getBranchOwner) {
-                    adoptOwner = H.getBranchOwner(targetLayer.id, state.nodes, state.layers);
-                }
-            }
-
-            const sameLevelIds = [];
-            const crossLevelIds = [];
-            topIds.forEach(nid => {
-                const lvl = H.getEntityLevel(nid, state.nodes, state.layers);
-                if (lvl === targetLevel) sameLevelIds.push(nid); else crossLevelIds.push(nid);
+            // Валидация каждого id независимо (canReparentTo: существование цели,
+            // self, цикл) — невалидные молча пропускаются, один плохой id не
+            // блокирует остальной батч.
+            const validIds = topIds.filter(eid => {
+                const entity = getEntity(eid);
+                if (!entity || entity.parentId === targetParentId) return false;
+                return H.canReparentTo(eid, targetParentId, state.nodes, state.layers, state.levelWindows).ok;
             });
+            if (validIds.length === 0) return state;
 
-            // Спуск: усыновитель — сам узел или его потомок (слой в его ветке)
-            const isOwnBranch = (nid) => !!(adoptOwner && (adoptOwner === nid ||
-                (H.hasAncestorIn && H.hasAncestorIn(adoptOwner, [nid], state.nodes, state.layers))));
-            const descendIds = targetLayer ? crossLevelIds.filter(isOwnBranch) : [];
-            // Узлы, чей усыновитель сам спускается этим же переносом, тоже
-            // ложатся в слой сиротами-братьями (усыновить их больше некому)
-            const followerIds = crossLevelIds.filter(nid =>
-                !descendIds.includes(nid) && adoptOwner && descendIds.includes(adoptOwner));
-            const normalIds = crossLevelIds.filter(nid =>
-                !descendIds.includes(nid) && !followerIds.includes(nid));
-
-            // Обычный перенос на уровень >0 требует усыновителя, ЕСЛИ есть слой
-            // или явный владелец; перенос на холст без владельца — сирота-якорь
-            if (normalIds.length > 0 && targetLevel > 0 && !adoptOwner && targetLayer) {
-                // слой-якорь без владельца: узлы лягут в него сиротами
-            }
-
-            if (sameLevelIds.length === 0 && crossLevelIds.length === 0) return state;
-
-            // p.historySnapshot — срез на начало Drag&Drop-жеста: весь жест
-            // (движение мышью + перенос) откатывается одним шагом Undo
-            const historyState = saveHistory(state, targetLayer
-                ? `Назначение на слой: ${targetLayer.name || targetLayer.id}`
-                : `Перенос узлов на уровень ${targetLevel}`, p.historySnapshot || null);
+            const firstEntity = getEntity(validIds[0]);
+            // p.historySnapshot — срез на начало Drag&Drop-жеста (mousedown), как у
+            // TRANSFER_NODE: движение мышью пишется с skipHistory, поэтому без среза
+            // «до» в past попало бы промежуточное положение вместо исходного, и один
+            // Ctrl+Z не откатывал бы весь жест целиком.
+            const historyState = saveHistory(state, validIds.length === 1
+                ? `Элемент перевложен: ${firstEntity.name}`
+                : `Перевложено элементов: ${validIds.length}`, p.historySnapshot || null);
 
             const newNodes = { ...state.nodes };
             const newLayers = { ...state.layers };
-            const intoLayerIds = []; // всех, кого класть в целевой слой (для авторазмещения)
+            const getNew = (eid) => (isNodeId(eid) ? newNodes[eid] : newLayers[eid]);
+            const setNew = (eid, val) => { if (isNodeId(eid)) newNodes[eid] = val; else newLayers[eid] = val; };
+            // Сущность, прошедшая через REPARENT_ENTITY, живёт по чистой v13-схеме —
+            // унаследованные ownerId/ownerGap/homeLevel (если это ещё не мигрированная
+            // v11-сущность) сбрасываются, а не остаются мёртвым грузом.
+            const stripLegacy = (e) => { const { ownerId, ownerGap, homeLevel, ...rest } = e; return rest; };
 
-            // Перенос назначает владельца НАПРЯМУЮ (или делает сиротой), поэтому
-            // накопленная связь через поколение (ownerGap) сбрасывается
-            const dropGap = (e) => {
-                if (!e || e.ownerGap === undefined) return e;
-                const { ownerGap, ...rest } = e;
-                return rest;
+            // Прямоугольники прямых детей контейнера — база для findFreePosition
+            // (Shallow-всплытие детей и/или перенос через границу окна).
+            const rectsIn = (containerId) => {
+                const rects = [];
+                Object.values(state.nodes || {}).forEach(n => { if (n && n.parentId === containerId) rects.push({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }); });
+                Object.values(state.layers || {}).forEach(l => { if (l && l.parentId === containerId) rects.push({ x: l.position.x, y: l.position.y, w: (l.size && l.size.w) || 600, h: (l.size && l.size.h) || 400 }); });
+                return rects;
             };
 
-            // 1. Спуск в собственную ветку
-            descendIds.forEach(nid => {
-                const nodeLevelBefore = H.getEntityLevel(nid, state.nodes, state.layers);
-                void nodeLevelBefore;
-                // Прямые подопечные (по ИСХОДНОМУ стейту): отвязка с якорем по месту
-                Object.values(state.nodes).forEach(w => {
-                    if (!w || w.ownerId !== nid) return;
-                    const wLvl = H.getEntityLevel(w.id, state.nodes, state.layers);
-                    if (wLvl === targetLevel) {
-                        // ровесник слоя: становится братом в этом же слое
-                        // (если уже лежал в каком-то слое своего уровня — остаётся в нём)
-                        const keepContainer = w.parentId && w.parentId !== 'root';
-                        newNodes[w.id] = dropGap({
-                            ...newNodes[w.id],
-                            ownerId: null,
-                            homeLevel: wLvl,
-                            parentId: keepContainer ? w.parentId : targetLayer.id
+            validIds.forEach(eid => {
+                const entity = getEntity(eid);
+                const oldParentId = entity.parentId;
+
+                if (mode === 'shallow') {
+                    // Прямые дети переносимой сущности усыновляются её ПРЕЖНИМ
+                    // родителем («дедушкой») вместо того, чтобы следовать за ней —
+                    // findFreePosition предотвращает наложение всплывающих детей
+                    // на то, что уже стоит в новом для них контейнере.
+                    const directChildren = [
+                        ...Object.values(state.nodes || {}).filter(n => n && n.parentId === eid),
+                        ...Object.values(state.layers || {}).filter(l => l && l.parentId === eid)
+                    ];
+                    if (directChildren.length > 0) {
+                        const siblingRects = rectsIn(oldParentId);
+                        directChildren.forEach(child => {
+                            const pos = G.findFreePosition(child.size, child.position, siblingRects);
+                            siblingRects.push({ x: pos.x, y: pos.y, w: (child.size && child.size.w) || 200, h: (child.size && child.size.h) || 100 });
+                            setNew(child.id, stripLegacy({ ...getNew(child.id), parentId: oldParentId, position: pos }));
                         });
-                        if (!keepContainer) intoLayerIds.push(w.id);
-                    } else {
-                        newNodes[w.id] = dropGap({ ...newNodes[w.id], ownerId: null, homeLevel: wLvl });
                     }
-                });
-                Object.values(state.layers).forEach(w => {
-                    if (!w || w.ownerId !== nid) return;
-                    const wLvl = H.getEntityLevel(w.id, state.nodes, state.layers);
-                    newLayers[w.id] = dropGap({ ...newLayers[w.id], ownerId: null, homeLevel: wLvl });
-                });
-                // Сама сущность (узел или слой): сирота в целевом слое
-                setNew(nid, dropGap({ ...getNew(nid), ownerId: null, homeLevel: targetLevel, parentId: targetLayer.id }));
-                intoLayerIds.push(nid);
-            });
-
-            // 2. Последователи спустившегося усыновителя: сироты-братья в слое
-            followerIds.forEach(nid => {
-                setNew(nid, dropGap({ ...getNew(nid), ownerId: null, homeLevel: targetLevel, parentId: targetLayer.id }));
-                intoLayerIds.push(nid);
-            });
-
-            // 3. Обычный перенос со сменой уровня. p.positionsById — целевые
-            //    локальные позиции из Drag&Drop (элементы ложатся под курсором,
-            //    сохраняя раскладку группы); p.position — общая позиция (легаси)
-            normalIds.forEach(nid => {
-                const orphan = targetLevel === 0 || !adoptOwner;
-                const dropPos = (p.positionsById && p.positionsById[nid]) || p.position;
-                setNew(nid, dropGap({
-                    ...getNew(nid),
-                    ownerId: orphan ? null : adoptOwner,
-                    ...(orphan ? { homeLevel: targetLevel } : {}),
-                    parentId: targetLayer ? targetLayer.id : 'root',
-                    ...(dropPos ? { position: dropPos } : {})
-                }));
-                if (targetLayer) intoLayerIds.push(nid);
-            });
-
-            // 4. В пределах уровня: явный усыновитель (дроп на узел) меняет
-            //    владельца без смены контейнера и позиции; иначе — чистая
-            //    группировка (только контейнер)
-            sameLevelIds.forEach(nid => {
-                if (p.newOwnerId && adoptOwner) {
-                    setNew(nid, dropGap({ ...getNew(nid), ownerId: adoptOwner }));
-                    return;
                 }
-                setNew(nid, { ...getNew(nid), parentId: targetLayer ? targetLayer.id : 'root' });
-                if (targetLayer) intoLayerIds.push(nid);
+
+                // Позиция самой переносимой сущности:
+                //  - явная (drop под курсором, только при одиночном переносе);
+                //  - целевой контейнер — УЗЕЛ: его СОБСТВЕННАЯ position живёт в системе
+                //    координат ЕГО родительского окна, а не имеет никакого отношения к
+                //    происхождению координат его подуровня (общее окно всех сущностей
+                //    этого levelIndex) — вычитать одно из другого бессмысленно ВСЕГДА,
+                //    даже если numeric-уровни совпали. Только findFreePosition;
+                //  - иначе (слой или 'root'): если целевой контейнер лежит на ТОМ ЖЕ
+                //    уровне (одно окно на levelIndex, инвариант normalizeLevelWindows —
+                //    слой на любом уровне, 'root' по определению = корень СВОЕГО
+                //    текущего окна) — мировая позиция сохраняется точно
+                //    (toRelativePosition); иначе граница окна пересекается (другая
+                //    камера, другое пространство) — ищем свободное место рядом
+                //    с исходными локальными координатами.
+                const entityLevel = H.getEntityLevel(eid, state.nodes, state.layers, state.levelWindows);
+                const targetIsNode = isNodeId(targetParentId);
+                const targetLevel = targetIsNode
+                    ? -1 // недостижимо: узел-цель ниже никогда не сравнивается с entityLevel
+                    : targetParentId === 'root'
+                        ? entityLevel
+                        : (state.levelWindows && state.levelWindows[targetParentId])
+                            ? state.levelWindows[targetParentId].levelIndex
+                            : H.getEntityLevel(targetParentId, state.nodes, state.layers, state.levelWindows); // слой
+
+                let position;
+                if (p.positionsById && p.positionsById[eid]) {
+                    position = p.positionsById[eid];
+                } else if (validIds.length === 1 && p.position) {
+                    position = p.position;
+                } else if (!targetIsNode && targetLevel === entityLevel) {
+                    const abs = H.getLocalPosition(eid, state.nodes, state.layers);
+                    position = H.toRelativePosition(abs, targetParentId, state.nodes, state.layers);
+                } else {
+                    position = G.findFreePosition(entity.size, entity.position, rectsIn(targetParentId));
+                }
+
+                setNew(eid, stripLegacy({ ...getNew(eid), parentId: targetParentId, position }));
             });
 
-            // Авторазмещение положенных в слой + подгонка размера слоя
-            if (targetLayer && intoLayerIds.length > 0 && G && G.getSmartPlacement) {
-                const placed = intoLayerIds.map(nid => getNew(nid)).filter(Boolean);
-                const { updatesById, newLayerSize } = G.getSmartPlacement(placed, newLayers[targetLayer.id], newNodes, newLayers);
-                newLayers[targetLayer.id] = { ...newLayers[targetLayer.id], size: newLayerSize };
-                Object.entries(updatesById || {}).forEach(([nid, upd]) => {
-                    const cur = getNew(nid);
-                    if (cur) setNew(nid, { ...cur, ...upd });
-                });
-                // Положенная сущность может быть слоем — её собственный родитель
-                // (и вся цепочка выше) должен подрасти под новое содержимое.
-                if (H.bubbleUpLayerResize) {
-                    intoLayerIds.forEach(nid => {
-                        const sizeUpdates = H.bubbleUpLayerResize(nid, { nodes: newNodes, layers: newLayers });
-                        Object.entries(sizeUpdates).forEach(([lid, size]) => {
-                            if (newLayers[lid]) newLayers[lid] = { ...newLayers[lid], size };
-                        });
-                    });
-                }
-            }
-
-            // Расталкивание потомков переехавших узлов: они сохранили координаты,
-            // но оказались на других холстах — сдвигаем группу каждого уровня
-            // единым блоком вправо от занятых мест, если наложились на местных.
-            // ⚠️ Только настоящие ownerId-потомки (переехали вслед за владельцем
-            // на новый уровень, координаты — холста, сравнимы с локальными).
-            // Тот, кто просто вложен в переехавший СЛОЙ через parentId, сюда не
-            // входит — его координаты локальные для слоя, а не холста, и он и
-            // так корректно едет за слоем композицией позиций (isOwnerDescendant,
-            // не общая hasAncestorIn — та считает потомком и parentId-вложенных).
-            const movedIds = [...normalIds, ...followerIds];
-            if (movedIds.length > 0) {
-                const byLevel = {};
-                Object.keys(newNodes).forEach(nid => {
-                    if (movedIds.includes(nid)) return;
-                    if (movedIds.some(tid => isOwnerDescendant(nid, tid))) {
-                        const lvl = H.getEntityLevel(nid, newNodes, newLayers);
-                        (byLevel[lvl] = byLevel[lvl] || []).push(nid);
-                    }
-                });
-                const bboxOf = (list) => list.reduce((b, n) => {
-                    const pos = n.position || { x: 0, y: 0 };
-                    const w = (n.size && n.size.w) || 200;
-                    const h = (n.size && n.size.h) || 100;
-                    return {
-                        minX: Math.min(b.minX, pos.x), minY: Math.min(b.minY, pos.y),
-                        maxX: Math.max(b.maxX, pos.x + w), maxY: Math.max(b.maxY, pos.y + h)
-                    };
-                }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
-
-                Object.entries(byLevel).forEach(([lvlStr, group]) => {
-                    const lvl = Number(lvlStr);
-                    const locals = Object.values(newNodes).filter(n => n && !group.includes(n.id) &&
-                        H.getEntityLevel(n.id, newNodes, newLayers) === lvl);
-                    if (locals.length === 0) return;
-                    const gBox = bboxOf(group.map(nid => getNew(nid)).filter(Boolean));
-                    const lBox = bboxOf(locals);
-                    const overlaps = gBox.minX < lBox.maxX && gBox.maxX > lBox.minX &&
-                        gBox.minY < lBox.maxY && gBox.maxY > lBox.minY;
-                    if (overlaps) {
-                        const dx = (lBox.maxX + 60) - gBox.minX;
-                        group.forEach(nid => {
-                            const n = getNew(nid);
-                            if (!n) return;
-                            setNew(nid, { ...n, position: { x: (n.position ? n.position.x : 0) + dx, y: n.position ? n.position.y : 0 } });
-                        });
-                    }
-                });
-            }
-
-            // Перенос мог создать новую глубину — окна достраиваются
+            // Перенос НА УЗЕЛ мог создать новую глубину (уровень, которого раньше
+            // не было) — окна достраиваются, как и в TRANSFER_NODE.
             const normalized = normalizeLevelWindows(state.levelWindows, newNodes, newLayers, state.levelViews);
 
             return {
@@ -2389,33 +2316,6 @@ const reducer = (state, action) => {
                 levelWindows: normalized.levelWindows,
                 levelViews: normalized.levelViews
             };
-        }
-        case 'REPARENT_ENTITY': {
-            const { id, newParentId } = action.payload;
-            const H = getHierarchy();
-            const entity = state.nodes[id] || (state.layers && state.layers[id]);
-            if (!entity || entity.parentId === newParentId) return state;
-            if (newParentId !== 'root' && H.isDescendantOf(newParentId, id, state.nodes, state.layers)) return state;
-
-            // Слой принадлежит уровню: класть узел в слой ЧУЖОГО уровня нельзя —
-            // уровень узла наследуется от слоя-контейнера, и узел молча «переехал»
-            // бы на другой холст, оставив ownerId в противоречии (родитель и
-            // ребёнок на одном уровне, каскадное удаление через окна и т.п.).
-            // Отклоняем так же, как циклы.
-            if (newParentId !== 'root' && state.layers && state.layers[newParentId] && H.getEntityLevel) {
-                const layerLevel = H.getEntityLevel(newParentId, state.nodes, state.layers);
-                const entityLevel = H.getEntityLevel(id, state.nodes, state.layers);
-                if (layerLevel !== entityLevel) return state;
-            }
-
-            const abs = H.getLocalPosition(id, state.nodes, state.layers);
-            const rel = H.toRelativePosition(abs, newParentId, state.nodes, state.layers);
-            const historyState = saveHistory(state, `Элемент перевложен: ${entity.name}`);
-
-            if (state.nodes[id]) {
-                return { ...state, ...historyState, nodes: { ...state.nodes, [id]: { ...entity, parentId: newParentId, position: rel } } };
-            }
-            return { ...state, ...historyState, layers: { ...state.layers, [id]: { ...entity, parentId: newParentId, position: rel } } };
         }
         case 'DELETE_SELECTED': {
             if (state.selectedIds.length === 0) return state;
@@ -2564,7 +2464,7 @@ const reducer = (state, action) => {
             if (!parentId) return state;
 
             const H = getHierarchy();
-            const parentLevel = H ? H.getEntityLevel(parentId, state.nodes, state.layers) : 0;
+            const parentLevel = H ? H.getEntityLevel(parentId, state.nodes, state.layers, state.levelWindows) : 0;
             const targetLevel = parentLevel + 1;
 
             const historyState = saveHistory(state, `Создан вложенный узел на уровне ${targetLevel}`);
@@ -2603,9 +2503,9 @@ const reducer = (state, action) => {
                 color,
                 shape,
                 type,
-                // v11: координатный контейнер — холст уровня, а владение выражается ownerId
-                parentId: 'root',
-                ownerId: parentId,
+                // v13: parentId указывает прямо на узел-родителя — единственное
+                // поле родства, ownerId не заводится (docs/IDEAL_INTERACTIONS.md §1)
+                parentId,
                 position: pos,
                 size: newNodeSize,
                 snapToGrid: true,
@@ -2803,7 +2703,7 @@ const reducer = (state, action) => {
             if (!parentId || !state.nodes[parentId]) return state;
 
             const H = getHierarchy();
-            const parentLevel = H ? H.getEntityLevel(parentId, state.nodes, state.layers) : 0;
+            const parentLevel = H ? H.getEntityLevel(parentId, state.nodes, state.layers, state.levelWindows) : 0;
             const targetLevel = parentLevel + 1;
 
             const targetWin = (H && H.getWindowOfLevel(targetLevel, state.levelWindows)) || {
@@ -2813,9 +2713,12 @@ const reducer = (state, action) => {
 
             // Дети живут в другом окне и в другом масштабе, поэтому габарит
             // считается в МИРОВЫХ координатах, а не в системе координат родителя.
+            // Прямой ребёнок — ownerId (v11, ещё не мигрированные сущности) ИЛИ
+            // parentId напрямую на узел (v13, через REPARENT_ENTITY).
             let bbox = null;
             Object.values(state.nodes || {}).forEach(n => {
-                if (!n || n.ownerId !== parentId) return;
+                const isChild = n && (n.ownerId ? n.ownerId === parentId : n.parentId === parentId);
+                if (!isChild) return;
                 const b = H ? H.getNodeWorldBounds(n.id, state) : null;
                 if (!b) return;
                 if (!bbox) bbox = { minX: b.x, minY: b.y, maxX: b.x + b.w, maxY: b.y + b.h };
@@ -2954,6 +2857,9 @@ const reducer = (state, action) => {
             const H = getHierarchy();
             const levelOf = (eid) => (H ? H.getEntityLevel(eid, state.nodes, state.layers) : 0);
             const gapOf = (e) => (H && H.getOwnerGap) ? H.getOwnerGap(e) : 1;
+            // v11 несёт дистанцию в ownerGap; v13 (нет ownerId) её не хранит —
+            // расстояние всегда ровно 1 по определению модели.
+            const gapOf2 = (ent) => (ent && ent.ownerId ? gapOf(ent) : 1);
             const withGap = (e, gap) => {
                 if (gap > 1) return { ...e, ownerGap: gap };
                 if (e.ownerGap !== undefined) { const { ownerGap, ...rest } = e; return rest; }
@@ -2965,33 +2871,57 @@ const reducer = (state, action) => {
             Object.keys(state.nodes || {}).forEach(eid => { if (levelOf(eid) === clearedLevel) removedIds.add(eid); });
             Object.keys(state.layers || {}).forEach(eid => { if (levelOf(eid) === clearedLevel) removedIds.add(eid); });
 
-            // 2. Пере-якорение выживших: ближайший живой предок вверх по цепочке
-            //    владения (дистанции складываются) либо сирота на своём уровне
+            // 2. Пере-якорение выживших: ближайший живой предок вверх по структурной
+            //    цепочке (дистанции складываются для ownerId-хопов) либо сирота на
+            //    своём уровне. structuralParentOf унифицирует ownerId (v11) и
+            //    parentId-на-узел (v13, сегодня возможно только через
+            //    REPARENT_ENTITY) — см. комментарий над applyRemoveLevelWindow.
             const reanchor = (entity) => {
                 let e = entity;
-                if (e.ownerId && removedIds.has(e.ownerId)) {
-                    let gap = gapOf(e);
-                    let cursor = (state.nodes && state.nodes[e.ownerId]) || (state.layers && state.layers[e.ownerId]);
-                    while (cursor && cursor.ownerId && removedIds.has(cursor.ownerId)) {
-                        gap += gapOf(cursor);
-                        cursor = (state.nodes && state.nodes[cursor.ownerId]) || (state.layers && state.layers[cursor.ownerId]);
+                const myParent = structuralParentOf(e, state.nodes);
+                if (myParent && removedIds.has(myParent)) {
+                    let gap = gapOf2(e);
+                    let cursor = (state.nodes && state.nodes[myParent]) || (state.layers && state.layers[myParent]);
+                    let cursorParent = cursor ? structuralParentOf(cursor, state.nodes) : null;
+                    while (cursor && cursorParent && removedIds.has(cursorParent)) {
+                        gap += gapOf2(cursor);
+                        cursor = (state.nodes && state.nodes[cursorParent]) || (state.layers && state.layers[cursorParent]);
+                        cursorParent = cursor ? structuralParentOf(cursor, state.nodes) : null;
                     }
-                    const ancestorId = cursor && cursor.ownerId ? cursor.ownerId : null;
+                    const ancestorId = cursorParent;
                     const ancestor = ancestorId
                         ? ((state.nodes && state.nodes[ancestorId]) || (state.layers && state.layers[ancestorId]))
                         : null;
-                    if (ancestor && !removedIds.has(ancestorId)) {
-                        // «Внук — деду»: уровень сущности не меняется, дистанция
-                        // впитывает дистанцию удалённого владельца
-                        e = withGap({ ...e, ownerId: ancestorId }, gap + gapOf(cursor));
+                    const totalGap = gap + (cursor ? gapOf2(cursor) : 1);
+                    // v13 (нет ownerId у e): прямая ссылка безопасна ТОЛЬКО если
+                    // накопленная дистанция ровно 1 — иначе v13 не может выразить
+                    // растянутую дистанцию (см. комментарий в applyRemoveLevelWindow).
+                    const canDirectLink = !!e.ownerId || totalGap === 1;
+                    if (ancestor && !removedIds.has(ancestorId) && canDirectLink) {
+                        if (e.ownerId) {
+                            // «Внук — деду» (v11): уровень сущности не меняется,
+                            // дистанция впитывает дистанцию удалённого владельца
+                            e = withGap({ ...e, ownerId: ancestorId }, totalGap);
+                        } else {
+                            // v13: связь всегда прямая, gap не существует
+                            e = { ...e, parentId: ancestorId };
+                        }
                     } else {
                         // Живых предков не осталось — сирота-якорь на своём уровне,
-                        // ветка потомков остаётся при нём
-                        e = withGap({ ...e, ownerId: null, homeLevel: levelOf(e.id) }, 1);
+                        // ветка потомков остаётся при нём. Мёртвую parentId-ссылку
+                        // (если структурная связь была через parentId, не ownerId)
+                        // тоже нужно снять.
+                        e = withGap({
+                            ...e,
+                            ownerId: null,
+                            homeLevel: levelOf(e.id),
+                            ...(e.ownerId ? {} : { parentId: 'root' })
+                        }, 1);
                     }
                 }
-                // Координатный контейнер удалён — сущность встаёт на холст уровня
-                if (e.parentId && e.parentId !== 'root' && removedIds.has(e.parentId)) {
+                // Координатный контейнер (СЛОЙ) удалён — сущность встаёт на холст
+                // уровня. Узел уже обработан выше — здесь остаются только слои.
+                if (e.parentId && e.parentId !== 'root' && removedIds.has(e.parentId) && !(state.nodes && state.nodes[e.parentId])) {
                     e = { ...e, parentId: 'root' };
                 }
                 return e;
@@ -3224,6 +3154,80 @@ const wrapFlatToMulti = (flat) => {
         projectCounter: 1,
         formatVersion: 12
     };
+};
+
+const FORMAT_VERSION_V13 = 13;
+
+/**
+ * Миграция v12 -> v13: единый источник родства `parentId`, отказ от
+ * ownerId/ownerGap/homeLevel (см. docs/IDEAL_INTERACTIONS.md §1).
+ * Правило переноса на одну сущность (узел или слой):
+ *   1. Координатно вложена в РЕАЛЬНЫЙ слой (parentId указывает на layers[pid]) —
+ *      контейнер остаётся как есть, ownerId/ownerGap отбрасываются (в v13 нельзя
+ *      одновременно числиться в слое и структурно принадлежать другому узлу —
+ *      это и есть устраняемая «лапша», побеждает координатный контейнер).
+ *   2. Иначе, есть живой ownerId И getOwnerGap === 1 (обычное родство без
+ *      «прыжка через поколение») — parentId становится = ownerId напрямую.
+ *   3. Иначе (истинный сирота, мёртвая ссылка на владельца, ИЛИ ownerGap > 1
+ *      после очистки промежуточных уровней) — сущность «якорится» на СВОЙ
+ *      текущий уровень явно: parentId = id окна уровня с этим levelIndex.
+ *      Уровень считается ДО миграции (HierarchyUtils.getLevel по старым
+ *      данным), поэтому мировые координаты не смещаются ни на пиксель —
+ *      меняется только то, ЧЕМ выражено родство, а не где сущность рисуется.
+ * Позиции, размеры, связи и любые другие поля не трогаются.
+ */
+const migrateProjectEntitiesToV13 = (proj) => {
+    const H = getHierarchy();
+    const oldNodes = proj.nodes || {};
+    const oldLayers = proj.layers || {};
+    const levelWindows = proj.levelWindows || {};
+    const windowByLevel = {};
+    Object.values(levelWindows).forEach(w => {
+        if (w && windowByLevel[w.levelIndex] === undefined) windowByLevel[w.levelIndex] = w.id;
+    });
+
+    const migrateEntity = (e) => {
+        if (!e) return e;
+        const { ownerId, ownerGap, homeLevel, ...rest } = e;
+        const pid = e.parentId;
+
+        // 1. Координатная вложенность в слой побеждает — уже разрешённый пост-v11 инвариант.
+        if (pid && pid !== 'root' && oldLayers[pid]) {
+            return { ...rest, parentId: pid };
+        }
+
+        // 2. Прямое родство без прыжка через поколение.
+        const gap = H.getOwnerGap(e);
+        const owner = ownerId ? (oldNodes[ownerId] || oldLayers[ownerId]) : null;
+        if (owner && gap === 1) {
+            return { ...rest, parentId: ownerId };
+        }
+
+        // 3. Сирота-якорь (в т.ч. бывший ownerGap > 1) — привязка к своему уровню явно.
+        // Уровень 0 — самый частый случай (обычный узел без владельца на Главном
+        // холсте) — компактно остаётся литералом 'root' (это тот же самый
+        // levelWindows[LEVEL0_WINDOW_ID], просто без явного упоминания id).
+        const lvl = H.getLevel(e.id, oldNodes, oldLayers);
+        if (lvl === 0) return { ...rest, parentId: 'root' };
+        const winId = windowByLevel[lvl];
+        return { ...rest, parentId: winId !== undefined ? winId : 'root' };
+    };
+
+    const nodes = {};
+    Object.entries(oldNodes).forEach(([k, n]) => { nodes[k] = migrateEntity(n); });
+    const layers = {};
+    Object.entries(oldLayers).forEach(([k, l]) => { layers[k] = migrateEntity(l); });
+
+    return { ...proj, nodes, layers };
+};
+
+const migrateToV13 = (state) => {
+    if (!state || (state.formatVersion || 0) >= FORMAT_VERSION_V13) return state;
+    const projects = {};
+    Object.entries(state.projects || {}).forEach(([pid, proj]) => {
+        projects[pid] = proj ? migrateProjectEntitiesToV13(proj) : proj;
+    });
+    return { ...state, projects, formatVersion: FORMAT_VERSION_V13 };
 };
 
 // Плоский вид: глобальные поля + поля активного проекта (для компонентов и
@@ -3653,7 +3657,15 @@ const getInitialMultiState = () => {
                             return base;
                         })()
                     };
-                    return {
+                    // migrateToV13 активирована: TRANSFER_NODE физически удалён из
+                    // редьюсера и ни один живой путь создания сущности (ADD_NODE,
+                    // ADD_LAYER, CREATE_NESTED_NODE, REPARENT_ENTITY) больше не пишет
+                    // ownerId/ownerGap/homeLevel — HierarchyUtils понимает чистый parentId
+                    // (включая id окна для сирот-якорей), а REMOVE_LEVEL_WINDOW/
+                    // CLEAR_LEVEL_WINDOW/REMOVE_ROOT_CANVAS ре-якорят обе формы одинаково
+                    // (structuralParentOf). Санитизация здесь однократна: миграция читает
+                    // формат ДО того, как он попадёт в mergeActiveView/компоненты.
+                    return migrateToV13({
                         ...globalDefaults(),
                         canvas: parsed.canvas || defaultState.canvas,
                         aiChatHistory: parsed.aiChatHistory || defaultState.aiChatHistory,
@@ -3670,7 +3682,7 @@ const getInitialMultiState = () => {
                         pendingConnection: null,
                         dragGesture: null,
                         formatVersion: 12
-                    };
+                    });
                 }
             }
         } catch (e) {
@@ -3679,9 +3691,9 @@ const getInitialMultiState = () => {
         }
     }
     // Легаси-путь: getInitialState читает v11/v10/v9 и возвращает плоское состояние
-    return wrapFlatToMulti(getInitialState());
+    return migrateToV13(wrapFlatToMulti(getInitialState()));
 };
 
-const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, normalizeLevelWindows };
+const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, FORMAT_VERSION_V13, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, migrateToV13, normalizeLevelWindows };
 if (typeof window !== 'undefined') window.ArchitectorStore = ArchitectorStore;
 if (typeof module !== 'undefined') module.exports = ArchitectorStore;
