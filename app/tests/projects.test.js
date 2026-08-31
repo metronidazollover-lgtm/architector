@@ -418,3 +418,147 @@ test('Окна: MOVE_LEVEL_WINDOW и UPDATE_LEVEL_PROPERTIES адресуютс�
     assert.equal(m.projects[pidB].levelViews[winB.id].isCollapsed, false, 'окно проекта B не свернулось');
 });
 
+// === Фаза 6.1: кросс-проектные связи ===
+
+const makeTwoProjectsWithPorts = () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, {
+        type: 'FOR_PROJECT',
+        payload: { projectId: pidA, action: { type: 'ADD_PORT', payload: { id: 'portA1', nodeId: 'nodeA', name: 'PortA1' } } }
+    });
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+    m = multiReducer(m, {
+        type: 'FOR_PROJECT',
+        payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'Node B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } }
+    });
+    m = multiReducer(m, {
+        type: 'FOR_PROJECT',
+        payload: { projectId: pidB, action: { type: 'ADD_PORT', payload: { id: 'portB1', nodeId: 'nodeB', name: 'PortB1' } } }
+    });
+    return { m, pidA, pidB };
+};
+
+test('ADD_CROSS_PROJECT_LINK: связывает порты двух разных проектов, живёт в корне вне PROJECT_FIELDS', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const ids = Object.keys(m1.crossProjectLinks);
+    assert.equal(ids.length, 1, 'ровно одна кросс-проектная связь');
+    const link = m1.crossProjectLinks[ids[0]];
+    assert.equal(link.sourceProjectId, pidA);
+    assert.equal(link.sourcePortId, 'portA1');
+    assert.equal(link.targetProjectId, pidB);
+    assert.equal(link.targetPortId, 'portB1');
+    assert.equal(Object.keys(m1.projects[pidA].links).length, 0, 'связь НЕ попала в links ни одного из проектов');
+    assert.equal(Object.keys(m1.projects[pidB].links).length, 0);
+});
+
+test('ADD_CROSS_PROJECT_LINK: отклоняется — тот же проект, несуществующий порт, несуществующий проект', () => {
+    const { m: m0, pidA } = makeTwoProjectsWithPorts();
+    const sameProject = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidA, targetPortId: 'portA1' }
+    });
+    assert.equal(sameProject, m0, 'no-op: source === target project');
+
+    const badPort = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: 'ghost-project', targetPortId: 'ghost-port' }
+    });
+    assert.equal(badPort, m0, 'no-op: несуществующий проект');
+});
+
+test('REMOVE_CROSS_PROJECT_LINK: удаляет по id, no-op на отсутствующем id', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m1.crossProjectLinks)[0];
+    const m2 = multiReducer(m1, { type: 'REMOVE_CROSS_PROJECT_LINK', payload: linkId });
+    assert.deepEqual(m2.crossProjectLinks, {});
+    const m3 = multiReducer(m2, { type: 'REMOVE_CROSS_PROJECT_LINK', payload: linkId });
+    assert.equal(m3, m2, 'no-op: связь уже удалена');
+});
+
+test('UPDATE_CROSS_PROJECT_PROXY_PORT: пишет ручной оверрайд прокси в саму связь', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m1.crossProjectLinks)[0];
+    const winA = Object.values(m1.projects[pidA].levelWindows)[0];
+    const m2 = multiReducer(m1, {
+        type: 'UPDATE_CROSS_PROJECT_PROXY_PORT',
+        payload: { linkId, windowId: winA.id, edge: 'top', fraction: 0.25 }
+    });
+    assert.deepEqual(m2.crossProjectLinks[linkId].proxyOverrides[winA.id], { edge: 'top', fraction: 0.25 });
+});
+
+test('applyRemoveProject: удаление одной стороны демоутит связь в pendingGateways уцелевшего проекта', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m1.crossProjectLinks)[0];
+
+    const m2 = multiReducer(m1, { type: 'REMOVE_PROJECT', payload: { id: pidB } });
+    assert.deepEqual(m2.crossProjectLinks, {}, 'живая связь исчезла');
+    const gateway = m2.projects[pidA].pendingGateways[linkId];
+    assert.ok(gateway, 'демоутилась в pendingGateways проекта A');
+    assert.equal(gateway.portId, 'portA1', 'локальный порт — тот, что остался в A');
+    assert.equal(gateway.direction, 'out', 'A была sourceProjectId связи');
+    assert.equal(gateway.remoteProjectId, pidB);
+    assert.equal(gateway.remotePortId, 'portB1');
+    assert.equal(gateway.remoteProjectName, m1.projects[pidB].projectName);
+    assert.equal(gateway.remotePortName, 'PortB1');
+    assert.ok(['top', 'bottom', 'left', 'right'].includes(gateway.edge), 'грань по умолчанию проставлена');
+
+    // Удаление ВТОРОЙ (уже единственной оставшейся) стороны не оставляет мусора
+    const m3 = multiReducer(m2, { type: 'REMOVE_PROJECT', payload: { id: pidA } });
+    assert.equal(m3.projects[pidA], undefined);
+    assert.deepEqual(m3.crossProjectLinks, {});
+});
+
+test('HierarchyUtils.getExternalProxyPortsForWindow: прокси появляется на правильном окне с обеих сторон', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m1.crossProjectLinks)[0];
+    const winA = Object.values(m1.projects[pidA].levelWindows)[0];
+    const winB = Object.values(m1.projects[pidB].levelWindows)[0];
+
+    const proxiesA = HierarchyUtils.getExternalProxyPortsForWindow(winA.id, pidA, m1);
+    assert.equal(proxiesA.length, 1);
+    assert.equal(proxiesA[0].linkId, linkId);
+    assert.equal(proxiesA[0].isExternal, true);
+    assert.equal(proxiesA[0].otherProjectId, pidB);
+    assert.equal(proxiesA[0].myPortId, 'portA1');
+
+    const proxiesB = HierarchyUtils.getExternalProxyPortsForWindow(winB.id, pidB, m1);
+    assert.equal(proxiesB.length, 1);
+    assert.equal(proxiesB[0].myPortId, 'portB1');
+    assert.equal(proxiesB[0].otherProjectId, pidA);
+
+    // Ручной оверрайд уважается вместо авторасстановки
+    const m2 = multiReducer(m1, {
+        type: 'UPDATE_CROSS_PROJECT_PROXY_PORT',
+        payload: { linkId, windowId: winA.id, edge: 'left', fraction: 0.75 }
+    });
+    const overridden = HierarchyUtils.getExternalProxyPortsForWindow(winA.id, pidA, m2)[0];
+    assert.equal(overridden.edge, 'left');
+    assert.equal(overridden.slotFraction, 0.75);
+
+    // Окно без задействованных сущностей связи прокси не получает
+    const emptyProxies = HierarchyUtils.getExternalProxyPortsForWindow('unknown-window', pidA, m1);
+    assert.deepEqual(emptyProxies, []);
+});
+

@@ -780,6 +780,11 @@ const defaultState = {
     nodes: {},
     ports: {},
     links: {},
+    // Незаведённые внешние шлюзы (Фаза 6.2): половины кросс-проектных связей,
+    // чей второй конец сейчас не загружен — экспорт/удаление проекта на другой
+    // стороне. Ключ — id исходной живой crossProjectLinks-записи (реконсиляция
+    // при повторной загрузке обеих половин ищет совпадение по этому же id).
+    pendingGateways: {},
     selectedIds: [],
     isolatedIds: [],
     interactionMode: 'default',
@@ -824,6 +829,10 @@ const defaultState = {
     // Пусто = изоляции нет. В историю Undo не входит — это состояние обзора,
     // а не данных (как и камера).
     containerIsolation: { projectIds: [], windowIds: [] },
+    // Живые сквозные связи между проектами (Фаза 6.1): глобальное поле — сама
+    // связь не принадлежит ни одному из двух проектов, которые соединяет.
+    // Вне истории Undo проектов: см. AGENTS.md, «Кросс-проектные операции».
+    crossProjectLinks: {},
     aiChatHistory: [
         { role: 'ai', content: 'Привет! Я ваш AI-ассистент. Помогу спроектировать архитектуру, ответить на вопросы и организовать ваши идеи на холсте.' }
     ],
@@ -3109,7 +3118,7 @@ const PROJECT_FIELDS = [
     'projectName', 'projectColor', 'projectFontFamily', 'projectContent',
     'levelWindows', 'levelViews', 'activeLevelIndex',
     'levelFocusParentId', 'levelHideNeighbors',
-    'layers', 'nodes', 'ports', 'links',
+    'layers', 'nodes', 'ports', 'links', 'pendingGateways',
     'past', 'future', 'historyLogs'
 ];
 
@@ -3422,6 +3431,7 @@ const resolveContainerSelection = (m, selectedIds) => {
  */
 const applyRemoveProject = (m, id) => {
     if (!id || !m.projects[id]) return m;
+    const removedProj = m.projects[id];
     const projects = { ...m.projects };
     delete projects[id];
     const projectOrder = m.projectOrder.filter(pid => pid !== id);
@@ -3433,11 +3443,57 @@ const applyRemoveProject = (m, id) => {
     // Обозреватель удалённого проекта не должен остаться открытым
     const outlinerOpen = { ...((m.ui && m.ui.outlinerOpen) || {}) };
     delete outlinerOpen[id];
+
+    // Кросс-проектные связи, задевающие удаляемый проект (Фаза 6.1/6.2): если
+    // проект на ДРУГОЙ стороне ещё существует — связь не пропадает молча, а
+    // демоутится в его pendingGateways (та же структура, что у локального
+    // экспорта половины связи) — «одна из сторон пропала» выглядит одинаково,
+    // вызвано ли это удалением проекта или экспортом без него. Если обе
+    // стороны исчезают разом (или второй уже нет) — запись удаляется совсем.
+    const H = getHierarchy();
+    const crossProjectLinks = { ...(m.crossProjectLinks || {}) };
+    const gatewaysByProject = {};
+    Object.keys(m.crossProjectLinks || {}).forEach(linkId => {
+        const link = m.crossProjectLinks[linkId];
+        if (!link || (link.sourceProjectId !== id && link.targetProjectId !== id)) return;
+        delete crossProjectLinks[linkId];
+        const survivorPid = link.sourceProjectId === id ? link.targetProjectId : link.sourceProjectId;
+        if (!survivorPid || !projects[survivorPid]) return;
+        const survivorIsSource = survivorPid === link.sourceProjectId;
+        const survivorPortId = survivorIsSource ? link.sourcePortId : link.targetPortId;
+        const removedPortId = survivorIsSource ? link.targetPortId : link.sourcePortId;
+        const removedPort = removedProj.ports && removedProj.ports[removedPortId];
+        const survivorProj = projects[survivorPid];
+        const survivorPortObj = survivorProj.ports && survivorProj.ports[survivorPortId];
+        const survivorNodeId = survivorPortObj && survivorPortObj.nodeId;
+        let edge = null, fraction = null;
+        if (survivorNodeId && H) {
+            const lvl = H.getEntityLevel(survivorNodeId, survivorProj.nodes, survivorProj.layers, survivorProj.levelWindows);
+            const win = H.getWindowOfLevel(lvl, survivorProj.levelWindows);
+            const ov = win && link.proxyOverrides && link.proxyOverrides[win.id];
+            if (ov) { edge = ov.edge; fraction = ov.fraction; }
+        }
+        if (!edge) { edge = 'right'; fraction = 0.5; }
+        if (!gatewaysByProject[survivorPid]) gatewaysByProject[survivorPid] = {};
+        gatewaysByProject[survivorPid][linkId] = {
+            linkId, portId: survivorPortId,
+            direction: survivorIsSource ? 'out' : 'in',
+            remoteProjectId: id, remotePortId: removedPortId,
+            remoteProjectName: removedProj.projectName || '',
+            remotePortName: (removedPort && removedPort.name) || '',
+            linkStyle: link.linkStyle, color: link.color, name: link.name, content: link.content,
+            edge, fraction
+        };
+    });
+    Object.keys(gatewaysByProject).forEach(pid => {
+        projects[pid] = { ...projects[pid], pendingGateways: { ...(projects[pid].pendingGateways || {}), ...gatewaysByProject[pid] } };
+    });
+
     // Изоляция удалённого проекта и его окон снимается: иначе на холсте не
     // осталось бы ни одного видимого контейнера — и кнопки выхода из изоляции
     return pruneContainerIsolation({
         ...m,
-        projects, projectOrder, activeProjectId,
+        projects, projectOrder, activeProjectId, crossProjectLinks,
         ui: { ...m.ui, outlinerOpen },
         selectedIds: [], isolatedIds: []
     });
@@ -3466,6 +3522,52 @@ const multiReducer = (m, action) => {
                 if (!PROJECT_FIELDS.includes(k) && !MULTI_META_FIELDS.includes(k)) next[k] = flatOut[k];
             });
             return pruneContainerIsolation(next);
+        }
+        // Кросс-проектные связи (Фаза 6.1): сама связь — глобальное поле, не
+        // принадлежит ни одному из двух проектов, обрабатывается здесь
+        // напрямую (в отличие от FOR_PROJECT — тут нет одного адресата-проекта,
+        // которому можно делегировать плоский вид).
+        case 'ADD_CROSS_PROJECT_LINK': {
+            const { sourceProjectId, sourcePortId, targetProjectId, targetPortId } = action.payload || {};
+            if (!sourceProjectId || !targetProjectId || sourceProjectId === targetProjectId) return m;
+            if (!sourcePortId || !targetPortId || sourcePortId === targetPortId) return m;
+            const sProj = m.projects[sourceProjectId];
+            const tProj = m.projects[targetProjectId];
+            if (!sProj || !tProj) return m;
+            if (!sProj.ports || !sProj.ports[sourcePortId]) return m;
+            if (!tProj.ports || !tProj.ports[targetPortId]) return m;
+            const id = action.payload.id || 'xlink-' + Date.now() + Math.floor(Math.random() * 1000);
+            const link = {
+                id, sourceProjectId, sourcePortId, targetProjectId, targetPortId,
+                color: action.payload.color || '#3b82f6',
+                name: action.payload.name || '',
+                linkStyle: action.payload.linkStyle || 'orthogonal'
+            };
+            return { ...m, crossProjectLinks: { ...(m.crossProjectLinks || {}), [id]: link } };
+        }
+        case 'REMOVE_CROSS_PROJECT_LINK': {
+            const id = typeof action.payload === 'string' ? action.payload : (action.payload && action.payload.id);
+            if (!id || !m.crossProjectLinks || !m.crossProjectLinks[id]) return m;
+            const next = { ...m.crossProjectLinks };
+            delete next[id];
+            return { ...m, crossProjectLinks: next };
+        }
+        case 'UPDATE_CROSS_PROJECT_PROXY_PORT': {
+            // Аналог UPDATE_PROXY_PORT (см. однопроектный reducer) для связи,
+            // хранящейся в state.crossProjectLinks вместо state.links.
+            const { linkId, windowId, edge, fraction } = action.payload || {};
+            const link = m.crossProjectLinks && m.crossProjectLinks[linkId];
+            if (!link || !windowId) return m;
+            if (!['top', 'bottom', 'left', 'right'].includes(edge)) return m;
+            const f = Math.max(0.03, Math.min(0.97, Number(fraction)));
+            if (Number.isNaN(f)) return m;
+            return {
+                ...m,
+                crossProjectLinks: {
+                    ...m.crossProjectLinks,
+                    [linkId]: { ...link, proxyOverrides: { ...(link.proxyOverrides || {}), [windowId]: { edge, fraction: f } } }
+                }
+            };
         }
         case 'MOVE_LEVEL_WINDOW':
         case 'RESIZE_LEVEL_WINDOW':
@@ -3671,6 +3773,7 @@ const getInitialMultiState = () => {
                         aiChatHistory: parsed.aiChatHistory || defaultState.aiChatHistory,
                         aiChatHistoryByNode: parsed.aiChatHistoryByNode || {},
                         aiChatSessionsByNode: parsed.aiChatSessionsByNode || {},
+                        crossProjectLinks: parsed.crossProjectLinks || {},
                         ui,
                         projects,
                         projectOrder,

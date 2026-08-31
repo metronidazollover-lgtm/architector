@@ -148,12 +148,23 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
     // Прокси-порты на границах рамки для межуровневых связей.
     // Прокси скрытого изоляцией узла тоже скрывается (его магистраль не рисуется).
     const proxyPorts = React.useMemo(() => {
-        const list = (H && H.getProxyPortsForWindow) ? H.getProxyPortsForWindow(index, state) : [];
+        const internal = (H && H.getProxyPortsForWindow) ? H.getProxyPortsForWindow(index, state) : [];
+        // Кросс-проектные прокси (Фаза 6.1): `state` — плоский вид ЭТОГО
+        // проекта, но он несёт глобальные поля мультисостояния как есть
+        // (mergeActiveView/projectFlatView спредят их поверх), включая
+        // projects/crossProjectLinks — отдельный «корневой» стейт не нужен.
+        const external = (H && H.getExternalProxyPortsForWindow && projectId)
+            ? H.getExternalProxyPortsForWindow(windowId, projectId, state)
+            : [];
+        const list = external.length ? internal.concat(external) : internal;
         if (!H || !H.isEntityVisible) return list;
         return list.filter(proxy => {
             const myPort = ports && ports[proxy.myPortId];
             if (myPort && myPort.nodeId && !H.isEntityVisible(myPort.nodeId, state)) return false;
-            // Второй конец связи: узел другого уровня (мастер-порты без nodeId не фильтруем)
+            // Второй конец связи: узел другого уровня (мастер-порты без nodeId не фильтруем).
+            // Для внешнего прокси второй конец лежит в ДРУГОМ проекте — его
+            // видимость проверяет CrossProjectLinkLayer на стороне магистрали.
+            if (proxy.isExternal) return true;
             const link = proxy.link;
             if (link) {
                 const otherPortId = link.sourcePortId === proxy.myPortId ? link.targetPortId : link.sourcePortId;
@@ -162,7 +173,7 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
             }
             return true;
         });
-    }, [index, state, H, ports]);
+    }, [index, state, H, ports, projectId, windowId]);
 
     // 1. Dragging окна по мировому пространству за шапку
     const handleMouseDownHeader = (e) => {
@@ -789,7 +800,8 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                     {proxyPorts.filter(p => p.edge === 'top').map(proxy => {
                         const myPort = ports && ports[proxy.myPortId];
                         const myNode = myPort && nodes ? nodes[myPort.nodeId] : null;
-                        const otherPort = ports && ports[proxy.otherPortId];
+                        const otherProj = proxy.isExternal && state.projects ? state.projects[proxy.otherProjectId] : null;
+                        const otherPort = proxy.isExternal ? (otherProj && otherProj.ports && otherProj.ports[proxy.otherPortId]) : (ports && ports[proxy.otherPortId]);
                         const otherNodeId = otherPort ? otherPort.nodeId : null;
                         const bridgeSelected = selectedIds && (
                             selectedIds.includes(proxy.linkId)
@@ -810,6 +822,7 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                                 strokeLinecap="round"
                                 strokeDasharray="3, 5"
                                 vectorEffect="non-scaling-stroke"
+                                className={proxy.isExternal ? 'cross-project-link-pulse' : ''}
                                 style={{ filter: bridgeSelected ? `drop-shadow(0 0 10px ${proxy.color || '#38bdf8'})` : 'none' }}
                             />
                         );
@@ -821,13 +834,15 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
             {!isCollapsed && proxyPorts.map(proxy => (
                 <div
                     key={proxy.id}
-                    className="absolute w-3 h-3 rounded-full border border-sky-300 bg-[#0a0d14] transform -translate-x-1/2 -translate-y-1/2 cursor-pointer z-30 hover:scale-150 transition-transform shadow-[0_0_8px_rgba(56,189,248,0.7)]"
+                    className={`absolute w-3 h-3 rounded-full border border-sky-300 bg-[#0a0d14] transform -translate-x-1/2 -translate-y-1/2 cursor-pointer z-30 hover:scale-150 transition-transform shadow-[0_0_8px_rgba(56,189,248,0.7)]${proxy.isExternal ? ' cross-project-link-pulse' : ''}`}
                     style={{
                         left: `${proxy.framePos.x}px`,
                         top: `${proxy.framePos.y}px`,
                         borderColor: proxy.color || '#38bdf8'
                     }}
-                    title={`Прокси-порт к Уровню ${proxy.targetLevel} (Связь: ${proxy.link.name || proxy.linkId}). Shift+драг — переместить по рамке`}
+                    title={proxy.isExternal
+                        ? `Кросс-проектная связь (${proxy.link.name || proxy.linkId}). Shift+драг — переместить по рамке`
+                        : `Прокси-порт к Уровню ${proxy.targetLevel} (Связь: ${proxy.link.name || proxy.linkId}). Shift+драг — переместить по рамке`}
                     onClick={(e) => {
                         e.stopPropagation();
                         dispatch({ type: 'SET_SELECTED', payload: proxy.linkId });
@@ -889,6 +904,16 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                                 fraction = (localY - M.headerH) / bodyH2;
                             }
 
+                            // Кросс-проектная связь (Фаза 6.1): живёт вне истории Undo
+                            // проектов (см. AGENTS.md) — обновляется сразу, без пары
+                            // skipHistory/COMMIT_HISTORY, которой для неё просто нет.
+                            if (proxy.isExternal) {
+                                dispatch({
+                                    type: 'UPDATE_CROSS_PROJECT_PROXY_PORT',
+                                    payload: { linkId: proxy.linkId, windowId: windowData.id, edge: newEdge, fraction }
+                                });
+                                return;
+                            }
                             dispatch({
                                 type: 'UPDATE_PROXY_PORT',
                                 payload: {
@@ -904,7 +929,7 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                         const handleProxyUp = () => {
                             window.removeEventListener('mousemove', handleProxyMove);
                             window.removeEventListener('mouseup', handleProxyUp);
-                            if (hasMoved) {
+                            if (hasMoved && !proxy.isExternal) {
                                 dispatch({
                                     type: 'COMMIT_HISTORY',
                                     payload: { snapshot: initialSnapshot, logMessage: 'Перемещён прокси-порт связи' }
@@ -984,7 +1009,10 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                                 const b = { x: bp.x, y: bp.y, edge: INWARD[proxy.edge] || 'top' };
                                 const stubPath = G2.buildLinkPath(a, b, proxy.link.linkStyle, 0);
                                 const otherPortId = proxy.link.sourcePortId === proxy.myPortId ? proxy.link.targetPortId : proxy.link.sourcePortId;
-                                const otherPort = ports && ports[otherPortId];
+                                // Внешний прокси (Фаза 6.1): второй порт живёт в ДРУГОМ
+                                // проекте, а не в локальном ports этого окна.
+                                const otherProj = proxy.isExternal && state.projects ? state.projects[proxy.otherProjectId] : null;
+                                const otherPort = proxy.isExternal ? (otherProj && otherProj.ports && otherProj.ports[otherPortId]) : (ports && ports[otherPortId]);
                                 const otherNodeId = otherPort ? otherPort.nodeId : null;
                                 const stubSelected = selectedIds && (
                                     selectedIds.includes(proxy.linkId)
@@ -1025,7 +1053,7 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                                             strokeLinejoin="round"
                                             strokeDasharray="3, 5"
                                             vectorEffect="non-scaling-stroke"
-                                            className="pointer-events-none transition-all duration-150"
+                                            className={`pointer-events-none transition-all duration-150${proxy.isExternal ? ' cross-project-link-pulse' : ''}`}
                                             style={{ filter: stubSelected ? `drop-shadow(0 0 10px ${proxy.color || '#38bdf8'})` : 'none' }}
                                         />
                                     </g>

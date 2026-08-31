@@ -197,6 +197,113 @@ function CrossLevelLinkLayer({ projectState, dispatch, interactive = true, opaci
     );
 }
 
+// Магистральные отрезки КРОСС-ПРОЕКТНЫХ связей (Фаза 6.1) — один экземпляр
+// на холст, а не на проект: у связи нет «своего» проекта, оба конца
+// равноправны. Резолвит прокси на обеих сторонах через getExternalProxyForLink
+// (hierarchy.js) и рисует тем же buildLinkPath, что и CrossLevelLinkLayer,
+// с добавленной пульсацией — единственным визуальным отличием от обычной
+// межуровневой связи (см. docs/IDEAL_INTERACTIONS.md и AGENTS.md, Фаза 6.1).
+function CrossProjectLinkLayer({ state, dispatch }) {
+    if (typeof StoreEngine !== 'undefined') StoreEngine.profileRender('CrossProjectLinkLayer');
+    const HU = window.HierarchyUtils;
+    const GU = window.GeometryUtils;
+    if (!HU || !GU || !state || !state.crossProjectLinks) return null;
+    const links = Object.values(state.crossProjectLinks).filter(Boolean);
+    if (links.length === 0) return null;
+
+    return (
+        <svg className="absolute top-0 left-0 pointer-events-none" style={{ width: '1px', height: '1px', overflow: 'visible', zIndex: 35 }}>
+            {links.map((link) => {
+                const sProj = state.projects && state.projects[link.sourceProjectId];
+                const tProj = state.projects && state.projects[link.targetProjectId];
+                if (!sProj || !tProj) return null;
+                if (HU.isProjectVisible && (!HU.isProjectVisible(link.sourceProjectId, state.containerIsolation, sProj.levelWindows)
+                    || !HU.isProjectVisible(link.targetProjectId, state.containerIsolation, tProj.levelWindows))) return null;
+
+                const sPort = sProj.ports && sProj.ports[link.sourcePortId];
+                const tPort = tProj.ports && tProj.ports[link.targetPortId];
+                if (!sPort || !tPort) return null;
+                const sNode = (sProj.nodes && sProj.nodes[sPort.nodeId]) || (sProj.layers && sProj.layers[sPort.nodeId]);
+                const tNode = (tProj.nodes && tProj.nodes[tPort.nodeId]) || (tProj.layers && tProj.layers[tPort.nodeId]);
+                if (!sNode || !tNode) return null;
+
+                const sView = getProjectFlatView(link.sourceProjectId);
+                const tView = getProjectFlatView(link.targetProjectId);
+                if (HU.isEntityVisible && (!HU.isEntityVisible(sNode.id, sView) || !HU.isEntityVisible(tNode.id, tView))) return null;
+
+                const sLvl = HU.getEntityLevel(sNode.id, sProj.nodes, sProj.layers, sProj.levelWindows);
+                const tLvl = HU.getEntityLevel(tNode.id, tProj.nodes, tProj.layers, tProj.levelWindows);
+                const sWin = HU.getWindowOfLevel(sLvl, sProj.levelWindows);
+                const tWin = HU.getWindowOfLevel(tLvl, tProj.levelWindows);
+                if (!sWin || !tWin) return null;
+                if (HU.isWindowVisible && (!HU.isWindowVisible(sWin.id, link.sourceProjectId, state.containerIsolation)
+                    || !HU.isWindowVisible(tWin.id, link.targetProjectId, state.containerIsolation))) return null;
+
+                const sCam = HU.getLevelView(sWin.id, sView);
+                const tCam = HU.getLevelView(tWin.id, tView);
+
+                let p1 = null;
+                let p2 = null;
+                if (sCam.isCollapsed) {
+                    p1 = HU.getMasterPortWorldCoordinates(sWin.id, sView);
+                    if (p1) p1.edge = 'top';
+                } else {
+                    const pr = HU.getExternalProxyForLink(link.id, sWin.id, link.sourceProjectId, state);
+                    if (pr) p1 = { x: pr.worldPos.x, y: pr.worldPos.y, edge: pr.edge };
+                    else { p1 = HU.getPortWorldPosition(link.sourcePortId, sView); if (p1) p1.edge = sPort.edge || 'right'; }
+                }
+                if (tCam.isCollapsed) {
+                    p2 = HU.getMasterPortWorldCoordinates(tWin.id, tView);
+                    if (p2) p2.edge = 'top';
+                } else {
+                    const pr = HU.getExternalProxyForLink(link.id, tWin.id, link.targetProjectId, state);
+                    if (pr) p2 = { x: pr.worldPos.x, y: pr.worldPos.y, edge: pr.edge };
+                    else { p2 = HU.getPortWorldPosition(link.targetPortId, tView); if (p2) p2.edge = tPort.edge || 'left'; }
+                }
+                if (!p1 || !p2) return null;
+
+                const pathD = GU.buildLinkPath(p1, p2, link.linkStyle, 0);
+                const isSelected = state.selectedIds && (
+                    state.selectedIds.includes(link.id)
+                    || state.selectedIds.includes(link.sourcePortId)
+                    || state.selectedIds.includes(link.targetPortId)
+                    || state.selectedIds.includes(sNode.id)
+                    || state.selectedIds.includes(tNode.id)
+                );
+                const linkColor = link.color || '#38bdf8';
+
+                return (
+                    <g key={`cross-project-link-${link.id}`}>
+                        <path
+                            d={pathD}
+                            fill="none"
+                            stroke="transparent"
+                            strokeWidth="16"
+                            className="pointer-events-auto cursor-pointer"
+                            onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_SELECTED', payload: link.id }); }}
+                            onDoubleClick={(e) => { e.stopPropagation(); dispatch({ type: 'FOCUS_CONNECTED_ELEMENTS', payload: { entityId: link.id } }); }}
+                        />
+                        <path
+                            d={pathD}
+                            fill="none"
+                            stroke={linkColor}
+                            strokeWidth={isSelected ? '4.5' : '2.5'}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeDasharray="3, 5"
+                            vectorEffect="non-scaling-stroke"
+                            className="cross-project-link-pulse transition-all duration-150 pointer-events-none"
+                            style={{
+                                filter: isSelected ? `drop-shadow(0 0 10px ${linkColor})` : `drop-shadow(0 0 4px ${linkColor}66)`
+                            }}
+                        />
+                    </g>
+                );
+            })}
+        </svg>
+    );
+}
+
 function Canvas() {
     if (typeof StoreEngine !== 'undefined') StoreEngine.profileRender('Canvas');
     const { state, dispatch } = useStore();
@@ -777,6 +884,10 @@ function Canvas() {
                         </ProjectContext.Provider>
                     );
                 })}
+
+                {/* 1.06 Кросс-проектные связи (Фаза 6.1): один экземпляр на холст,
+                    не на проект — у связи нет «своего» ProjectContext. */}
+                <CrossProjectLinkLayer state={state} dispatch={dispatch} />
 
                 {/* 1.1 Drag&Drop: переносимые элементы рисуются ПОВЕРХ всех окон
                     в контексте своего проекта. */}

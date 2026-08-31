@@ -1841,6 +1841,188 @@ const HierarchyUtils = {
         return !(x + w < rect.x0 || x > rect.x1 || y + h < rect.y0 || y > rect.y1);
     },
 
+    /**
+     * Чистая геометрия одного прокси-порта на рамке окна — вынесена из
+     * замыкания getProxyPortsForWindow (Фаза 6.1), чтобы её же мог
+     * переиспользовать getExternalProxyPortsForWindow для кросс-проектных
+     * связей: сама формула (грань + доля вдоль неё -> точка на рамке и во
+     * вьюпорте содержимого) не зависит от того, откуда взялась запись `item`.
+     * @param {Object} win окно уровня (position, size)
+     * @param {number} winIndex levelIndex окна — только для id прокси
+     * @param {{link: Object, isSource: boolean, myPort: Object, otherPort: Object, otherLevel?: number}} item
+     * @param {string} edge 'top'|'bottom'|'left'|'right'
+     * @param {number} fraction 0..1 вдоль грани
+     * @returns {Object}
+     */
+    buildWindowProxyGeometry: (win, winIndex, item, edge, fraction) => {
+        const winSize = win.size || { w: 1000, h: 700 };
+        const winPos = win.position || { x: 0, y: 0 };
+        const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
+        const bodyH = Math.max(200, winSize.h - headerH);
+
+        let frameX = 0;
+        let frameY = 0;
+        let viewportLocalX = 0;
+        let viewportLocalY = 0;
+
+        if (edge === 'top') {
+            // Мировая точка прокси (frameX/frameY) — на ВНЕШНЕМ контуре окна,
+            // как у left/right/bottom: магистраль подходит к самому верху рамки,
+            // а не к границе шапка/содержимое. Внутренний отрезок связи при этом
+            // по-прежнему целится в верх ВЬЮПОРТА содержимого (viewportLocalY=0,
+            // под шапкой) — своя система координат, см. getProxyViewportLocalPos.
+            // Между двумя точками — высота шапки; на экране этот участок
+            // перекрыт самой шапкой, так что разрыва не видно.
+            frameX = winSize.w * fraction;
+            frameY = 0;
+            viewportLocalX = frameX;
+            viewportLocalY = 0;
+        } else if (edge === 'bottom') {
+            frameX = winSize.w * fraction;
+            frameY = winSize.h;
+            viewportLocalX = frameX;
+            viewportLocalY = bodyH;
+        } else if (edge === 'left') {
+            frameX = 0;
+            frameY = headerH + bodyH * fraction;
+            viewportLocalX = 0;
+            viewportLocalY = bodyH * fraction;
+        } else { // right
+            frameX = winSize.w;
+            frameY = headerH + bodyH * fraction;
+            viewportLocalX = winSize.w;
+            viewportLocalY = bodyH * fraction;
+        }
+
+        const worldPos = {
+            x: winPos.x + borderW + frameX,
+            y: winPos.y + borderW + frameY
+        };
+
+        return {
+            id: `proxy-${item.link.id}-${winIndex}`,
+            linkId: item.link.id,
+            link: item.link,
+            isSource: item.isSource,
+            myPortId: item.myPort.id,
+            otherPortId: item.otherPort.id,
+            targetLevel: item.otherLevel,
+            edge,
+            slotFraction: fraction,
+            framePos: { x: frameX, y: frameY },
+            viewportPos: { x: viewportLocalX, y: viewportLocalY },
+            worldPos,
+            color: item.link.color || '#38bdf8'
+        };
+    },
+
+    /**
+     * Кросс-проектные прокси-порты на рамке окна ОДНОГО проекта (Фаза 6.1):
+     * та же геометрия, что и у getProxyPortsForWindow, но источник записей —
+     * не state.links одного проекта, а multiState.crossProjectLinks, и второй
+     * конец каждой связи резолвится в ДРУГОМ проекте. Грань выбирается
+     * сравнением мировых центров окон по доминирующей оси — между проектами
+     * нет общего понятия «уровня», сравнивать его не с чем.
+     * @param {string} windowId
+     * @param {string} projectId
+     * @param {Object} multiState корневое мультисостояние (state.projects/crossProjectLinks)
+     * @returns {Array<Object>} прокси в форме getProxyPortsForWindow + isExternal/otherProjectId
+     */
+    getExternalProxyPortsForWindow: (windowId, projectId, multiState) => {
+        if (!multiState || !multiState.crossProjectLinks || !projectId) return [];
+        const proj = multiState.projects && multiState.projects[projectId];
+        if (!proj) return [];
+        const win = proj.levelWindows && proj.levelWindows[windowId];
+        if (!win) return [];
+
+        const items = [];
+        Object.keys(multiState.crossProjectLinks).forEach(linkId => {
+            const link = multiState.crossProjectLinks[linkId];
+            if (!link) return;
+            const isSource = link.sourceProjectId === projectId;
+            if (!isSource && link.targetProjectId !== projectId) return;
+            const myPortId = isSource ? link.sourcePortId : link.targetPortId;
+            const otherPortId = isSource ? link.targetPortId : link.sourcePortId;
+            const otherProjectId = isSource ? link.targetProjectId : link.sourceProjectId;
+            const myPort = proj.ports && proj.ports[myPortId];
+            if (!myPort) return;
+            const myNode = (proj.nodes && proj.nodes[myPort.nodeId]) || (proj.layers && proj.layers[myPort.nodeId]);
+            if (!myNode) return;
+            const myLvl = HierarchyUtils.getEntityLevel(myNode.id, proj.nodes, proj.layers, proj.levelWindows);
+            const myWin = HierarchyUtils.getWindowOfLevel(myLvl, proj.levelWindows);
+            if (!myWin || myWin.id !== windowId) return; // сущность живёт в ДРУГОМ окне этого же проекта
+
+            const otherProj = multiState.projects && multiState.projects[otherProjectId];
+            const otherPort = otherProj && otherProj.ports && otherProj.ports[otherPortId];
+            const otherNode = otherPort && ((otherProj.nodes && otherProj.nodes[otherPort.nodeId]) || (otherProj.layers && otherProj.layers[otherPort.nodeId]));
+            let otherWorldRect = null;
+            if (otherNode && otherProj) {
+                const otherLvl = HierarchyUtils.getEntityLevel(otherNode.id, otherProj.nodes, otherProj.layers, otherProj.levelWindows);
+                const otherWin = HierarchyUtils.getWindowOfLevel(otherLvl, otherProj.levelWindows);
+                if (otherWin) {
+                    const p = otherWin.position || { x: 0, y: 0 };
+                    const s = otherWin.size || { w: 1000, h: 700 };
+                    otherWorldRect = { x: p.x, y: p.y, w: s.w, h: s.h };
+                }
+            }
+            items.push({ link, isSource, myPort, myNode, otherPort, otherNode, otherProjectId, otherWorldRect });
+        });
+        if (items.length === 0) return [];
+
+        const proxies = [];
+        const autoItems = [];
+        items.forEach(item => {
+            const ov = item.link.proxyOverrides ? item.link.proxyOverrides[windowId] : null;
+            if (ov && ['top', 'bottom', 'left', 'right'].includes(ov.edge) && typeof ov.fraction === 'number') {
+                proxies.push({
+                    ...HierarchyUtils.buildWindowProxyGeometry(win, win.levelIndex, item, ov.edge, Math.max(0.03, Math.min(0.97, ov.fraction))),
+                    isExternal: true, otherProjectId: item.otherProjectId
+                });
+            } else {
+                autoItems.push(item);
+            }
+        });
+
+        const winPos = win.position || { x: 0, y: 0 };
+        const winSize = win.size || { w: 1000, h: 700 };
+        const myCenter = { x: winPos.x + winSize.w / 2, y: winPos.y + winSize.h / 2 };
+        const byEdge = { top: [], bottom: [], left: [], right: [] };
+        autoItems.forEach(item => {
+            let edge = 'right';
+            if (item.otherWorldRect) {
+                const oc = { x: item.otherWorldRect.x + item.otherWorldRect.w / 2, y: item.otherWorldRect.y + item.otherWorldRect.h / 2 };
+                const dx = oc.x - myCenter.x;
+                const dy = oc.y - myCenter.y;
+                edge = (Math.abs(dx) >= Math.abs(dy)) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'top' : 'bottom');
+            }
+            byEdge[edge].push(item);
+        });
+        Object.entries(byEdge).forEach(([edge, list]) => {
+            if (list.length === 0) return;
+            list.sort((a, b) => a.link.id.localeCompare(b.link.id));
+            const total = list.length;
+            list.forEach((item, slotIdx) => {
+                proxies.push({
+                    ...HierarchyUtils.buildWindowProxyGeometry(win, win.levelIndex, item, edge, (slotIdx + 1) / (total + 1)),
+                    isExternal: true, otherProjectId: item.otherProjectId
+                });
+            });
+        });
+        return proxies;
+    },
+
+    /**
+     * Точечный поиск кросс-проектного прокси конкретной связи на конкретном
+     * окне — аналог getProxyForLink для getExternalProxyPortsForWindow.
+     * @param {string} linkId @param {string} windowId @param {string} projectId
+     * @param {Object} multiState
+     * @returns {?Object}
+     */
+    getExternalProxyForLink: (linkId, windowId, projectId, multiState) => {
+        const list = HierarchyUtils.getExternalProxyPortsForWindow(windowId, projectId, multiState);
+        return list.find(p => p.linkId === linkId) || null;
+    },
+
     getProxyPortsForWindow: (winIndex, state) => {
         if (!state || !state.levelWindows) return [];
         const win = state.levelWindows[winIndex] || HierarchyUtils.getWindowOfLevel(Number(winIndex), state.levelWindows);
@@ -1855,63 +2037,11 @@ const HierarchyUtils = {
 
         if (crossLinks.length === 0) return [];
 
-        // Сборка прокси-объекта по грани и доле вдоль неё (fraction 0..1).
-        const makeProxy = (item, edge, fraction) => {
-            let frameX = 0;
-            let frameY = 0;
-            let viewportLocalX = 0;
-            let viewportLocalY = 0;
-
-            if (edge === 'top') {
-                // Мировая точка прокси (frameX/frameY) — на ВНЕШНЕМ контуре окна,
-                // как у left/right/bottom: магистраль подходит к самому верху рамки,
-                // а не к границе шапка/содержимое. Внутренний отрезок связи при этом
-                // по-прежнему целится в верх ВЬЮПОРТА содержимого (viewportLocalY=0,
-                // под шапкой) — своя система координат, см. getProxyViewportLocalPos.
-                // Между двумя точками — высота шапки; на экране этот участок
-                // перекрыт самой шапкой, так что разрыва не видно.
-                frameX = winSize.w * fraction;
-                frameY = 0;
-                viewportLocalX = frameX;
-                viewportLocalY = 0;
-            } else if (edge === 'bottom') {
-                frameX = winSize.w * fraction;
-                frameY = winSize.h;
-                viewportLocalX = frameX;
-                viewportLocalY = bodyH;
-            } else if (edge === 'left') {
-                frameX = 0;
-                frameY = headerH + bodyH * fraction;
-                viewportLocalX = 0;
-                viewportLocalY = bodyH * fraction;
-            } else { // right
-                frameX = winSize.w;
-                frameY = headerH + bodyH * fraction;
-                viewportLocalX = winSize.w;
-                viewportLocalY = bodyH * fraction;
-            }
-
-            const worldPos = {
-                x: winPos.x + borderW + frameX,
-                y: winPos.y + borderW + frameY
-            };
-
-            return {
-                id: `proxy-${item.link.id}-${winIndex}`,
-                linkId: item.link.id,
-                link: item.link,
-                isSource: item.isSource,
-                myPortId: item.myPort.id,
-                otherPortId: item.otherPort.id,
-                targetLevel: item.otherLevel,
-                edge,
-                slotFraction: fraction,
-                framePos: { x: frameX, y: frameY },
-                viewportPos: { x: viewportLocalX, y: viewportLocalY },
-                worldPos,
-                color: item.link.color || '#38bdf8'
-            };
-        };
+        // Сборка прокси-объекта по грани и доле вдоль неё (fraction 0..1) —
+        // тонкая обёртка над HierarchyUtils.buildWindowProxyGeometry (вынесена
+        // в чистую функцию в Фазе 6.1, чтобы её же переиспользовал
+        // getExternalProxyPortsForWindow для кросс-проектных связей).
+        const makeProxy = (item, edge, fraction) => HierarchyUtils.buildWindowProxyGeometry(win, winIndex, item, edge, fraction);
 
         // Прокси с ручным положением (Shift+драг по рамке) исключаются из
         // авторасстановки: остальные распределяются по граням как раньше.
