@@ -2232,6 +2232,11 @@ const reducer = (state, action) => {
             const newNodes = { ...state.nodes };
             const newLayers = { ...state.layers };
             const intoLayerIds = []; // всех, кого класть в целевой слой (для авторазмещения)
+            // «Вырывание из цепочек» (PLAN_SHALLOW_TRANSFER_DND.md, режим
+            // p.mode === 'shallow'): id тех, кого перепривязали к предку выше
+            // или сделали сиротой-якорем ВМЕСТО переезда за владельцем. Нужен
+            // ниже, чтобы расталкивание местами не считало их «переехавшими».
+            const shallowDetachedIds = new Set();
 
             // Перенос назначает владельца НАПРЯМУЮ (или делает сиротой), поэтому
             // накопленная связь через поколение (ownerGap) сбрасывается
@@ -2296,6 +2301,52 @@ const reducer = (state, action) => {
                 if (targetLayer) intoLayerIds.push(nid);
             });
 
+            // 3б. «Вырывание из цепочек» (PLAN_SHALLOW_TRANSFER_DND.md): в
+            // режиме p.mode === 'shallow' прямые подопечные обычных (не
+            // «спускающихся» — см. п.1 выше, там своя, отдельная логика)
+            // переносимых узлов НЕ едут за ними цепочкой автоматически.
+            // Вместо этого они перепривязываются к ближайшему живому предку
+            // выше (дистанции ownerGap складываются — премортем, риск 1:
+            // «дед становится владельцем внука напрямую, минуя уехавшего
+            // отца»), либо становятся сиротами-якорями на своём текущем
+            // месте, если предка не было. Подопечный, явно выделенный ВМЕСТЕ
+            // с переносимым узлом в этом же жесте (уже есть в общем списке
+            // ids), не отвязывается — он и так едет сам, как обычно
+            // (премортем, риск 2: «родитель и ребёнок выделены вместе»).
+            // Ищем подопечных в ОБОИХ словарях — и nodes, и layers: слой
+            // тоже может быть подопечным по ownerId (премортем, риск 4), а
+            // содержимое слоя по parentId (риск 3) здесь не участвует вовсе —
+            // цикл ниже проверяет только ownerId, координатные вложения он
+            // не видит и не трогает.
+            if (p.mode === 'shallow' && normalIds.length > 0) {
+                const gapOf = (e) => (H && H.getOwnerGap) ? H.getOwnerGap(e) : 1;
+                const withGap = (e, gap) => {
+                    if (gap > 1) return { ...e, ownerGap: gap };
+                    if (e.ownerGap !== undefined) { const { ownerGap, ...rest } = e; return rest; }
+                    return e;
+                };
+                normalIds.forEach(nid => {
+                    // Родство смотрим по ИСХОДНОМУ состоянию — до этого переноса,
+                    // это дед переносимого узла, а не то, кем узел станет после
+                    const original = getEntity(nid);
+                    const oldOwnerId = original ? original.ownerId : null;
+                    const detach = (w) => {
+                        if (ids.includes(w.id)) return; // выделен вместе — едет сам
+                        shallowDetachedIds.add(w.id);
+                        const grandparent = oldOwnerId ? getEntity(oldOwnerId) : null;
+                        if (grandparent) {
+                            const newGap = gapOf(original) + gapOf(w);
+                            setNew(w.id, withGap({ ...getNew(w.id), ownerId: oldOwnerId }, newGap));
+                        } else {
+                            const wLvl = H.getEntityLevel(w.id, state.nodes, state.layers);
+                            setNew(w.id, withGap({ ...getNew(w.id), ownerId: null, homeLevel: wLvl }, 1));
+                        }
+                    };
+                    Object.values(state.nodes).forEach(w => { if (w && w.ownerId === nid) detach(w); });
+                    Object.values(state.layers).forEach(w => { if (w && w.ownerId === nid) detach(w); });
+                });
+            }
+
             // 4. В пределах уровня: явный усыновитель (дроп на узел) меняет
             //    владельца без смены контейнера и позиции; иначе — чистая
             //    группировка (только контейнер)
@@ -2343,6 +2394,11 @@ const reducer = (state, action) => {
                 const byLevel = {};
                 Object.keys(newNodes).forEach(nid => {
                     if (movedIds.includes(nid)) return;
+                    // Отвязанные в режиме 'shallow' (см. п.3б выше) остались на
+                    // месте — isOwnerDescendant смотрит на ИСХОДНОЕ родство и по
+                    // старой памяти сочтёт их «переехавшими», хотя они больше не
+                    // подопечные movedIds в новом состоянии
+                    if (shallowDetachedIds.has(nid)) return;
                     if (movedIds.some(tid => isOwnerDescendant(nid, tid))) {
                         const lvl = H.getEntityLevel(nid, newNodes, newLayers);
                         (byLevel[lvl] = byLevel[lvl] || []).push(nid);

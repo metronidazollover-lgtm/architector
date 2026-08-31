@@ -1624,6 +1624,152 @@ test('TRANSFER_NODE: newOwnerId усыновляет узел того же ур
     assert.equal(HierarchyUtils.getEntityLevel('B', s1.nodes, s1.layers), 1, 'уровень прежний');
 });
 
+// ============================================================
+// TRANSFER_NODE: режим 'shallow' — «вырывание из цепочек»
+// (PLAN_SHALLOW_TRANSFER_DND.md, PREMORTEM_SHALLOW_TRANSFER_DND.md)
+// ============================================================
+
+test('TRANSFER_NODE (shallow): прямой потомок перепривязывается к деду, а не едет следом', () => {
+    let s = makeTransferState();
+    // А1 (ребёнок А) вырывается на Главный холст; А2 (ребёнок А1) должен
+    // остаться на месте и перепривязаться напрямую к А (риск 1 премортема)
+    s = reducer(s, { type: 'TRANSFER_NODE', payload: { id: 'A1', targetLayerId: 'X0', mode: 'shallow' } });
+
+    assert.equal(s.nodes.A1.parentId, 'X0', 'А1 уехал');
+    assert.equal(s.nodes.A1.ownerId, null, 'А1 — сирота на новом месте');
+    assert.equal(lvl(s, 'A1'), 0);
+
+    assert.equal(s.nodes.A2.ownerId, 'A', 'А2 перепривязан к деду А, минуя уехавшего отца А1');
+    assert.equal(s.nodes.A2.ownerGap, 2, 'дистанция через одно поколение');
+    assert.equal(lvl(s, 'A2'), 2, 'А2 остался на своём уровне — не последовал за А1');
+    assert.deepEqual(s.nodes.A2.position, { x: 0, y: 0 }, 'позиция А2 не тронута переносом');
+});
+
+test('TRANSFER_NODE (shallow): дистанции ownerGap складываются, если у отца уже была связь через поколение', () => {
+    const s0 = {
+        ...defaultState,
+        nodes: {
+            A: { id: 'A', name: 'А', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' },
+            B: { id: 'B', name: 'Б', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'A', ownerGap: 2 },
+            C: { id: 'C', name: 'В', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'B' }
+        },
+        layers: {
+            X0: { id: 'X0', name: 'Х0', position: { x: 600, y: 200 }, size: { w: 500, h: 400 }, parentId: 'root' }
+        },
+        levelWindows: {
+            'lvlwin-root': { id: 'lvlwin-root', levelIndex: 0, name: 'Главный холст', position: { x: 0, y: 0 }, size: { w: 1000, h: 700 } },
+            'tw1': { id: 'tw1', levelIndex: 1, name: 'Уровень 1', position: { x: 0, y: 780 }, size: { w: 1000, h: 700 } },
+            'tw2': { id: 'tw2', levelIndex: 2, name: 'Уровень 2', position: { x: 0, y: 1560 }, size: { w: 1000, h: 700 } },
+            'tw3': { id: 'tw3', levelIndex: 3, name: 'Уровень 3', position: { x: 0, y: 2340 }, size: { w: 1000, h: 700 } }
+        },
+        levelViews: {
+            'lvlwin-root': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false },
+            'tw1': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false },
+            'tw2': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false },
+            'tw3': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false }
+        }
+    };
+    // Проверка исходной геометрии: Б на уровне 2 (0+2), В на уровне 3 (2+1)
+    assert.equal(HierarchyUtils.getEntityLevel('B', s0.nodes, s0.layers), 2);
+    assert.equal(HierarchyUtils.getEntityLevel('C', s0.nodes, s0.layers), 3);
+
+    const s1 = reducer(s0, { type: 'TRANSFER_NODE', payload: { id: 'B', targetLayerId: 'X0', mode: 'shallow' } });
+
+    assert.equal(s1.nodes.C.ownerId, 'A', 'В перепривязан напрямую к А');
+    assert.equal(s1.nodes.C.ownerGap, 3, 'дистанции сложились: 2 (Б→А) + 1 (В→Б) = 3');
+    assert.equal(HierarchyUtils.getEntityLevel('C', s1.nodes, s1.layers), 3, 'уровень В не изменился');
+});
+
+test('TRANSFER_NODE (shallow): без живого предка выше потомок становится сиротой-якорем на своём уровне', () => {
+    const s0 = {
+        ...defaultState,
+        nodes: {
+            A1: { id: 'A1', name: 'А1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root', homeLevel: 2 },
+            A2: { id: 'A2', name: 'А2', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'A1' }
+        },
+        layers: {
+            X0: { id: 'X0', name: 'Х0', position: { x: 600, y: 200 }, size: { w: 500, h: 400 }, parentId: 'root' }
+        },
+        levelWindows: {
+            'lvlwin-root': { id: 'lvlwin-root', levelIndex: 0, name: 'Главный холст', position: { x: 0, y: 0 }, size: { w: 1000, h: 700 } },
+            'tw1': { id: 'tw1', levelIndex: 1, name: 'Уровень 1', position: { x: 0, y: 780 }, size: { w: 1000, h: 700 } },
+            'tw2': { id: 'tw2', levelIndex: 2, name: 'Уровень 2', position: { x: 0, y: 1560 }, size: { w: 1000, h: 700 } },
+            'tw3': { id: 'tw3', levelIndex: 3, name: 'Уровень 3', position: { x: 0, y: 2340 }, size: { w: 1000, h: 700 } }
+        },
+        levelViews: {
+            'lvlwin-root': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false },
+            'tw1': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false },
+            'tw2': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false },
+            'tw3': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false }
+        }
+    };
+    assert.equal(HierarchyUtils.getEntityLevel('A1', s0.nodes, s0.layers), 2, 'А1 — сирота-якорь на уровне 2');
+    assert.equal(HierarchyUtils.getEntityLevel('A2', s0.nodes, s0.layers), 3);
+
+    const s1 = reducer(s0, { type: 'TRANSFER_NODE', payload: { id: 'A1', targetLayerId: 'X0', mode: 'shallow' } });
+
+    assert.equal(s1.nodes.A1.parentId, 'X0', 'А1 уехал на Главный холст');
+    assert.equal(s1.nodes.A2.ownerId, null, 'у А2 нет живого деда — становится сиротой');
+    assert.equal(s1.nodes.A2.homeLevel, 3, 'якорится на своём ТЕКУЩЕМ уровне, а не переезжает');
+    assert.equal(HierarchyUtils.getEntityLevel('A2', s1.nodes, s1.layers), 3, 'уровень не изменился');
+});
+
+test('TRANSFER_NODE (shallow): выделенные вместе родитель и ребёнок не разрываются (риск 2 премортема)', () => {
+    let s = makeTransferState();
+    // А1 и А2 выделены и переносятся ВМЕСТЕ — А2 должен последовать за А1,
+    // а не быть отвязан как «оставшийся потомок»
+    s = reducer(s, { type: 'TRANSFER_NODE', payload: { ids: ['A1', 'A2'], targetLayerId: 'X0', mode: 'shallow' } });
+
+    assert.equal(s.nodes.A1.parentId, 'X0', 'верхний перенесён');
+    assert.equal(s.nodes.A1.ownerId, null);
+    assert.equal(s.nodes.A2.ownerId, 'A1', 'А2 остался ребёнком А1, а не перепривязан к деду');
+    assert.equal(s.nodes.A2.ownerGap, undefined, 'связь прямая, без прыжка через поколение');
+    assert.equal(lvl(s, 'A2'), 1, 'А2 уехал вместе с А1, как в обычном режиме');
+});
+
+test('TRANSFER_NODE (shallow): подопечный-СЛОЙ тоже перепривязывается (риск 4 премортема)', () => {
+    let s = makeTransferState();
+    // Слой XA1 — подопечный А1 по ownerId (а не координатное содержимое)
+    s.layers.XA1 = { id: 'XA1', name: 'Слой-подопечный А1', position: { x: 0, y: 300 }, size: { w: 400, h: 300 }, parentId: 'root', ownerId: 'A1' };
+    s = reducer(s, { type: 'TRANSFER_NODE', payload: { id: 'A1', targetLayerId: 'X0', mode: 'shallow' } });
+
+    assert.equal(s.layers.XA1.ownerId, 'A', 'слой-подопечный перепривязан к деду А');
+    assert.equal(s.layers.XA1.ownerGap, 2);
+});
+
+test('TRANSFER_NODE (shallow): координатное содержимое слоя (parentId) не путается с подопечными по родству (риск 3 премортема)', () => {
+    let s = makeTransferState();
+    // L0 — подопечный А1 по ownerId; NL0 просто лежит внутри L0 через parentId
+    // (координатная группировка, как через поповер «Назначить на слой»),
+    // собственного владельца у NL0 нет
+    s.layers.L0 = { id: 'L0', name: 'Слой L0', position: { x: 0, y: 0 }, size: { w: 400, h: 300 }, parentId: 'root', ownerId: 'A1' };
+    s.nodes.NL0 = { id: 'NL0', name: 'Узел в L0', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'L0' };
+    const levelBefore = lvl(s, 'NL0');
+
+    s = reducer(s, { type: 'TRANSFER_NODE', payload: { id: 'A1', targetLayerId: 'X0', mode: 'shallow' } });
+
+    // L0 — подопечный А1 по ownerId, перепривязан к деду А
+    assert.equal(s.layers.L0.ownerId, 'A');
+    assert.equal(s.layers.L0.ownerGap, 2);
+    // NL0 — просто содержимое слоя L0 (parentId), едет вместе с ним внутри
+    // коробки, а не отвязывается как «подопечный»
+    assert.equal(s.nodes.NL0.parentId, 'L0', 'остался внутри той же коробки');
+    assert.ok(!s.nodes.NL0.ownerId, 'не приобрёл собственного владельца — не был подопечным');
+    assert.equal(lvl(s, 'NL0'), levelBefore, 'уровень содержимого слоя не изменился (унаследован от L0)');
+});
+
+test('TRANSFER_NODE: mode не указан (или "deep") — старое поведение цепочки не меняется', () => {
+    let s = makeTransferState();
+    s = reducer(s, { type: 'TRANSFER_NODE', payload: { id: 'A1', targetLayerId: 'X0' } });
+    assert.equal(s.nodes.A2.ownerId, 'A1', 'без mode дети едут за отцом, как раньше');
+    assert.equal(lvl(s, 'A2'), 1);
+
+    let s2 = makeTransferState();
+    s2 = reducer(s2, { type: 'TRANSFER_NODE', payload: { id: 'A1', targetLayerId: 'X0', mode: 'deep' } });
+    assert.equal(s2.nodes.A2.ownerId, 'A1', 'mode: "deep" — явно то же самое, что и раньше');
+    assert.equal(lvl(s2, 'A2'), 1);
+});
+
 test('Слои: ADD_PORT, ADD_LINK, каскадное удаление и FOCUS_CONNECTED_ELEMENTS', () => {
     let s = {
         ...defaultState,

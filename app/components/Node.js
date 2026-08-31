@@ -133,6 +133,13 @@ function NodeView(props) {
         let cumulativeDx = 0;
         let cumulativeDy = 0;
 
+        // Режим переноса (обычный/'shallow') фиксируется на старте жеста, а не
+        // читается заново в момент отпускания мыши: переключить тумблер той же
+        // рукой, что держит перетаскивание, нельзя, но хоткеем — можно, и это
+        // не должно подменить исход уже начатого переноса (PLAN_SHALLOW_TRANSFER_DND.md,
+        // премортем, риск 7).
+        const dragDropModeAtStart = (state.ui && state.ui.dragDropMode) || false;
+
         // ==== Drag&Drop: резолвер цели под перетаскиваемыми элементами ====
         const H = window.HierarchyUtils;
 
@@ -266,12 +273,13 @@ function NodeView(props) {
             const isTransfer = target && target.valid && !(target.kind === 'window' && target.isMove);
             if (isTransfer && H) {
                 const text = H.buildTransferConfirmText
-                    ? H.buildTransferConfirmText(ids, target, st)
+                    ? H.buildTransferConfirmText(ids, target, st, dragDropModeAtStart)
                     : 'Перенести выбранные элементы?';
                 if (window.confirm(text)) {
                     clearGesture();
                     const basePayload = {
                         ids,
+                        mode: dragDropModeAtStart,
                         // Весь жест (движение + перенос) — один шаг Undo
                         historySnapshot: {
                             nodes: initialSnapshot.nodes,

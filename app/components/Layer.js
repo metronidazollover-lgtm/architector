@@ -153,7 +153,13 @@ function Layer(props) {
         // получается устойчиво навести на другой слой для вложения. Тумблер
         // физически нельзя переключить той же рукой, что держит перетаскивание,
         // поэтому фиксация на старте жеста безопасна.
-        const dragDropModeAtStart = !!(state.ui && state.ui.dragDropMode);
+        // Значение НЕ приводим к boolean: тумблер трёхпозиционный
+        // (false / 'deep' / 'shallow' — PLAN_SHALLOW_TRANSFER_DND.md), а не
+        // только вкл/выкл, и конкретный выбранный режим переноса нужен ниже,
+        // в handleMouseUp, для TRANSFER_NODE (премортем, риск 7: хоткеем можно
+        // сменить режим второй рукой посреди жеста — исход уже начатого
+        // переноса от этого меняться не должен).
+        const dragDropModeAtStart = (state.ui && state.ui.dragDropMode) || false;
         const topDraggedIds = (st) => {
             const sel = (st.selectedIds || []).filter(sid => st.nodes[sid] || (st.layers && st.layers[sid]));
             const ids = sel.includes(data.id) && sel.length > 0 ? sel : [data.id];
@@ -241,7 +247,7 @@ function Layer(props) {
             // конкретную валидную цель. Так другие слои «пропускают» перетаскиваемый
             // слой сквозь себя и дают его вложить — ровно как через поповер
             // «Назначить на слой» (там расталкивания никогда не было).
-            const suppressCollision = dragDropModeAtStart;
+            const suppressCollision = !!dragDropModeAtStart;
             let resolvedDx, resolvedDy;
             if (suppressCollision) {
                 resolvedDx = dx;
@@ -289,12 +295,13 @@ function Layer(props) {
             const isTransfer = target && target.valid && !(target.kind === 'window' && target.isMove);
             if (isTransfer && H) {
                 const text = H.buildTransferConfirmText
-                    ? H.buildTransferConfirmText(ids, target, st)
+                    ? H.buildTransferConfirmText(ids, target, st, dragDropModeAtStart)
                     : 'Перенести выбранные элементы?';
                 if (window.confirm(text)) {
                     clearGesture();
                     const basePayload = {
                         ids,
+                        mode: dragDropModeAtStart,
                         historySnapshot: {
                             nodes: initialSnapshot.nodes,
                             layers: initialSnapshot.layers,

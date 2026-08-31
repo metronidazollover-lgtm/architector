@@ -1287,7 +1287,7 @@ const HierarchyUtils = {
      * @param {Object} state
      * @returns {string}
      */
-    buildTransferConfirmText: (ids, target, state) => {
+    buildTransferConfirmText: (ids, target, state, mode) => {
         const nodes = state.nodes || {};
         const layers = state.layers || {};
         const nameOf = (id) => {
@@ -1329,11 +1329,39 @@ const HierarchyUtils = {
                 if (parent) broken.push(`связь ${nameOf(id)} с родителем ${nameOf(e.ownerId)} будет разорвана`);
             });
         }
+
+        // «Вырывание из цепочек» (PLAN_SHALLOW_TRANSFER_DND.md): в режиме
+        // 'shallow', в отличие от обычного (цепочка едет следом), прямые
+        // подопечные переносимого узла остаются на месте и перепривязываются
+        // к его прежнему владельцу выше. Предупреждаем об этом отдельно от
+        // «связь будет разорвана» — тут связь не рвётся, а перескакивает через
+        // поколение. Не дублируем с «спуском в собственную ветку»
+        // (target.descend) — там уже есть своё, отдельное предупреждение.
+        const reanchored = [];
+        if (mode === 'shallow' && ownerWillChange && !target.descend) {
+            ids.forEach(id => {
+                const e = nodes[id] || layers[id];
+                if (!e) return;
+                const hasStayingChild = (dict) => Object.values(dict || {})
+                    .some(w => w && w.ownerId === id && !ids.includes(w.id));
+                if (!hasStayingChild(nodes) && !hasStayingChild(layers)) return;
+                const grandparent = e.ownerId ? (nodes[e.ownerId] || layers[e.ownerId]) : null;
+                reanchored.push(grandparent
+                    ? `подопечные ${nameOf(id)} останутся на месте и перепривяжутся к ${nameOf(e.ownerId)}`
+                    : `подопечные ${nameOf(id)} останутся на месте и станут самостоятельными (сиротами-якорями)`);
+            });
+        }
+
         let warn = '';
         if (broken.length > 0) {
             const shown = broken.slice(0, 3);
             warn = '\n\n⚠ ' + shown.join(';\n⚠ ')
                 + (broken.length > 3 ? `;\n⚠ …и ещё ${broken.length - 3}` : '') + '.';
+        }
+        if (reanchored.length > 0) {
+            const shown = reanchored.slice(0, 3);
+            warn += '\n\nℹ ' + shown.join(';\nℹ ')
+                + (reanchored.length > 3 ? `;\nℹ …и ещё ${reanchored.length - 3}` : '') + '.';
         }
 
         return `${head}${warn}\n\nПеренести?`;

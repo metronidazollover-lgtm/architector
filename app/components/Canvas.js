@@ -594,25 +594,60 @@ function Canvas() {
                 {/* Разделитель */}
                 <div className="w-5 h-px bg-white/10"></div>
 
-                {/* Тумблер глобального режима Drag&Drop */}
-                <button
-                    className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
-                        state.ui && state.ui.dragDropMode
-                            ? 'text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 shadow-sm'
-                            : 'text-gray-400 hover:text-white hover:bg-white/10'
-                    }`}
-                    title={
-                        state.ui && state.ui.dragDropMode
-                            ? 'Режим Drag&Drop включён: перетаскивание между уровнями и вложение элементов разрешены. Клик — выключить'
-                            : 'Включить режим Drag&Drop: перетаскивание между уровнями и вложение элементов друг в друга'
-                    }
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        dispatch({ type: 'TOGGLE_UI', payload: 'dragDropMode' });
-                    }}
-                >
-                    <div className="icon-move text-xs"></div>
-                </button>
+                {/* Тумблер режима Drag&Drop: обычный перенос «с ветками» (вся
+                    цепочка едет за узлом) / «вырывание из цепочек» — shallow
+                    (PLAN_SHALLOW_TRANSFER_DND.md): прямые потомки остаются на
+                    месте и перепривязываются к деду. Основной слот — текущий
+                    режим (или «выкл»); при наведении слева ВПЛОТНУЮ, без
+                    зазора, выезжает альтернативный режим — единый hover без
+                    дребезга (премортем, риск 6). Клик по альтернативе включает
+                    именно её; клик по активному основному слоту выключает
+                    Drag&Drop целиком, как и раньше. */}
+                {(() => {
+                    const dragMode = (state.ui && state.ui.dragDropMode) || false;
+                    const isDragOn = !!dragMode;
+                    const mainMode = dragMode || 'deep';
+                    const altMode = mainMode === 'shallow' ? 'deep' : 'shallow';
+                    const modeIconClass = (m) => `icon-move text-xs${m === 'shallow' ? ' rotate-45' : ''}`;
+                    const modeLabel = (m) => (m === 'shallow'
+                        ? 'без веток («вырывание»: подопечные остаются на месте и перепривязываются к деду)'
+                        : 'с ветками (обычный: вся цепочка едет вслед за узлом)');
+                    return (
+                        <div className="relative w-7 h-7 group">
+                            <button
+                                className="absolute top-0 right-7 w-7 h-7 rounded-md flex items-center justify-center
+                                    text-gray-400 hover:text-white hover:bg-white/10 transition-all duration-200 ease-out
+                                    opacity-0 -translate-x-1 pointer-events-none
+                                    group-hover:opacity-100 group-hover:translate-x-0 group-hover:pointer-events-auto"
+                                title={`Включить перенос ${modeLabel(altMode)}`}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    dispatch({ type: 'SET_UI', payload: { dragDropMode: altMode } });
+                                }}
+                            >
+                                <div className={modeIconClass(altMode)}></div>
+                            </button>
+                            <button
+                                className={`absolute top-0 right-0 w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
+                                    isDragOn
+                                        ? 'text-emerald-300 bg-emerald-500/20 border border-emerald-500/40 shadow-sm'
+                                        : 'text-gray-400 hover:text-white hover:bg-white/10'
+                                }`}
+                                title={
+                                    isDragOn
+                                        ? `Режим Drag&Drop включён: перенос ${modeLabel(mainMode)}. Клик — выключить`
+                                        : 'Включить режим Drag&Drop: перетаскивание между уровнями и вложение элементов друг в друга'
+                                }
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    dispatch({ type: 'SET_UI', payload: { dragDropMode: isDragOn ? false : 'deep' } });
+                                }}
+                            >
+                                <div className={modeIconClass(mainMode)}></div>
+                            </button>
+                        </div>
+                    );
+                })()}
 
                 {/* Разделитель */}
                 <div className="w-5 h-px bg-white/10"></div>
