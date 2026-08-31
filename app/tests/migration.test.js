@@ -119,6 +119,108 @@ test('REPARENT_ENTITY: цикл отклоняется', () => {
     assert.equal(s1, s0);
 });
 
+// ---------------------------------------------------------------------------
+// REPARENT_ENTITY (Фаза 4, расширенный контракт): { ids, targetParentId,
+// targetLevelIndex?, mode?: 'deep'|'shallow', position? }. Фикстуры ниже —
+// чистые v13-сущности (parentId напрямую, без ownerId), в отличие от тестов
+// выше, которые проверяют обратную совместимость со старым { id, newParentId }.
+// ---------------------------------------------------------------------------
+
+const win13 = (id, levelIndex) => ({ id, levelIndex, name: id, position: { x: 0, y: id === 'lvlwin-root' ? 0 : 800 * levelIndex }, size: { w: 1000, h: 700 } });
+
+const v13TreeState = () => ({
+    ...defaultState,
+    levelWindows: { 'lvlwin-root': win13('lvlwin-root', 0), w1: win13('w1', 1), w2: win13('w2', 2) },
+    layers: {
+        L: { id: 'L', name: 'L', parentId: 'root', position: { x: 500, y: 0 }, size: { w: 400, h: 300 } }
+    },
+    nodes: {
+        root1: { id: 'root1', name: 'Root1', parentId: 'root', position: { x: 0, y: 0 }, size: { w: 200, h: 100 } },
+        child1: { id: 'child1', name: 'Child1', parentId: 'root1', position: { x: 10, y: 10 }, size: { w: 200, h: 100 } },
+        grandchild1: { id: 'grandchild1', name: 'Grandchild1', parentId: 'child1', position: { x: 5, y: 5 }, size: { w: 200, h: 100 } },
+        lonely: { id: 'lonely', name: 'Lonely', parentId: 'root', position: { x: 700, y: 0 }, size: { w: 200, h: 100 } }
+    }
+});
+
+test('REPARENT_ENTITY (shallow): прямой ребёнок усыновляется прежним родителем, поддерево ребёнка не трогается', () => {
+    const s0 = v13TreeState();
+    assert.equal(HierarchyUtils.getEntityLevel('child1', s0.nodes, s0.layers, s0.levelWindows), 1);
+    assert.equal(HierarchyUtils.getEntityLevel('grandchild1', s0.nodes, s0.layers, s0.levelWindows), 2);
+
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'child1', targetParentId: 'L', mode: 'shallow' } });
+
+    assert.equal(s1.nodes.child1.parentId, 'L', 'сам child1 переехал в целевой слой');
+    assert.equal(s1.nodes.grandchild1.parentId, 'root1', 'внук усыновлён ПРЕЖНИМ родителем child1 (root1), а не поехал следом');
+    assert.equal(HierarchyUtils.getEntityLevel('grandchild1', s1.nodes, s1.layers, s1.levelWindows), 1, 'внук поднялся на уровень бывшего родителя child1');
+    assert.ok(Number.isFinite(s1.nodes.grandchild1.position.x) && Number.isFinite(s1.nodes.grandchild1.position.y));
+});
+
+test('REPARENT_ENTITY (shallow): findFreePosition разводит всплывшего ребёнка с уже занятым местом в новом контейнере', () => {
+    const s0 = v13TreeState();
+    // «Засеваем» root1-контейнер сущностью ровно там, куда попытается встать grandchild1
+    // после всплытия (grandchild1.position совпадает с root1's own position — оба {0,0}/{5,5}
+    // не пересекаются напрямую, поэтому явно кладём конкурента на позицию грядущего всплытия)
+    s0.nodes.blocker = { id: 'blocker', name: 'Blocker', parentId: 'root1', position: { x: 5, y: 5 }, size: { w: 200, h: 100 } };
+
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'child1', targetParentId: 'L', mode: 'shallow' } });
+    const g = s1.nodes.grandchild1;
+    const b = s1.nodes.blocker;
+    const overlap = g.position.x < b.position.x + b.size.w + 20 && g.position.x + g.size.w + 20 > b.position.x
+        && g.position.y < b.position.y + b.size.h + 20 && g.position.y + g.size.h + 20 > b.position.y;
+    assert.equal(overlap, false, 'findFreePosition не даёт grandchild1 наложиться на blocker');
+});
+
+test('REPARENT_ENTITY: массив ids переносит несколько сущностей одним шагом истории', () => {
+    const s0 = v13TreeState();
+    const pastBefore = s0.past.length;
+
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { ids: ['root1', 'lonely'], targetParentId: 'L' } });
+
+    assert.equal(s1.nodes.root1.parentId, 'L');
+    assert.equal(s1.nodes.lonely.parentId, 'L');
+    assert.equal(s1.past.length, pastBefore + 1, 'весь батч — один шаг Undo');
+});
+
+test('REPARENT_ENTITY: targetLevelIndex резолвится в id окна уровня — сирота-якорь на своём уровне', () => {
+    const s0 = v13TreeState();
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'lonely', targetLevelIndex: 2 } });
+
+    assert.equal(s1.nodes.lonely.parentId, 'w2');
+    assert.equal(HierarchyUtils.getEntityLevel('lonely', s1.nodes, s1.layers, s1.levelWindows), 2);
+});
+
+test('REPARENT_ENTITY: явный position (одиночный drop) переопределяет авторасстановку', () => {
+    const s0 = v13TreeState();
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'lonely', targetParentId: 'L', position: { x: 42, y: 24 } } });
+    assert.deepEqual(s1.nodes.lonely.position, { x: 42, y: 24 });
+});
+
+test('REPARENT_ENTITY: вложение в любой слой валидно (нет проверки «слой чужого уровня») — цикл всё ещё отклоняется', () => {
+    const s0 = v13TreeState();
+    // lonely (уровень 0) в L (уровень 0, но проверка на РАВЕНСТВО уровней в v13 не нужна вовсе)
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'lonely', targetParentId: 'L' } });
+    assert.equal(s1.nodes.lonely.parentId, 'L');
+
+    // Цикл: L не может стать родителем root1, если бы root1 уже был предком L
+    const s2 = { ...s0, layers: { L: { ...s0.layers.L, parentId: 'root1' } } };
+    const s3 = reducer(s2, { type: 'REPARENT_ENTITY', payload: { id: 'root1', targetParentId: 'L' } });
+    assert.equal(s3, s2, 'root1 -> L образовало бы цикл (L уже внутри root1) — no-op');
+});
+
+test('REPARENT_ENTITY (shallow): Undo одним шагом возвращает И перенесённую сущность, И усыновлённых детей', () => {
+    const s0 = v13TreeState();
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'child1', targetParentId: 'L', mode: 'shallow' } });
+    assert.notEqual(s1.nodes.grandchild1.parentId, s0.nodes.grandchild1.parentId);
+
+    const s2 = reducer(s1, { type: 'UNDO' });
+    assert.equal(s2.nodes.child1.parentId, 'root1', 'child1 вернулся на место');
+    assert.deepEqual(s2.nodes.grandchild1, s0.nodes.grandchild1, 'внук вернулся к исходному parentId и позиции — тем же шагом Undo');
+
+    const s3 = reducer(s2, { type: 'REDO' });
+    assert.equal(s3.nodes.child1.parentId, 'L');
+    assert.equal(s3.nodes.grandchild1.parentId, 'root1');
+});
+
 test('MOVE_SELECTED: потомок выделенного предка не двигается дважды', () => {
     const m = migrateToV10(v9project());
     const s0 = { ...defaultState, nodes: m.nodes, layers: m.layers, selectedIds: ['inLayer', 'child'] };

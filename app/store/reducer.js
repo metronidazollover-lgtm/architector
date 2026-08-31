@@ -2447,31 +2447,130 @@ const reducer = (state, action) => {
             };
         }
         case 'REPARENT_ENTITY': {
-            const { id, newParentId } = action.payload;
+            // v13 (Фаза 4, PLAN_V12_CLEAN_HIERARCHY_AND_INTERACTIONS.md): единственный
+            // атомарный экшен переноса — замена TRANSFER_NODE. Оба экшена сосуществуют
+            // до конца Фазы 5 (пока UI не переведён на этот); TRANSFER_NODE не трогаем.
+            //
+            // Обратная совместимость: одиночный { id, newParentId } нормализуется
+            // в { ids: [id], targetParentId: newParentId } — старый контракт первых
+            // тестов (см. app/tests/migration.test.js) продолжает работать как есть.
+            //
+            // payload: { ids | id, targetParentId | newParentId, targetLevelIndex?,
+            //            mode?: 'deep' | 'shallow', position? }
+            const p = action.payload || {};
             const H = getHierarchy();
-            const entity = state.nodes[id] || (state.layers && state.layers[id]);
-            if (!entity || entity.parentId === newParentId) return state;
-            if (newParentId !== 'root' && H.isDescendantOf(newParentId, id, state.nodes, state.layers)) return state;
+            const G = getGeometry();
+            if (!H || !G) return state;
 
-            // Слой принадлежит уровню: класть узел в слой ЧУЖОГО уровня нельзя —
-            // уровень узла наследуется от слоя-контейнера, и узел молча «переехал»
-            // бы на другой холст, оставив ownerId в противоречии (родитель и
-            // ребёнок на одном уровне, каскадное удаление через окна и т.п.).
-            // Отклоняем так же, как циклы.
-            if (newParentId !== 'root' && state.layers && state.layers[newParentId] && H.getEntityLevel) {
-                const layerLevel = H.getEntityLevel(newParentId, state.nodes, state.layers);
-                const entityLevel = H.getEntityLevel(id, state.nodes, state.layers);
-                if (layerLevel !== entityLevel) return state;
+            const mode = p.mode === 'shallow' ? 'shallow' : 'deep';
+            let targetParentId = p.targetParentId !== undefined ? p.targetParentId : p.newParentId;
+            if (targetParentId === undefined && typeof p.targetLevelIndex === 'number') {
+                const win = resolveWindow(state, p.targetLevelIndex);
+                targetParentId = win ? win.id : (p.targetLevelIndex === 0 ? 'root' : undefined);
             }
+            if (!targetParentId) return state;
 
-            const abs = H.getLocalPosition(id, state.nodes, state.layers);
-            const rel = H.toRelativePosition(abs, newParentId, state.nodes, state.layers);
-            const historyState = saveHistory(state, `Элемент перевложен: ${entity.name}`);
+            const isNodeId = (eid) => !!(state.nodes && state.nodes[eid]);
+            const getEntity = (eid) => (state.nodes && state.nodes[eid]) || (state.layers && state.layers[eid]);
 
-            if (state.nodes[id]) {
-                return { ...state, ...historyState, nodes: { ...state.nodes, [id]: { ...entity, parentId: newParentId, position: rel } } };
-            }
-            return { ...state, ...historyState, layers: { ...state.layers, [id]: { ...entity, parentId: newParentId, position: rel } } };
+            const rawIds = Array.isArray(p.ids) ? p.ids : (p.id ? [p.id] : []);
+            const requestedIds = rawIds.filter(eid => getEntity(eid));
+            if (requestedIds.length === 0) return state;
+
+            // «Только верхние»: у кого в этом же наборе есть предок по parentId-
+            // цепочке (единственная цепочка в v13 — координата и родство слиты) —
+            // тот переедет вместе со своим предком, отдельно его не трогаем.
+            const topIds = requestedIds.filter(eid => !requestedIds.some(other =>
+                other !== eid && H.isDescendantOf(eid, other, state.nodes, state.layers)));
+
+            // Валидация каждого id независимо (canReparentTo: существование цели,
+            // self, цикл) — невалидные молча пропускаются, один плохой id не
+            // блокирует остальной батч.
+            const validIds = topIds.filter(eid => {
+                const entity = getEntity(eid);
+                if (!entity || entity.parentId === targetParentId) return false;
+                return H.canReparentTo(eid, targetParentId, state.nodes, state.layers, state.levelWindows).ok;
+            });
+            if (validIds.length === 0) return state;
+
+            const firstEntity = getEntity(validIds[0]);
+            const historyState = saveHistory(state, validIds.length === 1
+                ? `Элемент перевложен: ${firstEntity.name}`
+                : `Перевложено элементов: ${validIds.length}`);
+
+            const newNodes = { ...state.nodes };
+            const newLayers = { ...state.layers };
+            const getNew = (eid) => (isNodeId(eid) ? newNodes[eid] : newLayers[eid]);
+            const setNew = (eid, val) => { if (isNodeId(eid)) newNodes[eid] = val; else newLayers[eid] = val; };
+            // Сущность, прошедшая через REPARENT_ENTITY, живёт по чистой v13-схеме —
+            // унаследованные ownerId/ownerGap/homeLevel (если это ещё не мигрированная
+            // v11-сущность) сбрасываются, а не остаются мёртвым грузом.
+            const stripLegacy = (e) => { const { ownerId, ownerGap, homeLevel, ...rest } = e; return rest; };
+
+            // Прямоугольники прямых детей контейнера — база для findFreePosition
+            // (Shallow-всплытие детей и/или перенос через границу окна).
+            const rectsIn = (containerId) => {
+                const rects = [];
+                Object.values(state.nodes || {}).forEach(n => { if (n && n.parentId === containerId) rects.push({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }); });
+                Object.values(state.layers || {}).forEach(l => { if (l && l.parentId === containerId) rects.push({ x: l.position.x, y: l.position.y, w: (l.size && l.size.w) || 600, h: (l.size && l.size.h) || 400 }); });
+                return rects;
+            };
+
+            validIds.forEach(eid => {
+                const entity = getEntity(eid);
+                const oldParentId = entity.parentId;
+
+                if (mode === 'shallow') {
+                    // Прямые дети переносимой сущности усыновляются её ПРЕЖНИМ
+                    // родителем («дедушкой») вместо того, чтобы следовать за ней —
+                    // findFreePosition предотвращает наложение всплывающих детей
+                    // на то, что уже стоит в новом для них контейнере.
+                    const directChildren = [
+                        ...Object.values(state.nodes || {}).filter(n => n && n.parentId === eid),
+                        ...Object.values(state.layers || {}).filter(l => l && l.parentId === eid)
+                    ];
+                    if (directChildren.length > 0) {
+                        const siblingRects = rectsIn(oldParentId);
+                        directChildren.forEach(child => {
+                            const pos = G.findFreePosition(child.size, child.position, siblingRects);
+                            siblingRects.push({ x: pos.x, y: pos.y, w: (child.size && child.size.w) || 200, h: (child.size && child.size.h) || 100 });
+                            setNew(child.id, stripLegacy({ ...getNew(child.id), parentId: oldParentId, position: pos }));
+                        });
+                    }
+                }
+
+                // Позиция самой переносимой сущности:
+                //  - явная (drop под курсором, только при одиночном переносе);
+                //  - целевой контейнер лежит на ТОМ ЖЕ уровне (одно окно на levelIndex,
+                //    инвариант normalizeLevelWindows — слой на любом уровне, 'root' по
+                //    определению = корень СВОЕГО текущего окна) — мировая позиция
+                //    сохраняется точно (toRelativePosition);
+                //  - иначе граница окна пересекается (другая камера, другое
+                //    пространство), «мировая» позиция бессмысленна — ищем свободное
+                //    место рядом с исходными локальными координатами.
+                const entityLevel = H.getEntityLevel(eid, state.nodes, state.layers, state.levelWindows);
+                const targetLevel = targetParentId === 'root'
+                    ? entityLevel
+                    : (state.levelWindows && state.levelWindows[targetParentId])
+                        ? state.levelWindows[targetParentId].levelIndex
+                        : isNodeId(targetParentId)
+                            ? H.getEntityLevel(targetParentId, state.nodes, state.layers, state.levelWindows) + 1
+                            : H.getEntityLevel(targetParentId, state.nodes, state.layers, state.levelWindows); // слой
+
+                let position;
+                if (validIds.length === 1 && p.position) {
+                    position = p.position;
+                } else if (targetLevel === entityLevel) {
+                    const abs = H.getLocalPosition(eid, state.nodes, state.layers);
+                    position = H.toRelativePosition(abs, targetParentId, state.nodes, state.layers);
+                } else {
+                    position = G.findFreePosition(entity.size, entity.position, rectsIn(targetParentId));
+                }
+
+                setNew(eid, stripLegacy({ ...getNew(eid), parentId: targetParentId, position }));
+            });
+
+            return { ...state, ...historyState, nodes: newNodes, layers: newLayers };
         }
         case 'DELETE_SELECTED': {
             if (state.selectedIds.length === 0) return state;

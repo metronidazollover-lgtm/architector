@@ -234,6 +234,53 @@ const GeometryUtils = {
         return { updatesById, newLayerSize: { w: optimalW, h: optimalH } };
     },
     /**
+     * Ближайшая свободная позиция для сущности размера `size`, начиная от
+     * точки `near` {x,y}, без перекрытия с прямоугольниками `existingRects`.
+     * В отличие от `getSmartPlacement` (привязан к конкретному слою-контейнеру
+     * и раскладывает СПИСОК новых узлов по сетке) — эта функция берёт ОДНУ
+     * сущность и ищет позицию рядом с её текущим местом, спиралью наружу:
+     * при Shallow-вырывании (REPARENT_ENTITY, mode:'shallow') всплывающий
+     * ребёнок должен остаться визуально там же, где был, а не улететь в угол
+     * контейнера. См. docs/IDEAL_INTERACTIONS.md §4.3.
+     * @param {{w: number, h: number}} size
+     * @param {{x: number, y: number}} near
+     * @param {Array<{x: number, y: number, w: number, h: number}>} existingRects
+     * @param {number} [padding]
+     * @returns {{x: number, y: number}}
+     */
+    findFreePosition: (size, near, existingRects, padding = 20) => {
+        const w = (size && size.w) || 200;
+        const h = (size && size.h) || 100;
+        const nx = (near && near.x) || 0;
+        const ny = (near && near.y) || 0;
+        const rects = existingRects || [];
+
+        const overlaps = (x, y) => rects.some(r =>
+            x < r.x + r.w + padding && x + w + padding > r.x &&
+            y < r.y + r.h + padding && y + h + padding > r.y
+        );
+
+        if (!overlaps(nx, ny)) return { x: nx, y: ny };
+
+        const step = 40;
+        for (let radius = 1; radius <= 60; radius++) {
+            const candidates = [
+                { x: nx + radius * step, y: ny },
+                { x: nx - radius * step, y: ny },
+                { x: nx, y: ny + radius * step },
+                { x: nx, y: ny - radius * step },
+                { x: nx + radius * step, y: ny + radius * step },
+                { x: nx - radius * step, y: ny - radius * step },
+                { x: nx + radius * step, y: ny - radius * step },
+                { x: nx - radius * step, y: ny + radius * step }
+            ];
+            for (const c of candidates) {
+                if (!overlaps(c.x, c.y)) return c;
+            }
+        }
+        return { x: nx, y: ny + 60 * step }; // защитный fallback, практически недостижим
+    },
+    /**
      * Разрешение коллизии слоёв: корректирует позицию перемещаемого слоя,
      * чтобы он не перекрывал другие слои в том же контексте.
      * Возвращает скорректированные {x, y} или исходные, если коллизий нет.

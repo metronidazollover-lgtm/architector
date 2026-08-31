@@ -1287,15 +1287,26 @@ test('REMOVE_LEVEL_WINDOW: ручные позиции прокси удалён
     assert.deepEqual(s.links.lx.proxyOverrides['w2'], { edge: 'right', fraction: 0.6 }, 'оверрайд выжившего окна сохранён');
 });
 
-test('REPARENT_ENTITY: слой принадлежит уровню — вложение узла в слой чужого уровня отклоняется', () => {
+test('REPARENT_ENTITY (v13): вложение в слой ЧУЖОГО уровня теперь РАЗРЕШЕНО — уровень наследуется от слоя', () => {
+    // v11 отклонял кросс-уровневое вложение в слой (родство ownerId и координата
+    // parentId были двумя независимыми системами, которые могли разойтись).
+    // В v13 это единственный источник родства — уровень сущности определяется
+    // ИСКЛЮЧИТЕЛЬНО тем, где лежит её parentId, поэтому запрета больше нет:
+    // Nest «узел -> слой» валиден для любого слоя, уровень просто становится
+    // уровнем этого слоя (docs/IDEAL_INTERACTIONS.md §2).
     const s0 = makeTwoTreesState();
     s0.layers = { LayL0: { id: 'LayL0', name: 'Слой L0', position: { x: 500, y: 300 }, size: { w: 400, h: 300 }, parentId: 'root' } };
 
-    // Узел уровня 1 в слой уровня 0 — отклонено (состояние не изменилось)
+    // Узел уровня 1 (c1a, ownerId:'R1') в слой уровня 0 — теперь работает
     const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'c1a', newParentId: 'LayL0' } });
-    assert.equal(s1, s0, 'кросс-уровневое вложение в слой — no-op');
+    assert.equal(s1.nodes.c1a.parentId, 'LayL0', 'вложение в слой чужого уровня применяется');
+    assert.equal(HierarchyUtils.getEntityLevel('c1a', s1.nodes, s1.layers), 0, 'уровень c1a стал уровнем слоя (0), а не остался 1');
+    assert.equal(s1.nodes.c1a.ownerId, undefined, 'унаследованный ownerId сброшен — координата теперь единственный источник родства');
+    // Собственные дети c1a (g1, по ownerId) остались на месте — REPARENT_ENTITY
+    // переносит только САМ узел (Deep по умолчанию не трогает parentId детей).
+    assert.equal(s1.nodes.g1.parentId, 'root', 'дети c1a не переехали структурно');
 
-    // Узел уровня 0 в слой уровня 0 — работает
+    // Узел уровня 0 в слой уровня 0 — тоже работает, как и раньше
     const s2 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'R1', newParentId: 'LayL0' } });
     assert.equal(s2.nodes.R1.parentId, 'LayL0', 'вложение в слой своего уровня работает');
     assert.equal(HierarchyUtils.getEntityLevel('R1', s2.nodes, s2.layers), 0, 'уровень узла не изменился');
