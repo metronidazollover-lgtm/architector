@@ -1055,6 +1055,24 @@ const saveHistory = (state, logMessage, snapshotOverride = null) => {
     };
 };
 
+/**
+ * Структурный родитель сущности («на уровень выше через УЗЕЛ», семантический
+ * шаг v13, см. docs/IDEAL_INTERACTIONS.md §1.1) — единообразно для ещё не
+ * мигрированных v11-сущностей (ownerId) и уже v13-сущностей (parentId
+ * указывает прямо на узел, что сегодня может произойти только через
+ * REPARENT_ENTITY — TRANSFER_NODE/CREATE_NESTED_NODE пока всегда пишут
+ * ownerId). parentId, указывающий на СЛОЙ, — координата, не родство,
+ * сюда не попадает (слои не меняют уровень, см. правило семантического шага).
+ * @param {Object} entity
+ * @param {Object<string, Object>} nodes
+ * @returns {?string}
+ */
+const structuralParentOf = (entity, nodes) => {
+    if (entity.ownerId) return entity.ownerId;
+    if (entity.parentId && entity.parentId !== 'root' && nodes && nodes[entity.parentId]) return entity.parentId;
+    return null;
+};
+
 // Общая реализация удаления уровня: используется экшеном REMOVE_LEVEL_WINDOW
 // и клавишей Delete (DELETE_SELECTED при выделенном окне уровня). Вынесена из
 // switch, чтобы редьюсер не ссылался сам на себя (самовызов ломал загрузку
@@ -1088,36 +1106,66 @@ const applyRemoveLevelWindow = (state, win, allowRoot = true) => {
     Object.keys(state.nodes || {}).forEach(eid => { if (levelOf(eid) === removedLevel) removedIds.add(eid); });
     Object.keys(state.layers || {}).forEach(eid => { if (levelOf(eid) === removedLevel) removedIds.add(eid); });
 
-    // 2. Выжившие сущности; осиротевшие цепочки владения пере-якорятся
+    // 2. Выжившие сущности; осиротевшие структурные цепочки пере-якорятся.
+    // structuralParentOf унифицирует ownerId (v11) и parentId-на-узел (v13,
+    // сегодня возможно только через REPARENT_ENTITY) — «внук — деду» работает
+    // одинаково независимо от того, какой цепочкой сущность сюда попала.
+    // v11 несёт свою дистанцию до родителя в ownerGap; v13 (нет ownerId) её не
+    // хранит вовсе — расстояние всегда ровно 1 по определению модели.
+    const gapOf2 = (ent) => (ent && ent.ownerId ? gapOf(ent) : 1);
+
     const reanchor = (entity) => {
         let e = entity;
-        if (e.ownerId && removedIds.has(e.ownerId)) {
-            const deadOwner = (state.nodes && state.nodes[e.ownerId]) || (state.layers && state.layers[e.ownerId]);
-            if (deadOwner && deadOwner.ownerId) {
-                // «Внук — деду»: дистанции складываются, минус один снятый уровень
-                e = withGap({ ...e, ownerId: deadOwner.ownerId }, gapOf(e) + gapOf(deadOwner) - 1);
+        const myParent = structuralParentOf(e, state.nodes);
+        if (myParent && removedIds.has(myParent)) {
+            const deadParent = (state.nodes && state.nodes[myParent]) || (state.layers && state.layers[myParent]);
+            const grandparent = deadParent ? structuralParentOf(deadParent, state.nodes) : null;
+            // v13 (нет ownerId у e): прямая ссылка parentId=дед безопасна ТОЛЬКО
+            // если реальная дистанция дед→мёртвый родитель ровно 1 — иначе v13
+            // не может выразить растянутую дистанцию (gap у неё не существует)
+            // и сущность обязана явно заякориться (см. else-ветку), как и
+            // migrateToV13 делает для ownerGap > 1.
+            const canDirectLink = !!e.ownerId || gapOf2(deadParent) === 1;
+            if (grandparent && !removedIds.has(grandparent) && canDirectLink) {
+                if (e.ownerId) {
+                    // «Внук — деду» (v11): дистанции складываются, минус один снятый уровень
+                    e = withGap({ ...e, ownerId: grandparent }, gapOf(e) + gapOf(deadParent) - 1);
+                } else {
+                    // v13: связь всегда прямая (дистанция ровно 1, gap не существует)
+                    e = { ...e, parentId: grandparent };
+                }
             } else {
-                // Владелец был корневым/сиротой-якорем удаляемого уровня:
+                // Родитель был корневым/сиротой-якорем удаляемого уровня:
                 // ребёнок сам становится якорем на ТЕКУЩЕМ уровне (removedLevel +
                 // дистанция); общий блок сдвига якорей ниже опустит значение на
-                // один вместе с остальными уровнями — двойного сдвига нет
-                e = withGap({ ...e, ownerId: null, homeLevel: removedLevel + gapOf(e) }, 1);
+                // один вместе с остальными уровнями — двойного сдвига нет.
+                // Мёртвую parentId-ссылку (если структурная связь была через
+                // parentId, не ownerId) тоже нужно снять — homeLevel становится
+                // единственным источником уровня сироты-якоря.
+                e = withGap({
+                    ...e,
+                    ownerId: null,
+                    homeLevel: removedLevel + gapOf2(e),
+                    ...(e.ownerId ? {} : { parentId: 'root' })
+                }, 1);
             }
-        } else if (e.ownerId) {
-            // Владелец жив. Если связь через поколение ПЕРЕПРЫГИВАЛА удаляемый
-            // уровень (владелец выше, сущность ниже), дистанция сокращается на
-            // один вместе со сдвигом уровней.
-            const owner = (state.nodes && state.nodes[e.ownerId]) || (state.layers && state.layers[e.ownerId]);
-            if (owner) {
-                const ownerLvl = levelOf(e.ownerId);
+        } else if (myParent) {
+            // Родитель жив. Если связь через поколение (только ownerId, v11)
+            // ПЕРЕПРЫГИВАЛА удаляемый уровень, дистанция сокращается на один
+            // вместе со сдвигом уровней. v13 (parentId-на-узел): дистанция
+            // всегда ровно 1 по определению, «перепрыгивания» не бывает.
+            if (e.ownerId) {
+                const ownerLvl = levelOf(myParent);
                 const myLvl = levelOf(e.id);
                 if (ownerLvl < removedLevel && myLvl > removedLevel) {
                     e = withGap({ ...e }, gapOf(e) - 1);
                 }
             }
         }
-        // Координатный контейнер удалён — сущность встаёт на холст уровня
-        if (e.parentId && e.parentId !== 'root' && removedIds.has(e.parentId)) {
+        // Координатный контейнер (СЛОЙ) удалён — сущность встаёт на холст
+        // уровня. Узел уже обработан выше (структурная ветка) — здесь остаются
+        // только слои (и живой parentId, не заменённый на grandparent/'root' там).
+        if (e.parentId && e.parentId !== 'root' && removedIds.has(e.parentId) && !(state.nodes && state.nodes[e.parentId])) {
             e = { ...e, parentId: 'root' };
         }
         // Якоря независимых веток сдвигаются вместе с уровнями
@@ -3149,6 +3197,9 @@ const reducer = (state, action) => {
             const H = getHierarchy();
             const levelOf = (eid) => (H ? H.getEntityLevel(eid, state.nodes, state.layers) : 0);
             const gapOf = (e) => (H && H.getOwnerGap) ? H.getOwnerGap(e) : 1;
+            // v11 несёт дистанцию в ownerGap; v13 (нет ownerId) её не хранит —
+            // расстояние всегда ровно 1 по определению модели.
+            const gapOf2 = (ent) => (ent && ent.ownerId ? gapOf(ent) : 1);
             const withGap = (e, gap) => {
                 if (gap > 1) return { ...e, ownerGap: gap };
                 if (e.ownerGap !== undefined) { const { ownerGap, ...rest } = e; return rest; }
@@ -3160,33 +3211,57 @@ const reducer = (state, action) => {
             Object.keys(state.nodes || {}).forEach(eid => { if (levelOf(eid) === clearedLevel) removedIds.add(eid); });
             Object.keys(state.layers || {}).forEach(eid => { if (levelOf(eid) === clearedLevel) removedIds.add(eid); });
 
-            // 2. Пере-якорение выживших: ближайший живой предок вверх по цепочке
-            //    владения (дистанции складываются) либо сирота на своём уровне
+            // 2. Пере-якорение выживших: ближайший живой предок вверх по структурной
+            //    цепочке (дистанции складываются для ownerId-хопов) либо сирота на
+            //    своём уровне. structuralParentOf унифицирует ownerId (v11) и
+            //    parentId-на-узел (v13, сегодня возможно только через
+            //    REPARENT_ENTITY) — см. комментарий над applyRemoveLevelWindow.
             const reanchor = (entity) => {
                 let e = entity;
-                if (e.ownerId && removedIds.has(e.ownerId)) {
-                    let gap = gapOf(e);
-                    let cursor = (state.nodes && state.nodes[e.ownerId]) || (state.layers && state.layers[e.ownerId]);
-                    while (cursor && cursor.ownerId && removedIds.has(cursor.ownerId)) {
-                        gap += gapOf(cursor);
-                        cursor = (state.nodes && state.nodes[cursor.ownerId]) || (state.layers && state.layers[cursor.ownerId]);
+                const myParent = structuralParentOf(e, state.nodes);
+                if (myParent && removedIds.has(myParent)) {
+                    let gap = gapOf2(e);
+                    let cursor = (state.nodes && state.nodes[myParent]) || (state.layers && state.layers[myParent]);
+                    let cursorParent = cursor ? structuralParentOf(cursor, state.nodes) : null;
+                    while (cursor && cursorParent && removedIds.has(cursorParent)) {
+                        gap += gapOf2(cursor);
+                        cursor = (state.nodes && state.nodes[cursorParent]) || (state.layers && state.layers[cursorParent]);
+                        cursorParent = cursor ? structuralParentOf(cursor, state.nodes) : null;
                     }
-                    const ancestorId = cursor && cursor.ownerId ? cursor.ownerId : null;
+                    const ancestorId = cursorParent;
                     const ancestor = ancestorId
                         ? ((state.nodes && state.nodes[ancestorId]) || (state.layers && state.layers[ancestorId]))
                         : null;
-                    if (ancestor && !removedIds.has(ancestorId)) {
-                        // «Внук — деду»: уровень сущности не меняется, дистанция
-                        // впитывает дистанцию удалённого владельца
-                        e = withGap({ ...e, ownerId: ancestorId }, gap + gapOf(cursor));
+                    const totalGap = gap + (cursor ? gapOf2(cursor) : 1);
+                    // v13 (нет ownerId у e): прямая ссылка безопасна ТОЛЬКО если
+                    // накопленная дистанция ровно 1 — иначе v13 не может выразить
+                    // растянутую дистанцию (см. комментарий в applyRemoveLevelWindow).
+                    const canDirectLink = !!e.ownerId || totalGap === 1;
+                    if (ancestor && !removedIds.has(ancestorId) && canDirectLink) {
+                        if (e.ownerId) {
+                            // «Внук — деду» (v11): уровень сущности не меняется,
+                            // дистанция впитывает дистанцию удалённого владельца
+                            e = withGap({ ...e, ownerId: ancestorId }, totalGap);
+                        } else {
+                            // v13: связь всегда прямая, gap не существует
+                            e = { ...e, parentId: ancestorId };
+                        }
                     } else {
                         // Живых предков не осталось — сирота-якорь на своём уровне,
-                        // ветка потомков остаётся при нём
-                        e = withGap({ ...e, ownerId: null, homeLevel: levelOf(e.id) }, 1);
+                        // ветка потомков остаётся при нём. Мёртвую parentId-ссылку
+                        // (если структурная связь была через parentId, не ownerId)
+                        // тоже нужно снять.
+                        e = withGap({
+                            ...e,
+                            ownerId: null,
+                            homeLevel: levelOf(e.id),
+                            ...(e.ownerId ? {} : { parentId: 'root' })
+                        }, 1);
                     }
                 }
-                // Координатный контейнер удалён — сущность встаёт на холст уровня
-                if (e.parentId && e.parentId !== 'root' && removedIds.has(e.parentId)) {
+                // Координатный контейнер (СЛОЙ) удалён — сущность встаёт на холст
+                // уровня. Узел уже обработан выше — здесь остаются только слои.
+                if (e.parentId && e.parentId !== 'root' && removedIds.has(e.parentId) && !(state.nodes && state.nodes[e.parentId])) {
                     e = { ...e, parentId: 'root' };
                 }
                 return e;
