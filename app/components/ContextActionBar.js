@@ -385,10 +385,25 @@ function ContextActionBar() {
         reader.onload = (event) => {
             try {
                 const data = JSON.parse(event.target.result);
+                if (data.kind === 'global') {
+                    console.error('Это файл ВСЕГО рабочего пространства — используйте «Импортировать всё», а не «Импорт проекта»');
+                    return;
+                }
                 if (data.nodes && data.ports && data.links) {
-                    // Импорт ДОБАВЛЯЕТ новый проект на общий холст (правее
-                    // существующих), а не заменяет текущий
-                    dispatch({ type: 'ADD_PROJECT_FROM_FILE', payload: data });
+                    // Выбор варианта локального импорта (Фаза 6.5): «слить в
+                    // активный» (ремап id, MERGE_PROJECT_FROM_FILE) или «добавить
+                    // как новый проект» (раздельные словари, ADD_PROJECT_FROM_FILE,
+                    // как и раньше) — второе остаётся действием по умолчанию
+                    // (Отмена), чтобы не менять привычное поведение кнопки.
+                    if (window.confirm('ОК — слить содержимое файла с активным проектом (ремап id, коллизии позиций разводятся автоматически).\nОтмена — добавить как отдельный НОВЫЙ проект на холст (как раньше).')) {
+                        // Слияние трогает АКТИВНЫЙ проект напрямую, минуя
+                        // FOR_PROJECT-обёртку локального dispatch (см. его
+                        // определение выше) — у одно-проектного reducer нет
+                        // такого экшена, обёрнутый вызов молча ушёл бы в никуда.
+                        rawDispatch({ type: 'MERGE_PROJECT_FROM_FILE', payload: data });
+                    } else {
+                        dispatch({ type: 'ADD_PROJECT_FROM_FILE', payload: data });
+                    }
                 } else {
                     console.error('Некорректный файл проекта');
                 }

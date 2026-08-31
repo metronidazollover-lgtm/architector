@@ -3974,7 +3974,12 @@ const multiReducer = (m, action) => {
                 levelWindows: {}, levelViews: {},
                 past: [], future: [], historyLogs: []
             };
-            const loaded = reducer(base, { type: 'LOAD_STATE', payload: data });
+            // migrateToV11/migrateToV10 (внутри LOAD_STATE) не умеют отличить
+            // «сирота v13 с parentId прямо на узел» от старого дуализма
+            // parentId/ownerId и достраивают ownerId, где его в файле не было —
+            // migrateProjectEntitiesToV13 сводит это обратно к чистому parentId
+            // независимо от того, из какой версии реально пришёл файл.
+            const loaded = migrateProjectEntitiesToV13(reducer(base, { type: 'LOAD_STATE', payload: data }));
             const n = (m.projectCounter || m.projectOrder.length) + 1;
             const id = newProjectId();
             let proj = { id, origin: { x: 0, y: 0 } };
@@ -4005,6 +4010,149 @@ const multiReducer = (m, action) => {
                 selectedIds: [],
                 isolatedIds: []
             };
+            return reconcilePendingGateways(next);
+        }
+        case 'MERGE_PROJECT_FROM_FILE': {
+            // Слияние импортируемого файла В АКТИВНЫЙ проект (Фаза 6.5) — в
+            // отличие от ADD_PROJECT_FROM_FILE («добавить как НОВЫЙ проект»,
+            // раздельные словари, коллизий id по конструкции нет), здесь
+            // словари ОБЩИЕ: каждая сущность файла получает свежий id, все
+            // внутренние ссылки (parentId, nodeId порта, sourcePortId/
+            // targetPortId, ключи proxyOverrides, portId штекеров) переписываются
+            // через карту oldId -> newId.
+            const data = action.payload;
+            if (!data || !data.nodes || !data.ports || !data.links) return m;
+            if (!m.activeProjectId || !m.projects[m.activeProjectId]) return m;
+            const activeProj = m.projects[m.activeProjectId];
+
+            const base = {
+                ...defaultState,
+                nodes: {}, layers: {}, ports: {}, links: {},
+                levelWindows: {}, levelViews: {},
+                past: [], future: [], historyLogs: []
+            };
+            // migrateToV11/migrateToV10 (внутри LOAD_STATE) не умеют отличить
+            // «сирота v13 с parentId прямо на узел» от старого дуализма
+            // parentId/ownerId и достраивают ownerId, где его в файле не было —
+            // migrateProjectEntitiesToV13 сводит это обратно к чистому parentId
+            // независимо от того, из какой версии реально пришёл файл.
+            const loaded = migrateProjectEntitiesToV13(reducer(base, { type: 'LOAD_STATE', payload: data }));
+
+            let seq = 0;
+            const genId = (prefix) => `${prefix}-${Date.now()}-${seq++}`;
+            const idMap = {};
+            Object.keys(loaded.nodes).forEach(id => { idMap[id] = genId('node'); });
+            Object.keys(loaded.layers).forEach(id => { idMap[id] = genId('layer'); });
+            Object.keys(loaded.ports).forEach(id => { idMap[id] = genId('port'); });
+            Object.keys(loaded.links).forEach(id => { idMap[id] = genId('link'); });
+
+            // Окна уровней: то же levelIndex в активном проекте — сливаем в
+            // НЕГО; иначе заводим новое (появится под нижним существующим —
+            // тот же рост глубины, что у REPARENT_ENTITY/normalizeLevelWindows).
+            const activeWindowsByLevel = {};
+            Object.values(activeProj.levelWindows || {}).forEach(w => { if (w) activeWindowsByLevel[w.levelIndex] = w; });
+            const windowIdMap = {};
+            const newWindows = {};
+            Object.values(loaded.levelWindows || {}).forEach(w => {
+                if (!w) return;
+                const existing = activeWindowsByLevel[w.levelIndex];
+                if (existing) {
+                    windowIdMap[w.id] = existing.id;
+                } else {
+                    const newId = newWindowId();
+                    windowIdMap[w.id] = newId;
+                    newWindows[newId] = { ...w, id: newId };
+                }
+            });
+
+            // Главный холст активного проекта — его СОБСТВЕННОЕ содержимое
+            // адресует его литералом 'root', а не явным id окна (v13, «сироты
+            // на уровне 0 компактно остаются 'root'», см. IDEAL_INTERACTIONS
+            // §1). GeometryUtils.resolveContextCollisions группирует контекст
+            // СТРОКОЙ parentId — если слитое содержимое окажется на явном id
+            // окна ('lvlwin-root'), а исходное — на литерале 'root', коллизии
+            // между ними просто не заметят друг друга, хотя это ОДИН контекст.
+            const activeRootWinId = activeWindowsByLevel[0] ? activeWindowsByLevel[0].id : null;
+            const collapseRoot = (wid) => (wid && wid === activeRootWinId) ? 'root' : wid;
+
+            const remapParentId = (pid) => {
+                // «root» файла — его собственный Главный холст (levelIndex 0);
+                // сливается с Главным холстом активного проекта — тот есть всегда.
+                if (pid === 'root') return 'root';
+                if (windowIdMap[pid]) return collapseRoot(windowIdMap[pid]);
+                if (idMap[pid]) return idMap[pid];
+                return 'root'; // защитный фолбэк — не должен наступать при корректном файле
+            };
+
+            const remappedNodes = {};
+            Object.entries(loaded.nodes).forEach(([oldId, n]) => {
+                if (!n) return;
+                const newId = idMap[oldId];
+                remappedNodes[newId] = { ...n, id: newId, parentId: remapParentId(n.parentId) };
+            });
+            const remappedLayers = {};
+            Object.entries(loaded.layers).forEach(([oldId, l]) => {
+                if (!l) return;
+                const newId = idMap[oldId];
+                remappedLayers[newId] = { ...l, id: newId, parentId: remapParentId(l.parentId) };
+            });
+            const remappedPorts = {};
+            Object.entries(loaded.ports).forEach(([oldId, p]) => {
+                if (!p) return;
+                const newId = idMap[oldId];
+                remappedPorts[newId] = { ...p, id: newId, nodeId: idMap[p.nodeId] || p.nodeId };
+            });
+            const remappedLinks = {};
+            Object.entries(loaded.links).forEach(([oldId, l]) => {
+                if (!l) return;
+                const newId = idMap[oldId];
+                const proxyOverrides = l.proxyOverrides
+                    ? Object.fromEntries(Object.entries(l.proxyOverrides).map(([wid, ov]) => [windowIdMap[wid] || wid, ov]))
+                    : undefined;
+                remappedLinks[newId] = {
+                    ...l, id: newId,
+                    sourcePortId: idMap[l.sourcePortId] || l.sourcePortId,
+                    targetPortId: idMap[l.targetPortId] || l.targetPortId,
+                    ...(proxyOverrides ? { proxyOverrides } : {})
+                };
+            });
+
+            // Слияние словарей + авто-раздвижка коллизий на корне каждого
+            // уровня — как в LOAD_STATE, теперь на ОБЪЕДИНЁННОМ наборе
+            // (существующее содержимое активного проекта + новоприбывшее).
+            const mergedNodesRaw = { ...activeProj.nodes, ...remappedNodes };
+            const mergedLayers = { ...activeProj.layers, ...remappedLayers };
+            const G = getGeometry();
+            const mergedNodes = (G && G.resolveContextCollisions) ? G.resolveContextCollisions(mergedNodesRaw, mergedLayers) : mergedNodesRaw;
+            const mergedPorts = { ...activeProj.ports, ...remappedPorts };
+            const mergedLinks = { ...activeProj.links, ...remappedLinks };
+            const mergedLevelWindows = { ...activeProj.levelWindows, ...newWindows };
+            const mergedLevelViews = { ...activeProj.levelViews };
+            Object.keys(newWindows).forEach(wid => { if (!mergedLevelViews[wid]) mergedLevelViews[wid] = makeLevelView(); });
+
+            // externalGateways файла (Фаза 6.2) — portId уже смотрит на СТАРЫЙ
+            // id, переписывается той же картой; оседают в pendingGateways
+            // активного проекта, reconcilePendingGateways сразу пробует примирить.
+            const mergedPendingGateways = { ...(activeProj.pendingGateways || {}) };
+            if (Array.isArray(data.externalGateways)) {
+                data.externalGateways.forEach(gw => {
+                    if (!gw || !gw.linkId || !gw.portId) return;
+                    const newPortId = idMap[gw.portId];
+                    if (!newPortId) return;
+                    mergedPendingGateways[gw.linkId] = { ...gw, portId: newPortId };
+                });
+            }
+
+            const historyState = saveHistory(mergeActiveView(m), 'Слияние проекта из файла');
+            const mergedActiveProj = {
+                ...activeProj,
+                ...historyState,
+                nodes: mergedNodes, layers: mergedLayers, ports: mergedPorts, links: mergedLinks,
+                levelWindows: mergedLevelWindows, levelViews: mergedLevelViews,
+                pendingGateways: mergedPendingGateways
+            };
+
+            const next = { ...m, projects: { ...m.projects, [m.activeProjectId]: mergedActiveProj }, selectedIds: [] };
             return reconcilePendingGateways(next);
         }
         case 'REMOVE_PROJECT': {

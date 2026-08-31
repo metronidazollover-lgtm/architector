@@ -919,3 +919,158 @@ test('LOAD_GLOBAL_STATE: неразрешённые pendingGateways в само�
     assert.deepEqual(target.projects[pidB].pendingGateways, {});
 });
 
+// === Фаза 6.5: локальный импорт — слияние в активный проект ===
+
+test('MERGE_PROJECT_FROM_FILE: сущности файла получают свежие id, existing-содержимое активного проекта не трогается по id', () => {
+    let m = wrapFlatToMulti(makeFlat()); // активный проект уже содержит nodeA
+    const pidActive = m.activeProjectId;
+
+    const fileData = {
+        nodes: { nodeA: { id: 'nodeA', name: 'Импортированный тёзка', position: { x: 500, y: 500 }, size: { w: 200, h: 100 }, parentId: 'root' } },
+        ports: { portX: { id: 'portX', nodeId: 'nodeA', name: 'PortX' } },
+        links: {}
+    };
+    m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
+
+    const proj = m.projects[pidActive];
+    assert.ok(proj.nodes.nodeA, 'исходный nodeA активного проекта не задет (тот же id, старое имя)');
+    assert.equal(proj.nodes.nodeA.name, 'A');
+    const importedIds = Object.keys(proj.nodes).filter(id => id !== 'nodeA');
+    assert.equal(importedIds.length, 1, 'ровно один новый узел добавился под СВЕЖИМ id');
+    assert.equal(proj.nodes[importedIds[0]].name, 'Импортированный тёзка');
+    const importedPortIds = Object.keys(proj.ports).filter(id => id !== 'portX' && proj.ports[id].nodeId === importedIds[0]);
+    assert.equal(importedPortIds.length, 1, 'порт файла тоже получил свежий id и указывает на remapped nodeId');
+    assert.notEqual(importedPortIds[0], 'portX');
+});
+
+test('MERGE_PROJECT_FROM_FILE: связь внутри файла остаётся целой после ремапа обоих портов', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidActive = m.activeProjectId;
+    const fileData = {
+        nodes: {
+            n1: { id: 'n1', name: 'N1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' },
+            n2: { id: 'n2', name: 'N2', position: { x: 300, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' }
+        },
+        ports: {
+            p1: { id: 'p1', nodeId: 'n1', name: 'Out' },
+            p2: { id: 'p2', nodeId: 'n2', name: 'In' }
+        },
+        links: { l1: { id: 'l1', sourcePortId: 'p1', targetPortId: 'p2', name: 'Link' } }
+    };
+    m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
+
+    const proj = m.projects[pidActive];
+    const linkIds = Object.keys(proj.links);
+    assert.equal(linkIds.length, 1);
+    const link = proj.links[linkIds[0]];
+    assert.notEqual(link.sourcePortId, 'p1', 'sourcePortId переписан на новый id');
+    assert.ok(proj.ports[link.sourcePortId], 'переписанный sourcePortId существует среди перенесённых портов');
+    assert.ok(proj.ports[link.targetPortId], 'переписанный targetPortId существует среди перенесённых портов');
+});
+
+test('MERGE_PROJECT_FROM_FILE: окно того же levelIndex сливается в СУЩЕСТВУЮЩЕЕ; отсутствующий уровень заводит новое', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidActive = m.activeProjectId;
+    const activeWinBefore = Object.values(m.projects[pidActive].levelWindows)[0];
+
+    // Файл с двумя уровнями: 0 (сольётся с существующим) и 1 (новый в активном)
+    const fileData = {
+        nodes: {
+            fRoot: { id: 'fRoot', name: 'FRoot', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' },
+            fChild: { id: 'fChild', name: 'FChild', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'fRoot' }
+        },
+        ports: {},
+        links: {},
+        levelWindows: {
+            'file-lvl0': { id: 'file-lvl0', levelIndex: 0, name: 'File L0', position: { x: 0, y: 0 }, size: { w: 1000, h: 700 } },
+            'file-lvl1': { id: 'file-lvl1', levelIndex: 1, name: 'File L1', position: { x: 0, y: 800 }, size: { w: 1000, h: 700 } }
+        },
+        levelViews: {}
+    };
+    m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
+
+    const proj = m.projects[pidActive];
+    const windowsAfter = Object.values(proj.levelWindows);
+    assert.equal(windowsAfter.filter(w => w.levelIndex === 0).length, 1, 'на levelIndex 0 по-прежнему ровно одно окно (слияние, не дубликат)');
+    assert.equal(windowsAfter.filter(w => w.levelIndex === 1).length, 1, 'на levelIndex 1 появилось ровно одно НОВОЕ окно');
+    assert.ok(proj.levelWindows[activeWinBefore.id], 'существующее окно активного проекта пережило слияние (тот же id)');
+
+    const fRootId = Object.keys(proj.nodes).find(id => proj.nodes[id].name === 'FRoot');
+    const fChildId = Object.keys(proj.nodes).find(id => proj.nodes[id].name === 'FChild');
+    // Литерал 'root', не явный id окна — тем же адресуется и родное
+    // содержимое активного проекта (nodeA), иначе resolveContextCollisions
+    // (группировка по СТРОКЕ parentId) не видела бы их общим контекстом.
+    assert.equal(proj.nodes[fRootId].parentId, 'root', '«root» файла слился с Главным холстом активного проекта — литералом root');
+    assert.equal(proj.nodes[fChildId].parentId, fRootId, 'внутреннее родство (узел -> узел) пережило ремап id');
+});
+
+test('MERGE_PROJECT_FROM_FILE: коллизия на корне разводит совпадающие позиции, не трогая структуру', () => {
+    let m = wrapFlatToMulti(makeFlat()); // nodeA: position (0,0) size 200x100, parentId 'root'
+    const pidActive = m.activeProjectId;
+    const fileData = {
+        nodes: { imported: { id: 'imported', name: 'Imported', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } },
+        ports: {}, links: {}
+    };
+    m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
+
+    const proj = m.projects[pidActive];
+    const importedId = Object.keys(proj.nodes).find(id => proj.nodes[id].name === 'Imported');
+    const a = proj.nodes.nodeA.position;
+    const b = proj.nodes[importedId].position;
+    const overlapX = a.x < b.x + 200 && a.x + 200 > b.x;
+    const overlapY = a.y < b.y + 100 && a.y + 100 > b.y;
+    assert.ok(!(overlapX && overlapY), 'resolveContextCollisions развёл наложившиеся друг на друга узлы');
+});
+
+test('MERGE_PROJECT_FROM_FILE: externalGateways файла оседают в pendingGateways с перемаппленным portId и сразу примиряются с ДРУГИМ проектом', () => {
+    // Реалистичный сценарий: где-то ТРЕТИЙ проект C уже хранит штекер (его
+    // контрагент когда-то был удалён/экспортирован без него) — сливаемый файл
+    // несёт вторую половину ТОГО ЖЕ linkId. Обе половины должны остаться в
+    // РАЗНЫХ проектах после слияния (A и C), иначе это уже не кросс-проектная
+    // связь, а обычная внутрипроектная — самой ADD_CROSS_PROJECT_LINK такое
+    // намеренно отклоняет (sourceProjectId !== targetProjectId).
+    let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'ADD_PROJECT' }); // делает C активным
+    const pidC = m.activeProjectId;
+    m = {
+        ...m,
+        projects: { ...m.projects, [pidC]: { ...m.projects[pidC], pendingGateways: {
+            'xlink-shared': { linkId: 'xlink-shared', portId: 'portC', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'importedPort', remoteProjectName: 'Ghost', remotePortName: 'ImportedPort' }
+        } } },
+        activeProjectId: pidA // сливаем В A, штекер-ожидание — на C
+    };
+
+    const fileData = {
+        nodes: { imp: { id: 'imp', name: 'Imp', position: { x: 900, y: 900 }, size: { w: 200, h: 100 }, parentId: 'root' } },
+        ports: { importedPort: { id: 'importedPort', nodeId: 'imp', name: 'ImportedPort' } },
+        links: {},
+        externalGateways: [
+            { linkId: 'xlink-shared', portId: 'importedPort', direction: 'in', remoteProjectId: 'unrelated', remotePortId: 'portC', remoteProjectName: 'X', remotePortName: 'Y' }
+        ]
+    };
+    m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
+
+    const link = m.crossProjectLinks['xlink-shared'];
+    assert.ok(link, 'штекер проекта C и штекер из файла, слитого в A, нашли друг друга по linkId');
+    assert.equal(link.sourceProjectId, pidC);
+    assert.equal(link.sourcePortId, 'portC');
+    assert.equal(link.targetProjectId, pidA, 'слитый порт остался в A — том проекте, куда шло слияние');
+    const importedPortNewId = link.targetPortId;
+    assert.notEqual(importedPortNewId, 'importedPort', 'portId в примирённой связи — уже ПЕРЕМАППЛЕННЫЙ id, а не исходный из файла');
+    assert.ok(m.projects[pidA].ports[importedPortNewId], 'перемаппленный порт реально существует в A');
+    assert.deepEqual(m.projects[pidA].pendingGateways, {});
+    assert.deepEqual(m.projects[pidC].pendingGateways, {});
+});
+
+test('MERGE_PROJECT_FROM_FILE: невалидный файл или отсутствие активного проекта — no-op', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const before = m;
+    const m1 = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: { nodes: {} } }); // нет ports/links
+    assert.equal(m1, before);
+
+    const noActive = { ...m, activeProjectId: null };
+    const m2 = multiReducer(noActive, { type: 'MERGE_PROJECT_FROM_FILE', payload: { nodes: {}, ports: {}, links: {} } });
+    assert.equal(m2, noActive);
+});
+
