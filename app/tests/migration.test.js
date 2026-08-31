@@ -209,6 +209,27 @@ test('REPARENT_ENTITY: positionsById задаёт позиции под курс
     assert.deepEqual(s1.nodes.lonely.position, { x: 33, y: 44 });
 });
 
+test('REPARENT_ENTITY: перенос НА УЗЕЛ достраивает окно новой глубины (регрессия — TRANSFER_NODE это делал, первая версия REPARENT_ENTITY молча забыла)', () => {
+    // Без этого дропнутая на узел сущность вычисляла бы корректный уровень
+    // (getLevel не зависит от levelWindows), но рендериться было бы негде —
+    // окна для её нового уровня физически нет до следующей полной перезагрузки.
+    const s0 = {
+        ...defaultState,
+        levelWindows: { 'lvlwin-root': { id: 'lvlwin-root', levelIndex: 0, position: { x: 0, y: 0 }, size: { w: 1000, h: 700 } } },
+        nodes: {
+            A: { id: 'A', name: 'A', parentId: 'root', position: { x: 0, y: 0 }, size: { w: 200, h: 100 } },
+            B: { id: 'B', name: 'B', parentId: 'root', position: { x: 300, y: 0 }, size: { w: 200, h: 100 } }
+        }
+    };
+    assert.equal(Object.values(s0.levelWindows).some(w => w.levelIndex === 1), false, 'изначально окна уровня 1 нет');
+
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'A', targetParentId: 'B' } });
+
+    assert.equal(s1.nodes.A.parentId, 'B');
+    const win1 = Object.values(s1.levelWindows).find(w => w.levelIndex === 1);
+    assert.ok(win1, 'REPARENT_ENTITY должна достроить окно уровня 1 для A, как это делал TRANSFER_NODE');
+});
+
 test('REPARENT_ENTITY: перенос НА УЗЕЛ (порождение подуровня) никогда не использует toRelativePosition — только findFreePosition', () => {
     // Ловушка: узел-цель может лежать на levelIndex, числено совпадающем с уровнем
     // переносимой сущности минус один (targetLevel = target.level+1 === entityLevel).

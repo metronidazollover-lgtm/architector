@@ -1243,9 +1243,16 @@ const HierarchyUtils = {
             const make = (valid, reason) => ({ kind: /** @type {'node'} */ ('node'), id: nodeTarget, valid, reason: reason || null });
             if (unsupportedMixedLayer) return make(false, 'layer-transfer-later');
             if (!dragDropMode) return make(false, 'dnd-off');
-            // Все переносимые уже прямые дети этой цели — переносить нечего
-            const allChildren = dragged.every(id => (nodes[id] || layers[id]).ownerId === nodeTarget
-                && HierarchyUtils.getOwnerGap(nodes[id] || layers[id]) === 1);
+            // Все переносимые уже прямые дети этой цели — переносить нечего.
+            // v13-сущность: parentId указывает на узел напрямую. Ещё не
+            // мигрированная v11-сущность: ownerId (с gap===1, «через поколение»
+            // не считается «уже там»).
+            const allChildren = dragged.every(id => {
+                const e = nodes[id] || layers[id];
+                return e.ownerId
+                    ? (e.ownerId === nodeTarget && HierarchyUtils.getOwnerGap(e) === 1)
+                    : e.parentId === nodeTarget;
+            });
             if (allChildren) return make(false, 'same-parent');
             return make(true, null);
         }

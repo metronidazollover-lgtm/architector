@@ -401,6 +401,16 @@ const migrateToV11 = (data) => {
  * Указатель на узел означает семантическое владение и переезжает в ownerId.
  * Нормализация живёт в одном месте: её проходят и тулбар, и ИИ-агент, и импорт,
  * поэтому ни один путь создания сущности не может завести «узел внутри узла».
+ *
+ * ⚠️ ПОКА НЕ переведено на чистый v13 (parentId напрямую на узел): REMOVE_LEVEL_WINDOW
+ * /CLEAR_LEVEL_WINDOW/REMOVE_ROOT_CANVAS ре-якорят «осиротевших» потомков ТОЛЬКО по
+ * цепочке ownerId — сущность с parentId, указывающим прямо на удаляемый узел, эти
+ * функции не находят вовсе и молча роняют её сиротой на уровень 0, теряя связь
+ * с дедом. Обнаружено и подтверждено эмпирически при подготовке Фазы 5 — перевод
+ * normalizeContainer/CREATE_NESTED_NODE на v13 требует СНАЧАЛА переписать
+ * ре-якорение во всех трёх функциях на понимание parentId-цепочек. Отдельная,
+ * достаточно большая и рискованная задача (премортем-хардкоженная логика) —
+ * не тот вид правки, который стоит спешно вносить внутри уже большой сессии.
  */
 const normalizeContainer = (entity, nodes) => {
     if (!entity) return entity;
@@ -2586,7 +2596,18 @@ const reducer = (state, action) => {
                 setNew(eid, stripLegacy({ ...getNew(eid), parentId: targetParentId, position }));
             });
 
-            return { ...state, ...historyState, nodes: newNodes, layers: newLayers };
+            // Перенос НА УЗЕЛ мог создать новую глубину (уровень, которого раньше
+            // не было) — окна достраиваются, как и в TRANSFER_NODE.
+            const normalized = normalizeLevelWindows(state.levelWindows, newNodes, newLayers, state.levelViews);
+
+            return {
+                ...state,
+                ...historyState,
+                nodes: newNodes,
+                layers: newLayers,
+                levelWindows: normalized.levelWindows,
+                levelViews: normalized.levelViews
+            };
         }
         case 'DELETE_SELECTED': {
             if (state.selectedIds.length === 0) return state;
@@ -2774,7 +2795,10 @@ const reducer = (state, action) => {
                 color,
                 shape,
                 type,
-                // v11: координатный контейнер — холст уровня, а владение выражается ownerId
+                // v11: координатный контейнер — холст уровня, а владение выражается ownerId.
+                // ⚠️ Пока НЕ переведено на v13 (parentId напрямую на узел) — см. комментарий
+                // над normalizeContainer: REMOVE_LEVEL_WINDOW/CLEAR_LEVEL_WINDOW/
+                // REMOVE_ROOT_CANVAS ре-якорят потомков только по ownerId-цепочке.
                 parentId: 'root',
                 ownerId: parentId,
                 position: pos,

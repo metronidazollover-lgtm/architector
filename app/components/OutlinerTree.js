@@ -80,8 +80,10 @@ function OutlinerTree({ onSelect }) {
 
     const H = window.HierarchyUtils;
 
-    // Модель v11: для узла потомки — это его подопечные с другого уровня (ownerId),
-    // для слоя и корня — обычные дети по координатному контейнеру (parentId).
+    // Для узла потомки — это его подопечные на следующем уровне: v13-сущности
+    // напрямую через parentId, ещё не мигрированные v11-сущности — через ownerId
+    // (обратная совместимость, см. docs/IDEAL_INTERACTIONS.md §1). Для слоя и
+    // корня — обычные дети по координатному контейнеру (parentId), без ownerId.
     const childrenOf = (parentId) => {
         const isNode = !!(state.nodes && state.nodes[parentId]);
         const nodePorts = isNode
@@ -90,7 +92,7 @@ function OutlinerTree({ onSelect }) {
                 : Object.values(state.ports || {}).filter(p => p && p.nodeId === parentId))
             : [];
         const belongs = (e) => isNode
-            ? e.ownerId === parentId
+            ? (e.ownerId ? e.ownerId === parentId : e.parentId === parentId)
             : ((e.parentId || 'root') === parentId && !e.ownerId);
         return [
             ...Object.values(state.layers || {}).filter(l => l && belongs(l)),
