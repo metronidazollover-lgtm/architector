@@ -2456,7 +2456,11 @@ const reducer = (state, action) => {
             // тестов (см. app/tests/migration.test.js) продолжает работать как есть.
             //
             // payload: { ids | id, targetParentId | newParentId, targetLevelIndex?,
-            //            mode?: 'deep' | 'shallow', position? }
+            //            mode?: 'deep' | 'shallow', position?, positionsById?, historySnapshot? }
+            // positionsById — целевые позиции по id (Drag&Drop с курсором под
+            // элементами при переносе НЕСКОЛЬКИХ сущностей); при одиночном переносе
+            // проще передать один `position`. historySnapshot — срез на mousedown,
+            // чтобы весь жест (движение + перенос) был одним шагом Undo.
             const p = action.payload || {};
             const H = getHierarchy();
             const G = getGeometry();
@@ -2568,7 +2572,9 @@ const reducer = (state, action) => {
                             : H.getEntityLevel(targetParentId, state.nodes, state.layers, state.levelWindows); // слой
 
                 let position;
-                if (validIds.length === 1 && p.position) {
+                if (p.positionsById && p.positionsById[eid]) {
+                    position = p.positionsById[eid];
+                } else if (validIds.length === 1 && p.position) {
                     position = p.position;
                 } else if (!targetIsNode && targetLevel === entityLevel) {
                     const abs = H.getLocalPosition(eid, state.nodes, state.layers);

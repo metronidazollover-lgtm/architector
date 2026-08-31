@@ -195,6 +195,20 @@ test('REPARENT_ENTITY: явный position (одиночный drop) перео�
     assert.deepEqual(s1.nodes.lonely.position, { x: 42, y: 24 });
 });
 
+test('REPARENT_ENTITY: positionsById задаёт позиции под курсором при переносе НЕСКОЛЬКИХ сущностей', () => {
+    const s0 = v13TreeState();
+    const s1 = reducer(s0, {
+        type: 'REPARENT_ENTITY',
+        payload: {
+            ids: ['root1', 'lonely'],
+            targetParentId: 'L',
+            positionsById: { root1: { x: 11, y: 22 }, lonely: { x: 33, y: 44 } }
+        }
+    });
+    assert.deepEqual(s1.nodes.root1.position, { x: 11, y: 22 });
+    assert.deepEqual(s1.nodes.lonely.position, { x: 33, y: 44 });
+});
+
 test('REPARENT_ENTITY: перенос НА УЗЕЛ (порождение подуровня) никогда не использует toRelativePosition — только findFreePosition', () => {
     // Ловушка: узел-цель может лежать на levelIndex, числено совпадающем с уровнем
     // переносимой сущности минус один (targetLevel = target.level+1 === entityLevel).
