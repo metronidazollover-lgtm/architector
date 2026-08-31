@@ -2541,26 +2541,32 @@ const reducer = (state, action) => {
 
                 // Позиция самой переносимой сущности:
                 //  - явная (drop под курсором, только при одиночном переносе);
-                //  - целевой контейнер лежит на ТОМ ЖЕ уровне (одно окно на levelIndex,
-                //    инвариант normalizeLevelWindows — слой на любом уровне, 'root' по
-                //    определению = корень СВОЕГО текущего окна) — мировая позиция
-                //    сохраняется точно (toRelativePosition);
-                //  - иначе граница окна пересекается (другая камера, другое
-                //    пространство), «мировая» позиция бессмысленна — ищем свободное
-                //    место рядом с исходными локальными координатами.
+                //  - целевой контейнер — УЗЕЛ: его СОБСТВЕННАЯ position живёт в системе
+                //    координат ЕГО родительского окна, а не имеет никакого отношения к
+                //    происхождению координат его подуровня (общее окно всех сущностей
+                //    этого levelIndex) — вычитать одно из другого бессмысленно ВСЕГДА,
+                //    даже если numeric-уровни совпали. Только findFreePosition;
+                //  - иначе (слой или 'root'): если целевой контейнер лежит на ТОМ ЖЕ
+                //    уровне (одно окно на levelIndex, инвариант normalizeLevelWindows —
+                //    слой на любом уровне, 'root' по определению = корень СВОЕГО
+                //    текущего окна) — мировая позиция сохраняется точно
+                //    (toRelativePosition); иначе граница окна пересекается (другая
+                //    камера, другое пространство) — ищем свободное место рядом
+                //    с исходными локальными координатами.
                 const entityLevel = H.getEntityLevel(eid, state.nodes, state.layers, state.levelWindows);
-                const targetLevel = targetParentId === 'root'
-                    ? entityLevel
-                    : (state.levelWindows && state.levelWindows[targetParentId])
-                        ? state.levelWindows[targetParentId].levelIndex
-                        : isNodeId(targetParentId)
-                            ? H.getEntityLevel(targetParentId, state.nodes, state.layers, state.levelWindows) + 1
+                const targetIsNode = isNodeId(targetParentId);
+                const targetLevel = targetIsNode
+                    ? -1 // недостижимо: узел-цель ниже никогда не сравнивается с entityLevel
+                    : targetParentId === 'root'
+                        ? entityLevel
+                        : (state.levelWindows && state.levelWindows[targetParentId])
+                            ? state.levelWindows[targetParentId].levelIndex
                             : H.getEntityLevel(targetParentId, state.nodes, state.layers, state.levelWindows); // слой
 
                 let position;
                 if (validIds.length === 1 && p.position) {
                     position = p.position;
-                } else if (targetLevel === entityLevel) {
+                } else if (!targetIsNode && targetLevel === entityLevel) {
                     const abs = H.getLocalPosition(eid, state.nodes, state.layers);
                     position = H.toRelativePosition(abs, targetParentId, state.nodes, state.layers);
                 } else {

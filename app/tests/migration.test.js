@@ -195,6 +195,34 @@ test('REPARENT_ENTITY: явный position (одиночный drop) перео�
     assert.deepEqual(s1.nodes.lonely.position, { x: 42, y: 24 });
 });
 
+test('REPARENT_ENTITY: перенос НА УЗЕЛ (порождение подуровня) никогда не использует toRelativePosition — только findFreePosition', () => {
+    // Ловушка: узел-цель может лежать на levelIndex, числено совпадающем с уровнем
+    // переносимой сущности минус один (targetLevel = target.level+1 === entityLevel).
+    // Раньше это ошибочно трактовалось как «то же окно» — но position узла-цели
+    // выражена в координатах ЕГО РОДИТЕЛЬСКОГО окна, а не имеет отношения к
+    // происхождению координат его СОБСТВЕННОГО подуровня. toRelativePosition тут
+    // всегда даёт мусор — только findFreePosition.
+    const s0 = v13TreeState();
+    // child1 (уровень 1) переносим на root1 (уровень 0): root1.level+1 === 1 === entityLevel(child1)
+    // — то самое численное совпадение, которое раньше подделывалось под «то же окно».
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'child1', targetParentId: 'root1' } });
+    assert.equal(s1.nodes.child1.parentId, 'root1');
+    assert.equal(HierarchyUtils.getEntityLevel('child1', s1.nodes, s1.layers, s1.levelWindows), 1);
+    // НЕ toRelativePosition(child1.position={10,10}, root1.position={0,0}) = {10,10} по
+    // совпадению — а findFreePosition рядом с исходной позицией {10,10}, что для
+    // пустого целевого контейнера совпадает {10,10}. Различие проявится там, где
+    // toRelativePosition дал бы явно иное число — проверяем формулой напрямую:
+    // root1.position={0,0}, так что оба пути численно совпали бы здесь. Берём
+    // сценарий, где они расходятся: root1 смещён.
+    const s0b = v13TreeState();
+    s0b.nodes.root1 = { ...s0b.nodes.root1, position: { x: 900, y: 900 } };
+    const s2 = reducer(s0b, { type: 'REPARENT_ENTITY', payload: { id: 'child1', targetParentId: 'root1' } });
+    // toRelativePosition дал бы {10-900, 10-900} = {-890,-890} — грубо неверно.
+    // findFreePosition игнорирует root1.position и остаётся рядом с {10,10}.
+    assert.ok(s2.nodes.child1.position.x > -100 && s2.nodes.child1.position.y > -100,
+        `findFreePosition не должен вычитать смещённую позицию узла-цели: получено ${JSON.stringify(s2.nodes.child1.position)}`);
+});
+
 test('REPARENT_ENTITY: вложение в любой слой валидно (нет проверки «слой чужого уровня») — цикл всё ещё отклоняется', () => {
     const s0 = v13TreeState();
     // lonely (уровень 0) в L (уровень 0, но проверка на РАВЕНСТВО уровней в v13 не нужна вовсе)
