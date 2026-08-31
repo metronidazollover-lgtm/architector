@@ -230,17 +230,18 @@ const HierarchyUtils = {
      * @param {?Object<string, LayerEntity>} layers
      * @returns {number}
      */
-    getLevel: (id, nodes, layers = null) => {
+    getLevel: (id, nodes, layers = null, levelWindows = null) => {
         if (!id || id === 'root') return 0;
         const safeNodes = nodes || EMPTY_DICT;
         const safeLayers = layers || EMPTY_DICT;
+        const safeWindows = levelWindows || EMPTY_DICT;
 
         let generation = _levelCache && _levelCache.get(safeNodes);
-        if (generation && generation.layersRef === safeLayers) {
+        if (generation && generation.layersRef === safeLayers && generation.windowsRef === safeWindows) {
             const hit = generation.map.get(id);
             if (hit !== undefined) return hit;
         } else if (_levelCache && nodes && typeof nodes === 'object') {
-            generation = { layersRef: safeLayers, map: new Map() };
+            generation = { layersRef: safeLayers, windowsRef: safeWindows, map: new Map() };
             _levelCache.set(safeNodes, generation);
         }
 
@@ -252,13 +253,24 @@ const HierarchyUtils = {
             visited.add(current.id);
             const parentId = current.parentId;
 
+            // v13: parentId указывает прямо на id окна уровня — сирота-якорь,
+            // явно привязанный к этому уровню (замена удалённого homeLevel,
+            // см. docs/IDEAL_INTERACTIONS.md §1). Терминальный случай: уровень
+            // окна известен напрямую, дальше подниматься некуда.
+            if (parentId && parentId !== 'root' && safeWindows[parentId]) {
+                const res = level + safeWindows[parentId].levelIndex;
+                if (generation) generation.map.set(id, res);
+                return res;
+            }
+
             // Внутри слоя уровень наследуется от координатного контейнера
             if (parentId && parentId !== 'root' && safeLayers[parentId]) {
                 current = safeLayers[parentId];
                 continue;
             }
 
-            // ЛЕГАСИ до миграции: parentId указывает на узел другого уровня
+            // v13 (родство напрямую через parentId, ownerId уже нет) ИЛИ легаси
+            // до миграции v11: parentId указывает на узел другого уровня.
             if (parentId && parentId !== 'root' && safeNodes[parentId] && !current.ownerId) {
                 level++;
                 current = safeNodes[parentId];
@@ -267,10 +279,10 @@ const HierarchyUtils = {
 
             const ownerId = current.ownerId;
             if (!ownerId) {
-                // ЯКОРЬ НЕЗАВИСИМОЙ ВЕТКИ: сирота (без владельца) может нести
+                // ЯКОРЬ НЕЗАВИСИМОЙ ВЕТКИ (v11): сирота (без владельца) может нести
                 // homeLevel — «домашний уровень». Вся его ветка живёт от этого
                 // якоря: сам сирота на homeLevel, дети на homeLevel+1 и глубже.
-                // Поля нет (старые проекты) — 0, прежнее поведение.
+                // Поля нет (старые проекты, и все v13-сущности) — 0, прежнее поведение.
                 const res = level + (current.homeLevel || 0);
                 if (generation) generation.map.set(id, res);
                 return res;
@@ -470,7 +482,7 @@ const HierarchyUtils = {
      * @param {?Object<string, LayerEntity>} [layers]
      * @returns {number}
      */
-    getEntityLevel: (id, nodes, layers = null) => HierarchyUtils.getLevel(id, nodes, layers),
+    getEntityLevel: (id, nodes, layers = null, levelWindows = null) => HierarchyUtils.getLevel(id, nodes, layers, levelWindows),
 
     /**
      * Максимальный уровень глубины сущностей в текущем проекте.
@@ -623,6 +635,44 @@ const HierarchyUtils = {
                 // и якорятся по месту (homeLevel), их поддеревья не меняются.
                 return { ok: true, reason: 'descend' };
             }
+        }
+        return { ok: true, reason: null };
+    },
+
+    /**
+     * v13: может ли entityId получить `parentId = targetParentId` (готовит
+     * замену `canTransferToLayer` для REPARENT_ENTITY, Фазы 4–5 плана
+     * `PLAN_V12_CLEAN_HIERARCHY_AND_INTERACTIONS.md` — см.
+     * docs/IDEAL_INTERACTIONS.md §1.2 и §2). `canTransferToLayer` пока не
+     * удаляется: её всё ещё вызывают живые места диспатча `TRANSFER_NODE`
+     * (`ContextActionBar.js`, `OutlinerTree.js`) — снос отложен до перевода
+     * этих мест на `REPARENT_ENTITY` (DOCS_UPDATE_CHECKLIST.md, «После Фазы 5»).
+     *
+     * В отличие от v11-версии здесь нет проверки «слой чужого уровня»: при
+     * едином `parentId` вторая, конфликтующая система координат (`ownerId`)
+     * просто не существует, поэтому вложение в любой контейнер валидно, пока
+     * не образует цикл.
+     *
+     * @param {string} entityId
+     * @param {string} targetParentId `'root'`, id слоя, id узла или id окна уровня
+     * @param {Object<string, NodeEntity>} nodes
+     * @param {?Object<string, LayerEntity>} [layers]
+     * @param {?Object<string, Object>} [levelWindows]
+     * @returns {{ ok: boolean, reason: ?string }}
+     */
+    canReparentTo: (entityId, targetParentId, nodes, layers = null, levelWindows = null) => {
+        const safeNodes = nodes || {};
+        const safeLayers = layers || {};
+        const safeWindows = levelWindows || {};
+        const entity = safeNodes[entityId] || safeLayers[entityId];
+        if (!entity) return { ok: false, reason: 'not-found' };
+        if (entityId === targetParentId) return { ok: false, reason: 'self' };
+        if (targetParentId !== 'root' && !safeLayers[targetParentId]
+            && !safeNodes[targetParentId] && !safeWindows[targetParentId]) {
+            return { ok: false, reason: 'not-found' };
+        }
+        if (HierarchyUtils.isDescendantOf(targetParentId, entityId, safeNodes, safeLayers)) {
+            return { ok: false, reason: 'cycle' };
         }
         return { ok: true, reason: null };
     },

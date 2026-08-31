@@ -709,3 +709,66 @@ test('hasContainerAncestorIn: защита от циклических parentId'
     };
     assert.equal(HierarchyUtils.hasContainerAncestorIn('L1', ['X'], {}, layers), false, 'не зацикливается, корректно возвращает false для отсутствующей цели');
 });
+
+// ---------------------------------------------------------------------------
+// v13 (Фаза 3, готовится заранее — см. docs/IDEAL_INTERACTIONS.md §1):
+// getLevel/getEntityLevel понимают parentId, указывающий на id окна уровня
+// (сирота-якорь без ownerId/homeLevel), и новый canReparentTo.
+// ---------------------------------------------------------------------------
+
+test('getLevel/getEntityLevel: parentId = id окна уровня — сирота-якорь на v13, уровень читается из окна напрямую', () => {
+    const levelWindows = {
+        w0: { id: 'w0', levelIndex: 0 },
+        w2: { id: 'w2', levelIndex: 2 }
+    };
+    const v13Nodes = {
+        anchor2: { id: 'anchor2', name: 'Anchor2', parentId: 'w2' },
+        childOfAnchor: { id: 'childOfAnchor', name: 'ChildOfAnchor', parentId: 'anchor2' }
+    };
+    assert.equal(HierarchyUtils.getLevel('anchor2', v13Nodes, {}, levelWindows), 2);
+    assert.equal(HierarchyUtils.getEntityLevel('anchor2', v13Nodes, {}, levelWindows), 2);
+    // Дочерний узел якоря — на уровень ниже, как обычный узел-родитель
+    assert.equal(HierarchyUtils.getLevel('childOfAnchor', v13Nodes, {}, levelWindows), 3);
+});
+
+test('getLevel: без levelWindows (старые вызовы) поведение не меняется — parentId, указывающий на неизвестный id, трактуется как раньше', () => {
+    const v13Nodes = { anchor2: { id: 'anchor2', name: 'Anchor2', parentId: 'w2' } };
+    // Нет ни ownerId, ни homeLevel, ни windows — падает в ветку «истинный сирота» = 0
+    assert.equal(HierarchyUtils.getLevel('anchor2', v13Nodes, {}), 0);
+});
+
+test('getLevel: v13-цепочка узел-в-узле (parentId напрямую на node, ownerId отсутствует) считает уровень так же, как обычное родство', () => {
+    const v13Nodes = {
+        root1: { id: 'root1', name: 'Root1', parentId: 'root' },
+        child1: { id: 'child1', name: 'Child1', parentId: 'root1' },
+        grandchild1: { id: 'grandchild1', name: 'Grandchild1', parentId: 'child1' }
+    };
+    assert.equal(HierarchyUtils.getLevel('root1', v13Nodes, {}), 0);
+    assert.equal(HierarchyUtils.getLevel('child1', v13Nodes, {}), 1);
+    assert.equal(HierarchyUtils.getLevel('grandchild1', v13Nodes, {}), 2);
+});
+
+test('canReparentTo: разрешает валидное вложение и запрещает self/цикл', () => {
+    const v13Nodes = {
+        a: { id: 'a', name: 'A', parentId: 'root' },
+        b: { id: 'b', name: 'B', parentId: 'a' }
+    };
+    const layersDict = { L: { id: 'L', name: 'L', parentId: 'root' } };
+
+    assert.deepEqual(HierarchyUtils.canReparentTo('a', 'L', v13Nodes, layersDict), { ok: true, reason: null });
+    assert.deepEqual(HierarchyUtils.canReparentTo('a', 'a', v13Nodes, layersDict), { ok: false, reason: 'self' });
+    // a -> b — b уже потомок a по цепочке parentId, вложение образует цикл
+    assert.deepEqual(HierarchyUtils.canReparentTo('a', 'b', v13Nodes, layersDict), { ok: false, reason: 'cycle' });
+});
+
+test('canReparentTo: принимает id окна уровня как валидную цель (якорение сироты)', () => {
+    const v13Nodes = { a: { id: 'a', name: 'A', parentId: 'root' } };
+    const levelWindows = { w2: { id: 'w2', levelIndex: 2 } };
+    assert.deepEqual(HierarchyUtils.canReparentTo('a', 'w2', v13Nodes, {}, levelWindows), { ok: true, reason: null });
+});
+
+test('canReparentTo: неизвестная цель отклоняется', () => {
+    const v13Nodes = { a: { id: 'a', name: 'A', parentId: 'root' } };
+    assert.deepEqual(HierarchyUtils.canReparentTo('a', 'ghost', v13Nodes, {}), { ok: false, reason: 'not-found' });
+    assert.deepEqual(HierarchyUtils.canReparentTo('ghost', 'root', v13Nodes, {}), { ok: false, reason: 'not-found' });
+});
