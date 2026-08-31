@@ -560,19 +560,55 @@ test('REMOVE_LEVEL_WINDOW: v13-узел без деда становится с�
 });
 
 test('REMOVE_LEVEL_WINDOW: смешанная цепочка — v13-узел (parentId) остаётся живым владельцем для v11-внука (ownerId)', () => {
-    // root1 --(REPARENT_ENTITY, parentId)--> B --(ownerId, обычное создание)--> C
+    // root1 --(REPARENT_ENTITY, parentId)--> B --(ownerId, ЕЩЁ НЕ мигрированные
+    // старые данные — CREATE_NESTED_NODE теперь тоже пишет чистый v13, ownerId
+    // сюда попадает только из старого сохранения)--> C
     let s = { ...defaultState };
     s = reducer(s, { type: 'ADD_NODE', payload: { id: 'root1', name: 'Root1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
     s = reducer(s, { type: 'ADD_NODE', payload: { id: 'B', name: 'B', position: { x: 300, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
     s = reducer(s, { type: 'REPARENT_ENTITY', payload: { id: 'B', targetParentId: 'root1' } });
-    s = reducer(s, { type: 'CREATE_NESTED_NODE', payload: { parentId: 'B', id: 'C', name: 'C' } });
-    assert.equal(s.nodes.C.ownerId, 'B', 'C создан обычным путём — v11 ownerId-цепочка');
+    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'C', name: 'C', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'B' } });
+    assert.equal(s.nodes.C.ownerId, 'B', 'C смоделирован как ещё не мигрированная v11-сущность — v11 ownerId-цепочка');
     assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 2);
 
     s = reducer(s, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 1 } });
 
     assert.equal(s.nodes.C.ownerId, 'root1', 'ownerId-внук пере-якорился на деда, даже когда мёртвый родитель сам был v13-узлом');
     assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 1);
+});
+
+test('CREATE_NESTED_NODE (v13): новый узел получает parentId напрямую на родителя, без ownerId', () => {
+    let s = { ...defaultState };
+    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'root1', name: 'Root1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
+    s = reducer(s, { type: 'CREATE_NESTED_NODE', payload: { parentId: 'root1', id: 'child1', name: 'Child1' } });
+
+    assert.equal(s.nodes.child1.parentId, 'root1');
+    assert.equal(s.nodes.child1.ownerId, undefined);
+    assert.equal(H.getEntityLevel('child1', s.nodes, s.layers, s.levelWindows), 1);
+});
+
+test('CREATE_NESTED_NODE (v13): создание глубокой цепочки автоматически достраивает окна всех уровней', () => {
+    let s = { ...defaultState };
+    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'root1', name: 'Root1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
+    s = reducer(s, { type: 'CREATE_NESTED_NODE', payload: { parentId: 'root1', id: 'l1', name: 'L1' } });
+    s = reducer(s, { type: 'CREATE_NESTED_NODE', payload: { parentId: 'l1', id: 'l2', name: 'L2' } });
+
+    assert.equal(H.getEntityLevel('l2', s.nodes, s.layers, s.levelWindows), 2);
+    assert.ok(Object.values(s.levelWindows).some(w => w.levelIndex === 2), 'окно уровня 2 создано автоматически');
+});
+
+test('DELETE_SELECTED (v13): удаление узла каскадно удаляет всю v13-ветку потомков', () => {
+    let s = { ...defaultState };
+    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'root1', name: 'Root1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
+    s = reducer(s, { type: 'CREATE_NESTED_NODE', payload: { parentId: 'root1', id: 'child1', name: 'Child1' } });
+    s = reducer(s, { type: 'CREATE_NESTED_NODE', payload: { parentId: 'child1', id: 'grandchild1', name: 'Grandchild1' } });
+    s = { ...s, selectedIds: ['root1'] };
+
+    s = reducer(s, { type: 'DELETE_SELECTED' });
+
+    assert.equal(s.nodes.root1, undefined);
+    assert.equal(s.nodes.child1, undefined);
+    assert.equal(s.nodes.grandchild1, undefined, 'v13-внук каскадно удалён вместе с веткой (Deep-семантика удаления по умолчанию)');
 });
 
 test('REMOVE_LEVEL_WINDOW: v13-узел с растянутой (>1) дистанцией до деда не может выразить это прямой ссылкой — явно якорится, а не съезжает на неверный уровень', () => {

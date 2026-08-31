@@ -397,28 +397,19 @@ const migrateToV11 = (data) => {
 };
 
 /**
- * Инвариант модели v11: parentId — это КОНТЕЙНЕР ('root' или слой) и никогда не узел.
- * Указатель на узел означает семантическое владение и переезжает в ownerId.
- * Нормализация живёт в одном месте: её проходят и тулбар, и ИИ-агент, и импорт,
- * поэтому ни один путь создания сущности не может завести «узел внутри узла».
+ * v13 (docs/IDEAL_INTERACTIONS.md §1): parentId — единственный источник родства.
+ * `'root'`, id слоя И id узла (порождение подуровня) — все три одинаково валидны
+ * напрямую, без расщепления на ownerId. Нормализация живёт в одном месте: её
+ * проходят и тулбар, и ИИ-агент, и импорт, поэтому ни один путь создания
+ * сущности не заводит устаревшее поле ownerId у новых сущностей.
  *
- * ⚠️ ПОКА НЕ переведено на чистый v13 (parentId напрямую на узел): REMOVE_LEVEL_WINDOW
- * /CLEAR_LEVEL_WINDOW/REMOVE_ROOT_CANVAS ре-якорят «осиротевших» потомков ТОЛЬКО по
- * цепочке ownerId — сущность с parentId, указывающим прямо на удаляемый узел, эти
- * функции не находят вовсе и молча роняют её сиротой на уровень 0, теряя связь
- * с дедом. Обнаружено и подтверждено эмпирически при подготовке Фазы 5 — перевод
- * normalizeContainer/CREATE_NESTED_NODE на v13 требует СНАЧАЛА переписать
- * ре-якорение во всех трёх функциях на понимание parentId-цепочек. Отдельная,
- * достаточно большая и рискованная задача (премортем-хардкоженная логика) —
- * не тот вид правки, который стоит спешно вносить внутри уже большой сессии.
+ * Безопасно с REMOVE_LEVEL_WINDOW/CLEAR_LEVEL_WINDOW/REMOVE_ROOT_CANVAS —
+ * их ре-якорение потомков понимает и ownerId (v11), и parentId-на-узел (v13)
+ * одинаково через structuralParentOf (см. коммит, переписавший обе функции).
  */
-const normalizeContainer = (entity, nodes) => {
+const normalizeContainer = (entity) => {
     if (!entity) return entity;
-    const pid = entity.parentId;
-    if (pid && pid !== 'root' && nodes && nodes[pid]) {
-        return { ...entity, parentId: 'root', ownerId: pid };
-    }
-    return { ...entity, parentId: pid || 'root', ownerId: entity.ownerId || null };
+    return { ...entity, parentId: entity.parentId || 'root' };
 };
 
 /**
@@ -1357,7 +1348,7 @@ const reducer = (state, action) => {
             const id = action.payload.id || 'layer-' + Date.now() + Math.floor(Math.random() * 1000);
             const historyState = saveHistory(state, `Добавлен слой: ${action.payload.name}`);
             const parentId = action.payload.parentId !== undefined ? action.payload.parentId : 'root';
-            const newLayers = { ...state.layers, [id]: normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true }, state.nodes) };
+            const newLayers = { ...state.layers, [id]: normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true }) };
             // Вложение подслоя (parentId — другой слой, из FAB «Добавить слой
             // внутрь этого слоя»): цепочка родителей подрастает под содержимое.
             const H = getHierarchy();
@@ -1367,10 +1358,14 @@ const reducer = (state, action) => {
                     if (newLayers[lid]) newLayers[lid] = { ...newLayers[lid], size };
                 });
             }
+            // parentId на узел (v13) мог создать новую глубину — окна достраиваются
+            const normalizedAddLayer = normalizeLevelWindows(state.levelWindows, state.nodes, newLayers, state.levelViews);
             return {
                 ...state,
                 ...historyState,
                 layers: newLayers,
+                levelWindows: normalizedAddLayer.levelWindows,
+                levelViews: normalizedAddLayer.levelViews,
                 selectedIds: [id]
             };
         }
@@ -1437,7 +1432,7 @@ const reducer = (state, action) => {
             const historyState = saveHistory(state, `Добавлен узел: ${action.payload.name}`);
             const parentId = action.payload.parentId !== undefined ? action.payload.parentId : 'root';
             
-            const nodeData = normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true }, state.nodes);
+            const nodeData = normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true });
             if (nodeData.type !== 'ai-agent') {
                 nodeData.size = calculateNodeSize(nodeData.name, nodeData.content, nodeData.mediaUrl, nodeData.mediaHeight, nodeData.fontSize, nodeData.fontFamily);
             } else if (!nodeData.size) {
@@ -1462,11 +1457,15 @@ const reducer = (state, action) => {
                 }
             }
 
+            // parentId на узел (v13) мог создать новую глубину — окна достраиваются
+            const normalizedAddNode = normalizeLevelWindows(state.levelWindows, updatedNodes, updatedLayers, state.levelViews);
             return {
                 ...state,
                 ...historyState,
                 nodes: updatedNodes,
                 layers: updatedLayers,
+                levelWindows: normalizedAddNode.levelWindows,
+                levelViews: normalizedAddNode.levelViews,
                 selectedIds: [id]
             };
         }
@@ -2804,7 +2803,7 @@ const reducer = (state, action) => {
             if (!parentId) return state;
 
             const H = getHierarchy();
-            const parentLevel = H ? H.getEntityLevel(parentId, state.nodes, state.layers) : 0;
+            const parentLevel = H ? H.getEntityLevel(parentId, state.nodes, state.layers, state.levelWindows) : 0;
             const targetLevel = parentLevel + 1;
 
             const historyState = saveHistory(state, `Создан вложенный узел на уровне ${targetLevel}`);
@@ -2843,12 +2842,9 @@ const reducer = (state, action) => {
                 color,
                 shape,
                 type,
-                // v11: координатный контейнер — холст уровня, а владение выражается ownerId.
-                // ⚠️ Пока НЕ переведено на v13 (parentId напрямую на узел) — см. комментарий
-                // над normalizeContainer: REMOVE_LEVEL_WINDOW/CLEAR_LEVEL_WINDOW/
-                // REMOVE_ROOT_CANVAS ре-якорят потомков только по ownerId-цепочке.
-                parentId: 'root',
-                ownerId: parentId,
+                // v13: parentId указывает прямо на узел-родителя — единственное
+                // поле родства, ownerId не заводится (docs/IDEAL_INTERACTIONS.md §1)
+                parentId,
                 position: pos,
                 size: newNodeSize,
                 snapToGrid: true,
@@ -3046,7 +3042,7 @@ const reducer = (state, action) => {
             if (!parentId || !state.nodes[parentId]) return state;
 
             const H = getHierarchy();
-            const parentLevel = H ? H.getEntityLevel(parentId, state.nodes, state.layers) : 0;
+            const parentLevel = H ? H.getEntityLevel(parentId, state.nodes, state.layers, state.levelWindows) : 0;
             const targetLevel = parentLevel + 1;
 
             const targetWin = (H && H.getWindowOfLevel(targetLevel, state.levelWindows)) || {
@@ -3056,9 +3052,12 @@ const reducer = (state, action) => {
 
             // Дети живут в другом окне и в другом масштабе, поэтому габарит
             // считается в МИРОВЫХ координатах, а не в системе координат родителя.
+            // Прямой ребёнок — ownerId (v11, ещё не мигрированные сущности) ИЛИ
+            // parentId напрямую на узел (v13, через REPARENT_ENTITY).
             let bbox = null;
             Object.values(state.nodes || {}).forEach(n => {
-                if (!n || n.ownerId !== parentId) return;
+                const isChild = n && (n.ownerId ? n.ownerId === parentId : n.parentId === parentId);
+                if (!isChild) return;
                 const b = H ? H.getNodeWorldBounds(n.id, state) : null;
                 if (!b) return;
                 if (!bbox) bbox = { minX: b.x, minY: b.y, maxX: b.x + b.w, maxY: b.y + b.h };
