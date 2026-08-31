@@ -607,23 +607,13 @@ function ContextActionBar() {
         };
 
         const handleMassLayerChange = (parentId) => {
+            // v13: REPARENT_ENTITY принимает 'root' точно так же, как id слоя —
+            // единая проверка «только верхние» + позиция (то же окно — мировая
+            // позиция сохраняется; смена уровня — findFreePosition), больше не
+            // нужно вручную дублировать это через MASS_UPDATE.
             const nodeIds = selectedItems.filter(item => item.type === 'Узел').map(i => i.data.id);
-            const targetLayer = layers[parentId];
             if (nodeIds.length === 0) { setActivePopover(null); return; }
-
-            if (targetLayer) {
-                // Единая семантика в TRANSFER_NODE: «только верхние» из выделения,
-                // свой уровень — группировка, чужой — перенос с усыновлением веткой слоя
-                dispatch({ type: 'TRANSFER_NODE', payload: { ids: nodeIds, targetLayerId: parentId } });
-            } else {
-                const H = window.HierarchyUtils;
-                const updatesById = {};
-                nodeIds.forEach(id => {
-                    const abs = H.getLocalPosition(id, nodes, layers);
-                    updatesById[id] = { parentId, position: H.toRelativePosition(abs, parentId, nodes, layers) };
-                });
-                dispatch({ type: 'MASS_UPDATE', payload: { ids: nodeIds, updatesById } });
-            }
+            dispatch({ type: 'REPARENT_ENTITY', payload: { ids: nodeIds, targetParentId: parentId || 'root' } });
             setActivePopover(null);
         };
 
@@ -771,29 +761,20 @@ function ContextActionBar() {
                                 <span className="truncate flex-1">Главный холст (Root)</span>
                             </button>
                             {layers && Object.values(layers).map((l) => {
+                                // v13: вложение в любой слой валидно по дизайну (уровень наследуется
+                                // от слоя, docs/IDEAL_INTERACTIONS.md §2) — нет больше отдельного
+                                // «спуска в собственную ветку»: если цель окажется внутри ветки
+                                // переносимого узла, REPARENT_ENTITY сама отклонит этот id как цикл
+                                // (canReparentTo), молча пропустив его в батче. Здесь остаётся только
+                                // предохранитель тумблера DnD для межуровневых переносов.
                                 const H = window.HierarchyUtils;
-                                const layerLvl = (H && H.getEntityLevel) ? H.getEntityLevel(l.id, nodes, layers) : 0;
+                                const layerLvl = (H && H.getEntityLevel) ? H.getEntityLevel(l.id, nodes, layers, state.levelWindows) : 0;
                                 const selNodeIds = selectedItems.filter(i => i.type === 'Узел').map(i => i.data.id);
                                 // «Только верхние»: потомки других выделенных едут внутри предков
                                 const topNodeIds = selNodeIds.filter(nid => !selNodeIds.some(other =>
-                                    other !== nid && H && H.hasAncestorIn && H.hasAncestorIn(nid, [other], nodes, layers)));
+                                    other !== nid && H && H.isDescendantOf && H.isDescendantOf(nid, other, nodes, layers)));
                                 const hasCross = topNodeIds.some(nid =>
-                                    H && H.getEntityLevel && H.getEntityLevel(nid, nodes, layers) !== layerLvl);
-                                // Разрыв связей хотя бы у одного из переносимых: спуск (отвязка детей)
-                                // или кросс-перенос узла, у которого есть родитель
-                                const tieBreakers = topNodeIds.filter(nid => {
-                                    if (!H || !H.canTransferToLayer) return false;
-                                    const v = H.canTransferToLayer(nid, l.id, nodes, layers);
-                                    if (v.reason === 'descend') {
-                                        return [...Object.values(nodes), ...Object.values(layers)].some(e => e && e.ownerId === nid);
-                                    }
-                                    const crossHere = H.getEntityLevel(nid, nodes, layers) !== layerLvl;
-                                    return crossHere && !!nodes[nid].ownerId;
-                                });
-                                const breaksTies = tieBreakers.length > 0;
-                                const warn = breaksTies
-                                    ? `⚠ Разорвёт родственные связи у ${tieBreakers.length} из ${topNodeIds.length} переносимых узлов. `
-                                    : '';
+                                    H && H.getEntityLevel && H.getEntityLevel(nid, nodes, layers, state.levelWindows) !== layerLvl);
                                 // Межуровневый перенос доступен только в режиме Drag&Drop
                                 const dndLocked = hasCross && !(state.ui && state.ui.dragDropMode);
                                 return (
@@ -802,11 +783,11 @@ function ContextActionBar() {
                                     className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-xs transition-colors ${
                                         dndLocked
                                             ? 'text-gray-600 opacity-50 cursor-not-allowed'
-                                            : `text-gray-300 hover:bg-white/10 ${breaksTies ? 'border border-red-500/70 hover:border-red-400' : ''}`
+                                            : 'text-gray-300 hover:bg-white/10'
                                     }`}
                                     title={dndLocked
                                         ? `Слой на Уровне ${layerLvl}. Включите режим Drag&Drop (кнопка в панели проекта), чтобы переносить между уровнями`
-                                        : (hasCross ? warn + `Слой уровня ${layerLvl}: узлы других уровней переедут на него (переносятся только верхние из выделения)` : (warn || undefined))}
+                                        : (hasCross ? `Слой уровня ${layerLvl}: узлы других уровней переедут на него (переносятся только верхние из выделения)` : undefined)}
                                     onClick={() => { if (!dndLocked) handleMassLayerChange(l.id); }}
                                 >
                                     <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: l.color || '#0284c7' }}></div>
@@ -1458,31 +1439,22 @@ function ContextActionBar() {
                                 <div className="icon-home text-gray-400 text-xs"></div>
                                 <span className="truncate flex-1">Главный холст (Root)</span>
                             </button>
-                            {/* Слои своего уровня — обычная группировка (parentId).
-                                Слои ЧУЖИХ уровней помечены бейджем L№ и работают через
-                                TRANSFER_NODE: узел меняет уровень, его усыновляет ветка
-                                слоя, поддерево и связи переезжают автоматически. */}
+                            {/* Слои своего уровня — обычная группировка (parentId, через
+                                handleLayerChange — сохраняет getSmartPlacement UX).
+                                Слои ЧУЖИХ уровней помечены бейджем L№ и переносятся через
+                                REPARENT_ENTITY: v13 не различает «свой»/«чужой» уровень
+                                слоя структурно — уровень узла просто становится уровнем
+                                слоя (docs/IDEAL_INTERACTIONS.md §2). Единственная реальная
+                                проверка — canReparentTo (self/цикл): цель внутри собственной
+                                ветки узла отклоняется, никакого молчаливого «спуска» v11
+                                (REPARENT_ENTITY либо переносит, либо не переносит). */}
                             {layers && Object.values(layers).map((l) => {
                                 const H = window.HierarchyUtils;
-                                const layerLvl = (H && H.getEntityLevel) ? H.getEntityLevel(l.id, nodes, layers) : 0;
-                                const nodeLvl = (H && H.getEntityLevel) ? H.getEntityLevel(selectedNode.id, nodes, layers) : 0;
+                                const layerLvl = (H && H.getEntityLevel) ? H.getEntityLevel(l.id, nodes, layers, state.levelWindows) : 0;
+                                const nodeLvl = (H && H.getEntityLevel) ? H.getEntityLevel(selectedNode.id, nodes, layers, state.levelWindows) : 0;
                                 const isCross = layerLvl !== nodeLvl;
-                                const verdict = (H && H.canTransferToLayer)
-                                    ? H.canTransferToLayer(selectedNode.id, l.id, nodes, layers)
-                                    : { ok: true };
-                                const blocked = !verdict.ok;
-                                const isDescend = verdict.reason === 'descend';
-                                // Разрыв родственных связей: спуск отвязывает прямых детей;
-                                // обычный кросс-перенос узла-ребёнка рвёт связь со старым родителем
-                                const childCount = isDescend
-                                    ? [...Object.values(nodes), ...Object.values(layers)].filter(e => e && e.ownerId === selectedNode.id).length
-                                    : 0;
-                                const parentName = (isCross && !isDescend && selectedNode.ownerId && nodes[selectedNode.ownerId])
-                                    ? (nodes[selectedNode.ownerId].name || selectedNode.ownerId) : null;
-                                const breaksTies = isDescend ? childCount > 0 : !!parentName;
-                                const warn = isDescend && childCount > 0
-                                    ? `⚠ Разорвёт родственные связи: отвяжет прямых детей (${childCount}) — они станут сиротами. `
-                                    : parentName ? `⚠ Разорвёт связь с родителем «${parentName}». ` : '';
+                                const blocked = !!(H && H.canReparentTo &&
+                                    !H.canReparentTo(selectedNode.id, l.id, nodes, layers, state.levelWindows).ok);
                                 // Межуровневый перенос доступен только в режиме Drag&Drop
                                 const dndLocked = isCross && !(state.ui && state.ui.dragDropMode);
                                 return (
@@ -1495,16 +1467,16 @@ function ContextActionBar() {
                                             : selectedNode.parentId === l.id
                                                 ? 'bg-[var(--accent-blue)]/30 text-white font-medium border border-[var(--accent-blue)]/50'
                                                 : isCross ? 'text-gray-400 opacity-75 hover:opacity-100 hover:bg-white/10' : 'text-gray-300 hover:bg-white/10'
-                                    } ${breaksTies && !dndLocked ? 'border border-red-500/70 hover:border-red-400' : ''}`}
+                                    }`}
                                     title={dndLocked
                                         ? `Слой на Уровне ${layerLvl}. Включите режим Drag&Drop (кнопка в панели проекта), чтобы переносить между уровнями`
-                                        : isDescend
-                                            ? warn + 'Слой в собственной ветке: узел спустится к потомкам — станет сиротой-братом в этом слое, его прямые дети отвяжутся и останутся на своих местах (их поддеревья не изменятся)'
-                                            : (isCross ? warn + `Слой уровня ${layerLvl}: узел переедет на этот уровень (усыновит ветка слоя)` : undefined)}
+                                        : blocked
+                                            ? 'Недопустимая цель: этот слой лежит внутри собственной ветки узла (цикл)'
+                                            : (isCross ? `Слой уровня ${layerLvl}: узел переедет на этот уровень` : undefined)}
                                     onClick={() => {
                                         if (blocked || dndLocked) return;
                                         if (isCross) {
-                                            dispatch({ type: 'TRANSFER_NODE', payload: { id: selectedNode.id, targetLayerId: l.id } });
+                                            dispatch({ type: 'REPARENT_ENTITY', payload: { id: selectedNode.id, targetParentId: l.id } });
                                             setActivePopover(null);
                                         } else {
                                             handleLayerChange(l.id);
@@ -1513,9 +1485,7 @@ function ContextActionBar() {
                                 >
                                     <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: l.color || '#0284c7' }}></div>
                                     <span className="truncate flex-1">{l.name || l.id}</span>
-                                    {isDescend ? (
-                                        <span className="px-1 py-px rounded text-[9px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">↓ ветка</span>
-                                    ) : isCross && (
+                                    {isCross && (
                                         <span className="px-1 py-px rounded text-[9px] font-mono bg-sky-500/20 text-sky-300 border border-sky-500/40 shrink-0">L{layerLvl}</span>
                                     )}
                                 </button>
@@ -1562,16 +1532,11 @@ function ContextActionBar() {
         };
 
         // Назначить на слой (PLAN_LAYERS_AND_CONTEXT_CREATION.md, разд. 2.4):
-        // точная копия узлового попапа «назначить слой», но TRANSFER_NODE
-        // уже сам решает — своего уровня (группировка parentId) или чужого
-        // (усыновление ownerId) — единый путь для обоих случаев (⚠️ п.0.8),
-        // отдельная REPARENT_ENTITY-ветка нужна только для сброса на root.
+        // точная копия узлового попапа «назначить слой». v13: REPARENT_ENTITY
+        // принимает 'root' и id слоя единым путём — своего/чужого уровня для
+        // parentId больше не существует как различие (docs/IDEAL_INTERACTIONS.md §2).
         const handleLayerParentChange = (targetLayerId) => {
-            if (targetLayerId === 'root') {
-                dispatch({ type: 'REPARENT_ENTITY', payload: { id: selectedLayer.id, newParentId: 'root' } });
-            } else {
-                dispatch({ type: 'TRANSFER_NODE', payload: { id: selectedLayer.id, targetLayerId } });
-            }
+            dispatch({ type: 'REPARENT_ENTITY', payload: { id: selectedLayer.id, targetParentId: targetLayerId } });
             setActivePopover(null);
         };
 
@@ -1710,11 +1675,9 @@ function ContextActionBar() {
                         />
                     )}
 
-                    {/* Поповер: назначить слой на слой (⚠️ п.0.1, п.0.8) — точная
-                        копия узлового попапа «назначить слой», но переносимая
-                        сущность — сам selectedLayer, TRANSFER_NODE решает
-                        группировку/усыновление сам. Слои чужого уровня видны,
-                        но тусклые при выключенном ui.dragDropMode. */}
+                    {/* Поповер: назначить слой на слой — точная копия узлового попапа
+                        «назначить слой», но переносимая сущность — сам selectedLayer.
+                        Слои чужого уровня видны, но тусклые при выключенном ui.dragDropMode. */}
                     {activePopover === 'layer' && (
                         <div className="absolute left-28 top-12 w-60 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-2.5 shadow-2xl z-50 flex flex-col gap-1.5 max-h-56 overflow-y-auto no-scrollbar">
                             <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider px-1">Назначить на слой</div>
@@ -1730,27 +1693,15 @@ function ContextActionBar() {
                                 <span className="truncate flex-1">Главный холст (Root)</span>
                             </button>
                             {layers && Object.values(layers).filter(l => l && l.id !== selectedLayer.id).map((l) => {
+                                // v13: canReparentTo уже включает защиту от циклов (isDescendantOf) —
+                                // отдельная parentIdCycle-проверка и v11-«спуск» больше не нужны,
+                                // см. комментарий у аналогичного попапа для узла выше.
                                 const H = window.HierarchyUtils;
-                                const layerLvl = (H && H.getEntityLevel) ? H.getEntityLevel(l.id, nodes, layers) : 0;
-                                const ownLvl = (H && H.getEntityLevel) ? H.getEntityLevel(selectedLayer.id, nodes, layers) : 0;
+                                const layerLvl = (H && H.getEntityLevel) ? H.getEntityLevel(l.id, nodes, layers, state.levelWindows) : 0;
+                                const ownLvl = (H && H.getEntityLevel) ? H.getEntityLevel(selectedLayer.id, nodes, layers, state.levelWindows) : 0;
                                 const isCross = layerLvl !== ownLvl;
-                                const verdict = (H && H.canTransferToLayer)
-                                    ? H.canTransferToLayer(selectedLayer.id, l.id, nodes, layers)
-                                    : { ok: true };
-                                // Доп. защита от циклов через координатный контейнер (parentId):
-                                // цель — собственный потомок selectedLayer по цепочке parentId.
-                                const parentIdCycle = (H && H.isDescendantOf) ? H.isDescendantOf(l.id, selectedLayer.id, nodes, layers) : false;
-                                const blocked = !verdict.ok || parentIdCycle;
-                                const isDescend = verdict.reason === 'descend';
-                                const childCount = isDescend
-                                    ? [...Object.values(nodes), ...Object.values(layers)].filter(e => e && e.ownerId === selectedLayer.id).length
-                                    : 0;
-                                const parentName = (isCross && !isDescend && selectedLayer.ownerId && nodes[selectedLayer.ownerId])
-                                    ? (nodes[selectedLayer.ownerId].name || selectedLayer.ownerId) : null;
-                                const breaksTies = isDescend ? childCount > 0 : !!parentName;
-                                const warn = isDescend && childCount > 0
-                                    ? `⚠ Разорвёт родственные связи: отвяжет прямых детей (${childCount}) — они станут сиротами. `
-                                    : parentName ? `⚠ Разорвёт связь с родителем «${parentName}». ` : '';
+                                const blocked = !!(H && H.canReparentTo &&
+                                    !H.canReparentTo(selectedLayer.id, l.id, nodes, layers, state.levelWindows).ok);
                                 // Межуровневый перенос доступен только в режиме Drag&Drop
                                 const dndLocked = isCross && !(state.ui && state.ui.dragDropMode);
                                 return (
@@ -1763,14 +1714,12 @@ function ContextActionBar() {
                                             : selectedLayer.parentId === l.id
                                                 ? 'bg-[var(--accent-blue)]/30 text-white font-medium border border-[var(--accent-blue)]/50'
                                                 : isCross ? 'text-gray-400 opacity-75 hover:opacity-100 hover:bg-white/10' : 'text-gray-300 hover:bg-white/10'
-                                    } ${breaksTies && !dndLocked ? 'border border-red-500/70 hover:border-red-400' : ''}`}
-                                    title={parentIdCycle
+                                    }`}
+                                    title={blocked
                                         ? 'Нельзя: этот слой лежит внутри переносимого слоя (цикл)'
                                         : dndLocked
                                             ? `Слой на Уровне ${layerLvl}. Включите режим Drag&Drop (кнопка в панели проекта), чтобы переносить между уровнями`
-                                            : isDescend
-                                                ? warn + 'Слой в собственной ветке: перенос спустит его к потомкам — он станет сиротой-братом в этом слое, его прямые дети отвяжутся и останутся на своих местах'
-                                                : (isCross ? warn + `Слой уровня ${layerLvl}: этот слой переедет на этот уровень (усыновит ветка целевого слоя)` : undefined)}
+                                            : (isCross ? `Слой уровня ${layerLvl}: этот слой переедет на этот уровень` : undefined)}
                                     onClick={() => {
                                         if (blocked || dndLocked) return;
                                         handleLayerParentChange(l.id);
@@ -1778,9 +1727,7 @@ function ContextActionBar() {
                                 >
                                     <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: l.color || '#0284c7' }}></div>
                                     <span className="truncate flex-1">{l.name || l.id}</span>
-                                    {isDescend ? (
-                                        <span className="px-1 py-px rounded text-[9px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">↓ ветка</span>
-                                    ) : isCross && (
+                                    {isCross && (
                                         <span className="px-1 py-px rounded text-[9px] font-mono bg-sky-500/20 text-sky-300 border border-sky-500/40 shrink-0">L{layerLvl}</span>
                                     )}
                                 </button>
