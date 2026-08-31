@@ -780,6 +780,11 @@ const defaultState = {
     nodes: {},
     ports: {},
     links: {},
+    // Незаведённые внешние шлюзы (Фаза 6.2): половины кросс-проектных связей,
+    // чей второй конец сейчас не загружен — экспорт/удаление проекта на другой
+    // стороне. Ключ — id исходной живой crossProjectLinks-записи (реконсиляция
+    // при повторной загрузке обеих половин ищет совпадение по этому же id).
+    pendingGateways: {},
     selectedIds: [],
     isolatedIds: [],
     interactionMode: 'default',
@@ -824,6 +829,10 @@ const defaultState = {
     // Пусто = изоляции нет. В историю Undo не входит — это состояние обзора,
     // а не данных (как и камера).
     containerIsolation: { projectIds: [], windowIds: [] },
+    // Живые сквозные связи между проектами (Фаза 6.1): глобальное поле — сама
+    // связь не принадлежит ни одному из двух проектов, которые соединяет.
+    // Вне истории Undo проектов: см. AGENTS.md, «Кросс-проектные операции».
+    crossProjectLinks: {},
     aiChatHistory: [
         { role: 'ai', content: 'Привет! Я ваш AI-ассистент. Помогу спроектировать архитектуру, ответить на вопросы и организовать ваши идеи на холсте.' }
     ],
@@ -1634,6 +1643,25 @@ const reducer = (state, action) => {
                         proxyOverrides: { ...(link.proxyOverrides || {}), [windowId]: { edge, fraction: f } }
                     }
                 }
+            };
+        }
+        case 'UPDATE_PENDING_GATEWAY_PROXY': {
+            // Ручное положение прокси НЕПРИМИРЁННОГО штекера (Фаза 6.2) — тот же
+            // смысл, что UPDATE_PROXY_PORT, но хранится в pendingGateways[linkId]:
+            // второй половины связи ещё нет, писать в state.links/crossProjectLinks
+            // некуда. Проектное поле — в отличие от crossProjectLinks, полностью
+            // локально одному проекту, поэтому спокойно участвует в его Undo.
+            const { linkId, edge, fraction, skipHistory } = action.payload || {};
+            if (!linkId || !state.pendingGateways || !state.pendingGateways[linkId]) return state;
+            if (!['top', 'bottom', 'left', 'right'].includes(edge)) return state;
+            const f2 = Math.max(0.03, Math.min(0.97, Number(fraction)));
+            if (Number.isNaN(f2)) return state;
+            const gw = state.pendingGateways[linkId];
+            const historyState2 = skipHistory ? {} : saveHistory(state, 'Перемещён штекер связи');
+            return {
+                ...state,
+                ...historyState2,
+                pendingGateways: { ...state.pendingGateways, [linkId]: { ...gw, edge, fraction: f2 } }
             };
         }
         case 'ADD_LINK': {
@@ -3109,7 +3137,7 @@ const PROJECT_FIELDS = [
     'projectName', 'projectColor', 'projectFontFamily', 'projectContent',
     'levelWindows', 'levelViews', 'activeLevelIndex',
     'levelFocusParentId', 'levelHideNeighbors',
-    'layers', 'nodes', 'ports', 'links',
+    'layers', 'nodes', 'ports', 'links', 'pendingGateways',
     'past', 'future', 'historyLogs'
 ];
 
@@ -3413,6 +3441,70 @@ const resolveContainerSelection = (m, selectedIds) => {
 
 
 /**
+ * Автопримирение «висящих штекеров» (Фаза 6.2): группирует pendingGateways
+ * ВСЕХ проектов по linkId — тому же id, что был у исходной живой связи (см.
+ * applyRemoveProject и локальный экспорт в ContextActionBar.js). Там, где
+ * один и тот же linkId нашёлся РОВНО в двух разных проектах — одна половина
+ * demote'нута удалением/экспортом-без-контрагента, другая только что
+ * импортирована (или наоборот) — синтезирует живую crossProjectLinks-запись
+ * из обеих половин и убирает обе записи pendingGateways. Несовпавшие
+ * (единственная сторона) остаются висеть как штекеры.
+ *
+ * ВАЖНО: сверка идёт ТОЛЬКО по linkId + противоположным direction, БЕЗ
+ * проверки remoteProjectId на совпадение с фактическим pid контрагента —
+ * при повторном импорте «как новый проект» контрагент получает СВЕЖИЙ id
+ * (`ADD_PROJECT_FROM_FILE`), и остаток на пережившей стороне закономерно
+ * продолжает указывать на СТАРЫЙ, уже удалённый id. Именно нестабильность
+ * projectId и есть причина, по которой опорным идентификатором служит
+ * linkId связи, а не id проекта на другом конце.
+ * @param {Object} m мультисостояние
+ * @returns {Object}
+ */
+const reconcilePendingGateways = (m) => {
+    const byLink = {};
+    Object.keys(m.projects || {}).forEach(pid => {
+        const proj = m.projects[pid];
+        Object.values((proj && proj.pendingGateways) || {}).forEach(gw => {
+            if (!gw || !gw.linkId) return;
+            if (!byLink[gw.linkId]) byLink[gw.linkId] = [];
+            byLink[gw.linkId].push({ pid, gw });
+        });
+    });
+
+    const ready = Object.keys(byLink).filter(linkId => byLink[linkId].length === 2);
+    if (ready.length === 0) return m;
+
+    let projects = m.projects;
+    const crossProjectLinks = { ...(m.crossProjectLinks || {}) };
+    ready.forEach(linkId => {
+        const [a, b] = byLink[linkId];
+        const src = a.gw.direction === 'out' ? a : b;
+        const tgt = src === a ? b : a;
+        // Единственная реальная проверка согласованности, доступная здесь:
+        // ровно одна сторона 'out', другая 'in' (см. комментарий функции —
+        // remoteProjectId сверять не с чем, он смотрит на уже мёртвый id).
+        if (src.gw.direction !== 'out' || tgt.gw.direction !== 'in') return;
+
+        crossProjectLinks[linkId] = {
+            id: linkId,
+            sourceProjectId: src.pid, sourcePortId: src.gw.portId,
+            targetProjectId: tgt.pid, targetPortId: tgt.gw.portId,
+            color: src.gw.color, name: src.gw.name, content: src.gw.content,
+            linkStyle: src.gw.linkStyle
+        };
+        [a, b].forEach(({ pid, gw }) => {
+            const proj = { ...projects[pid] };
+            const pg = { ...(proj.pendingGateways || {}) };
+            delete pg[gw.linkId];
+            proj.pendingGateways = pg;
+            projects = { ...projects, [pid]: proj };
+        });
+    });
+
+    return { ...m, projects, crossProjectLinks };
+};
+
+/**
  * Полное удаление проекта. Вынесена из switch, чтобы массовое удаление могло
  * переиспользовать её напрямую: самовызов multiReducer ломает публикацию
  * top-level const в babel-standalone (см. AGENTS.md, правило Zero-Build).
@@ -3422,6 +3514,7 @@ const resolveContainerSelection = (m, selectedIds) => {
  */
 const applyRemoveProject = (m, id) => {
     if (!id || !m.projects[id]) return m;
+    const removedProj = m.projects[id];
     const projects = { ...m.projects };
     delete projects[id];
     const projectOrder = m.projectOrder.filter(pid => pid !== id);
@@ -3433,14 +3526,276 @@ const applyRemoveProject = (m, id) => {
     // Обозреватель удалённого проекта не должен остаться открытым
     const outlinerOpen = { ...((m.ui && m.ui.outlinerOpen) || {}) };
     delete outlinerOpen[id];
+
+    // Кросс-проектные связи, задевающие удаляемый проект (Фаза 6.1/6.2): если
+    // проект на ДРУГОЙ стороне ещё существует — связь не пропадает молча, а
+    // демоутится в его pendingGateways (та же структура, что у локального
+    // экспорта половины связи) — «одна из сторон пропала» выглядит одинаково,
+    // вызвано ли это удалением проекта или экспортом без него. Если обе
+    // стороны исчезают разом (или второй уже нет) — запись удаляется совсем.
+    const H = getHierarchy();
+    const crossProjectLinks = { ...(m.crossProjectLinks || {}) };
+    const gatewaysByProject = {};
+    Object.keys(m.crossProjectLinks || {}).forEach(linkId => {
+        const link = m.crossProjectLinks[linkId];
+        if (!link || (link.sourceProjectId !== id && link.targetProjectId !== id)) return;
+        delete crossProjectLinks[linkId];
+        const survivorPid = link.sourceProjectId === id ? link.targetProjectId : link.sourceProjectId;
+        if (!survivorPid || !projects[survivorPid]) return;
+        const survivorIsSource = survivorPid === link.sourceProjectId;
+        const survivorPortId = survivorIsSource ? link.sourcePortId : link.targetPortId;
+        const removedPortId = survivorIsSource ? link.targetPortId : link.sourcePortId;
+        const removedPort = removedProj.ports && removedProj.ports[removedPortId];
+        const survivorProj = projects[survivorPid];
+        const survivorPortObj = survivorProj.ports && survivorProj.ports[survivorPortId];
+        const survivorNodeId = survivorPortObj && survivorPortObj.nodeId;
+        let edge = null, fraction = null;
+        if (survivorNodeId && H) {
+            const lvl = H.getEntityLevel(survivorNodeId, survivorProj.nodes, survivorProj.layers, survivorProj.levelWindows);
+            const win = H.getWindowOfLevel(lvl, survivorProj.levelWindows);
+            const ov = win && link.proxyOverrides && link.proxyOverrides[win.id];
+            if (ov) { edge = ov.edge; fraction = ov.fraction; }
+        }
+        if (!edge) { edge = 'right'; fraction = 0.5; }
+        if (!gatewaysByProject[survivorPid]) gatewaysByProject[survivorPid] = {};
+        gatewaysByProject[survivorPid][linkId] = {
+            linkId, portId: survivorPortId,
+            direction: survivorIsSource ? 'out' : 'in',
+            remoteProjectId: id, remotePortId: removedPortId,
+            remoteProjectName: removedProj.projectName || '',
+            remotePortName: (removedPort && removedPort.name) || '',
+            linkStyle: link.linkStyle, color: link.color, name: link.name, content: link.content,
+            edge, fraction
+        };
+    });
+    Object.keys(gatewaysByProject).forEach(pid => {
+        projects[pid] = { ...projects[pid], pendingGateways: { ...(projects[pid].pendingGateways || {}), ...gatewaysByProject[pid] } };
+    });
+
     // Изоляция удалённого проекта и его окон снимается: иначе на холсте не
     // осталось бы ни одного видимого контейнера — и кнопки выхода из изоляции
-    return pruneContainerIsolation({
+    const next = pruneContainerIsolation({
         ...m,
-        projects, projectOrder, activeProjectId,
+        projects, projectOrder, activeProjectId, crossProjectLinks,
         ui: { ...m.ui, outlinerOpen },
         selectedIds: [], isolatedIds: []
     });
+    // Новый pendingGateway на уцелевшей стороне мог совпасть с уже висящим
+    // штекером ДРУГОГО проекта (импортированным ранее) — примиряем сразу.
+    return reconcilePendingGateways(next);
+};
+
+/**
+ * Кросс-проектный перенос сущности/ветки (Фаза 6.3): REPARENT_ENTITY, чей
+ * targetProjectId отличается от sourceProjectId. Перехватывается в
+ * multiReducer ДО delegateToActiveProject — обычный (внутрипроектный)
+ * REPARENT_ENTITY продолжает идти через неё без изменений.
+ *
+ * Мирит два разных мира: живой Drag&Drop-жест (Node.js/Layer.js) и
+ * однопроектный `case 'REPARENT_ENTITY'` в `reducer` — та же семантика
+ * Deep/Shallow, та же findFreePosition-логика для всплытия детей и
+ * размещения на новом месте, но словари читаются/пишутся в ДВА разных
+ * проекта, а не в один state.
+ *
+ * @param {Object} m мультисостояние
+ * @param {Object} p action.payload — { ids|id, sourceProjectId, targetProjectId,
+ *   targetParentId?, targetLevelIndex?, mode?, position?, positionsById? }
+ * @returns {Object}
+ */
+const applyCrossProjectReparent = (m, p) => {
+    const sourceProjectId = p.sourceProjectId;
+    const targetProjectId = p.targetProjectId;
+    if (!sourceProjectId || !targetProjectId || sourceProjectId === targetProjectId) return m;
+    if (!m.projects[sourceProjectId] || !m.projects[targetProjectId]) return m;
+
+    const H = getHierarchy();
+    const G = getGeometry();
+    if (!H || !G) return m;
+
+    const sourceView = projectFlatView(m, sourceProjectId);
+    const targetView = projectFlatView(m, targetProjectId);
+
+    const mode = p.mode === 'shallow' ? 'shallow' : 'deep';
+    let targetParentId = p.targetParentId !== undefined ? p.targetParentId : p.newParentId;
+    if (targetParentId === undefined && typeof p.targetLevelIndex === 'number') {
+        const win = resolveWindow(targetView, p.targetLevelIndex);
+        targetParentId = win ? win.id : (p.targetLevelIndex === 0 ? 'root' : undefined);
+    }
+    if (!targetParentId) return m;
+
+    const getEntity = (eid) => (sourceView.nodes && sourceView.nodes[eid]) || (sourceView.layers && sourceView.layers[eid]);
+
+    const rawIds = Array.isArray(p.ids) ? p.ids : (p.id ? [p.id] : []);
+    const requestedIds = rawIds.filter(eid => getEntity(eid));
+    if (requestedIds.length === 0) return m;
+
+    // «Только верхние» — как в однопроектном REPARENT_ENTITY: у кого в этом
+    // же наборе есть предок по цепочке parentId, тот переедет вместе с ним.
+    const topIds = requestedIds.filter(eid => !requestedIds.some(other =>
+        other !== eid && H.isDescendantOf(eid, other, sourceView.nodes, sourceView.layers)));
+
+    // canReparentTo: существование сущности — в SOURCE (entityDicts), цели и
+    // цикл — в TARGET; цикл геометрически невозможен между двумя разными
+    // проектами (canReparentTo сама это распознаёт по разным словарям).
+    // «Уже там» (entity.parentId === targetParentId) для cross-project не
+    // проверяется — совпадение строк id между двумя проектами ничего не значит.
+    const validIds = topIds.filter(eid => {
+        const entity = getEntity(eid);
+        if (!entity) return false;
+        return H.canReparentTo(eid, targetParentId, targetView.nodes, targetView.layers, targetView.levelWindows,
+            { nodes: sourceView.nodes, layers: sourceView.layers }).ok;
+    });
+    if (validIds.length === 0) return m;
+
+    const srcNodes = { ...sourceView.nodes };
+    const srcLayers = { ...sourceView.layers };
+    const srcPorts = { ...sourceView.ports };
+    const srcLinks = { ...sourceView.links };
+    const tgtNodes = { ...targetView.nodes };
+    const tgtLayers = { ...targetView.layers };
+    const tgtPorts = { ...targetView.ports };
+    const tgtLinks = { ...targetView.links };
+    const movedPortIds = new Set();
+
+    const stripLegacy = (e) => { const { ownerId, ownerGap, homeLevel, ...rest } = e; return rest; };
+    const rectsIn = (nodesDict, layersDict, containerId) => {
+        const rects = [];
+        Object.values(nodesDict).forEach(n => { if (n && n.parentId === containerId) rects.push({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }); });
+        Object.values(layersDict).forEach(l => { if (l && l.parentId === containerId) rects.push({ x: l.position.x, y: l.position.y, w: (l.size && l.size.w) || 600, h: (l.size && l.size.h) || 400 }); });
+        return rects;
+    };
+    // Ветка = сущность + всё, что остаётся привязано к ней по parentId-цепочке
+    // ПОСЛЕ возможного Shallow-всплытия прямых детей (см. ниже) — тот же обход,
+    // что и рекурсивный поиск потомков в DELETE_SELECTED, но по живым id.
+    const collectSubtree = (rootId) => {
+        const ids = new Set([rootId]);
+        let changed = true;
+        while (changed) {
+            changed = false;
+            Object.values(srcNodes).forEach(n => { if (n && ids.has(n.parentId) && !ids.has(n.id)) { ids.add(n.id); changed = true; } });
+            Object.values(srcLayers).forEach(l => { if (l && ids.has(l.parentId) && !ids.has(l.id)) { ids.add(l.id); changed = true; } });
+        }
+        return ids;
+    };
+
+    validIds.forEach(eid => {
+        const entity = getEntity(eid);
+        const oldParentId = entity.parentId;
+
+        if (mode === 'shallow') {
+            // Прямые дети переносимой сущности усыновляются её ПРЕЖНИМ
+            // родителем ВНУТРИ исходного проекта — раньше, чем верхняя
+            // сущность вообще успевает уехать (findFreePosition предотвращает
+            // наложение всплывающих детей на то, что уже стоит у деда).
+            const directChildren = [
+                ...Object.values(srcNodes).filter(n => n && n.parentId === eid),
+                ...Object.values(srcLayers).filter(l => l && l.parentId === eid)
+            ];
+            if (directChildren.length > 0) {
+                const siblingRects = rectsIn(srcNodes, srcLayers, oldParentId);
+                directChildren.forEach(child => {
+                    const pos = G.findFreePosition(child.size, child.position, siblingRects);
+                    siblingRects.push({ x: pos.x, y: pos.y, w: (child.size && child.size.w) || 200, h: (child.size && child.size.h) || 100 });
+                    const updated = stripLegacy({ ...child, parentId: oldParentId, position: pos });
+                    if (srcNodes[child.id]) srcNodes[child.id] = updated; else srcLayers[child.id] = updated;
+                });
+            }
+        }
+
+        // Позиция ВЕРХНЕЙ сущности ветки в целевом проекте: явная (drop под
+        // курсором) либо findFreePosition на корне targetParentId — в другом
+        // проекте совпадение мировых координат ничего не значит, экономить
+        // на toRelativePosition (как делает внутрипроектный путь) незачем.
+        let position;
+        if (p.positionsById && p.positionsById[eid]) {
+            position = p.positionsById[eid];
+        } else if (validIds.length === 1 && p.position) {
+            position = p.position;
+        } else {
+            position = G.findFreePosition(entity.size, entity.position, rectsIn(tgtNodes, tgtLayers, targetParentId));
+        }
+
+        const branchIds = collectSubtree(eid);
+        branchIds.forEach(id => {
+            const isNode = !!srcNodes[id];
+            const dict = isNode ? srcNodes : srcLayers;
+            const e = dict[id];
+            const moved = id === eid ? stripLegacy({ ...e, parentId: targetParentId, position }) : stripLegacy(e);
+            if (isNode) { tgtNodes[id] = moved; delete srcNodes[id]; }
+            else { tgtLayers[id] = moved; delete srcLayers[id]; }
+
+            Object.keys(srcPorts).forEach(portId => {
+                const port = srcPorts[portId];
+                if (port && port.nodeId === id) {
+                    tgtPorts[portId] = port;
+                    delete srcPorts[portId];
+                    movedPortIds.add(portId);
+                }
+            });
+        });
+    });
+
+    // Связи, у которых ОБА порта теперь в целевом проекте, переезжают целиком;
+    // связи, у которых порты после переноса разошлись по разным проектам,
+    // стали бы битыми (обычная links-запись не умеет адресовать чужой
+    // проект — для этого есть отдельная crossProjectLinks, Фаза 6.1) и
+    // удаляются, как раньше в этом случае поступал TRANSFER_NODE.
+    Object.keys(srcLinks).forEach(linkId => {
+        const link = srcLinks[linkId];
+        if (!link) return;
+        const sMoved = movedPortIds.has(link.sourcePortId);
+        const tMoved = movedPortIds.has(link.targetPortId);
+        if (sMoved && tMoved) { tgtLinks[linkId] = link; delete srcLinks[linkId]; }
+        else if (sMoved || tMoved) { delete srcLinks[linkId]; }
+    });
+
+    const targetNormalized = normalizeLevelWindows(targetView.levelWindows, tgtNodes, tgtLayers, targetView.levelViews);
+
+    let next = writeProjectView(m, sourceProjectId, { ...sourceView, nodes: srcNodes, layers: srcLayers, ports: srcPorts, links: srcLinks });
+    next = writeProjectView(next, targetProjectId, {
+        ...targetView, nodes: tgtNodes, layers: tgtLayers, ports: tgtPorts, links: tgtLinks,
+        levelWindows: targetNormalized.levelWindows, levelViews: targetNormalized.levelViews
+    });
+
+    // Кросс-проектные связи/штекеры (Фаза 6.1/6.2), чей порт уехал вместе с
+    // веткой, переписываются на новый projectId — перенос не должен рвать ни
+    // живую связь, ни висящий штекер. Как и создание/удаление таких связей,
+    // этот шаг не входит в Undo ни одного из двух проектов (см. AGENTS.md).
+    if (movedPortIds.size > 0) {
+        const crossProjectLinks = { ...(next.crossProjectLinks || {}) };
+        Object.keys(crossProjectLinks).forEach(id => {
+            const link = crossProjectLinks[id];
+            if (!link) return;
+            let changed = false;
+            let updated = link;
+            if (link.sourceProjectId === sourceProjectId && movedPortIds.has(link.sourcePortId)) { updated = { ...updated, sourceProjectId: targetProjectId }; changed = true; }
+            if (link.targetProjectId === sourceProjectId && movedPortIds.has(link.targetPortId)) { updated = { ...updated, targetProjectId: targetProjectId }; changed = true; }
+            if (changed) crossProjectLinks[id] = updated;
+        });
+        next = { ...next, crossProjectLinks };
+
+        const remainingSourcePending = { ...(next.projects[sourceProjectId].pendingGateways || {}) };
+        const movingPending = {};
+        Object.keys(remainingSourcePending).forEach(linkId => {
+            const gw = remainingSourcePending[linkId];
+            if (gw && movedPortIds.has(gw.portId)) {
+                movingPending[linkId] = gw;
+                delete remainingSourcePending[linkId];
+            }
+        });
+        if (Object.keys(movingPending).length > 0) {
+            next = {
+                ...next,
+                projects: {
+                    ...next.projects,
+                    [sourceProjectId]: { ...next.projects[sourceProjectId], pendingGateways: remainingSourcePending },
+                    [targetProjectId]: { ...next.projects[targetProjectId], pendingGateways: { ...(next.projects[targetProjectId].pendingGateways || {}), ...movingPending } }
+                }
+            };
+        }
+    }
+
+    return pruneContainerIsolation(next);
 };
 
 const multiReducer = (m, action) => {
@@ -3466,6 +3821,52 @@ const multiReducer = (m, action) => {
                 if (!PROJECT_FIELDS.includes(k) && !MULTI_META_FIELDS.includes(k)) next[k] = flatOut[k];
             });
             return pruneContainerIsolation(next);
+        }
+        // Кросс-проектные связи (Фаза 6.1): сама связь — глобальное поле, не
+        // принадлежит ни одному из двух проектов, обрабатывается здесь
+        // напрямую (в отличие от FOR_PROJECT — тут нет одного адресата-проекта,
+        // которому можно делегировать плоский вид).
+        case 'ADD_CROSS_PROJECT_LINK': {
+            const { sourceProjectId, sourcePortId, targetProjectId, targetPortId } = action.payload || {};
+            if (!sourceProjectId || !targetProjectId || sourceProjectId === targetProjectId) return m;
+            if (!sourcePortId || !targetPortId || sourcePortId === targetPortId) return m;
+            const sProj = m.projects[sourceProjectId];
+            const tProj = m.projects[targetProjectId];
+            if (!sProj || !tProj) return m;
+            if (!sProj.ports || !sProj.ports[sourcePortId]) return m;
+            if (!tProj.ports || !tProj.ports[targetPortId]) return m;
+            const id = action.payload.id || 'xlink-' + Date.now() + Math.floor(Math.random() * 1000);
+            const link = {
+                id, sourceProjectId, sourcePortId, targetProjectId, targetPortId,
+                color: action.payload.color || '#3b82f6',
+                name: action.payload.name || '',
+                linkStyle: action.payload.linkStyle || 'orthogonal'
+            };
+            return { ...m, crossProjectLinks: { ...(m.crossProjectLinks || {}), [id]: link } };
+        }
+        case 'REMOVE_CROSS_PROJECT_LINK': {
+            const id = typeof action.payload === 'string' ? action.payload : (action.payload && action.payload.id);
+            if (!id || !m.crossProjectLinks || !m.crossProjectLinks[id]) return m;
+            const next = { ...m.crossProjectLinks };
+            delete next[id];
+            return { ...m, crossProjectLinks: next };
+        }
+        case 'UPDATE_CROSS_PROJECT_PROXY_PORT': {
+            // Аналог UPDATE_PROXY_PORT (см. однопроектный reducer) для связи,
+            // хранящейся в state.crossProjectLinks вместо state.links.
+            const { linkId, windowId, edge, fraction } = action.payload || {};
+            const link = m.crossProjectLinks && m.crossProjectLinks[linkId];
+            if (!link || !windowId) return m;
+            if (!['top', 'bottom', 'left', 'right'].includes(edge)) return m;
+            const f = Math.max(0.03, Math.min(0.97, Number(fraction)));
+            if (Number.isNaN(f)) return m;
+            return {
+                ...m,
+                crossProjectLinks: {
+                    ...m.crossProjectLinks,
+                    [linkId]: { ...link, proxyOverrides: { ...(link.proxyOverrides || {}), [windowId]: { edge, fraction: f } } }
+                }
+            };
         }
         case 'MOVE_LEVEL_WINDOW':
         case 'RESIZE_LEVEL_WINDOW':
@@ -3573,7 +3974,12 @@ const multiReducer = (m, action) => {
                 levelWindows: {}, levelViews: {},
                 past: [], future: [], historyLogs: []
             };
-            const loaded = reducer(base, { type: 'LOAD_STATE', payload: data });
+            // migrateToV11/migrateToV10 (внутри LOAD_STATE) не умеют отличить
+            // «сирота v13 с parentId прямо на узел» от старого дуализма
+            // parentId/ownerId и достраивают ownerId, где его в файле не было —
+            // migrateProjectEntitiesToV13 сводит это обратно к чистому parentId
+            // независимо от того, из какой версии реально пришёл файл.
+            const loaded = migrateProjectEntitiesToV13(reducer(base, { type: 'LOAD_STATE', payload: data }));
             const n = (m.projectCounter || m.projectOrder.length) + 1;
             const id = newProjectId();
             let proj = { id, origin: { x: 0, y: 0 } };
@@ -3584,9 +3990,18 @@ const multiReducer = (m, action) => {
             proj.past = [];
             proj.future = [];
             proj.historyLogs = ['Проект импортирован из файла'];
+            // externalGateways (Фаза 6.2): «разрывы» кросс-проектных связей,
+            // записанные при локальном экспорте одной из половин (см.
+            // ContextActionBar.js/handleExportProject) — оседают как штекеры,
+            // пока не найдётся вторая половина с тем же linkId (см. ниже).
+            if (Array.isArray(data.externalGateways) && data.externalGateways.length) {
+                const pendingGateways = {};
+                data.externalGateways.forEach(gw => { if (gw && gw.linkId) pendingGateways[gw.linkId] = gw; });
+                proj.pendingGateways = pendingGateways;
+            }
             const right = globalRightEdge(m.projects);
             if (right !== null) proj = shiftProjectWindows(proj, right + PROJECT_SLOT_GAP, -400);
-            return {
+            const next = {
                 ...m,
                 projects: { ...m.projects, [id]: proj },
                 projectOrder: [...m.projectOrder, id],
@@ -3595,6 +4010,150 @@ const multiReducer = (m, action) => {
                 selectedIds: [],
                 isolatedIds: []
             };
+            return reconcilePendingGateways(next);
+        }
+        case 'MERGE_PROJECT_FROM_FILE': {
+            // Слияние импортируемого файла В АКТИВНЫЙ проект (Фаза 6.5) — в
+            // отличие от ADD_PROJECT_FROM_FILE («добавить как НОВЫЙ проект»,
+            // раздельные словари, коллизий id по конструкции нет), здесь
+            // словари ОБЩИЕ: каждая сущность файла получает свежий id, все
+            // внутренние ссылки (parentId, nodeId порта, sourcePortId/
+            // targetPortId, ключи proxyOverrides, portId штекеров) переписываются
+            // через карту oldId -> newId.
+            const data = action.payload;
+            if (!data || !data.nodes || !data.ports || !data.links) return m;
+            if (!m.activeProjectId || !m.projects[m.activeProjectId]) return m;
+            const activeProj = m.projects[m.activeProjectId];
+
+            const base = {
+                ...defaultState,
+                nodes: {}, layers: {}, ports: {}, links: {},
+                levelWindows: {}, levelViews: {},
+                past: [], future: [], historyLogs: []
+            };
+            // migrateToV11/migrateToV10 (внутри LOAD_STATE) не умеют отличить
+            // «сирота v13 с parentId прямо на узел» от старого дуализма
+            // parentId/ownerId и достраивают ownerId, где его в файле не было —
+            // migrateProjectEntitiesToV13 сводит это обратно к чистому parentId
+            // независимо от того, из какой версии реально пришёл файл.
+            const loaded = migrateProjectEntitiesToV13(reducer(base, { type: 'LOAD_STATE', payload: data }));
+
+            let seq = 0;
+            const genId = (prefix) => `${prefix}-${Date.now()}-${seq++}`;
+            const idMap = {};
+            Object.keys(loaded.nodes).forEach(id => { idMap[id] = genId('node'); });
+            Object.keys(loaded.layers).forEach(id => { idMap[id] = genId('layer'); });
+            Object.keys(loaded.ports).forEach(id => { idMap[id] = genId('port'); });
+            Object.keys(loaded.links).forEach(id => { idMap[id] = genId('link'); });
+
+            // Окна уровней: то же levelIndex в активном проекте — сливаем в
+            // НЕГО; иначе заводим новое (появится под нижним существующим —
+            // тот же рост глубины, что у REPARENT_ENTITY/normalizeLevelWindows).
+            const activeWindowsByLevel = {};
+            Object.values(activeProj.levelWindows || {}).forEach(w => { if (w) activeWindowsByLevel[w.levelIndex] = w; });
+            const windowIdMap = {};
+            const newWindows = {};
+            Object.values(loaded.levelWindows || {}).forEach(w => {
+                if (!w) return;
+                const existing = activeWindowsByLevel[w.levelIndex];
+                if (existing) {
+                    windowIdMap[w.id] = existing.id;
+                } else {
+                    const newId = newWindowId();
+                    windowIdMap[w.id] = newId;
+                    newWindows[newId] = { ...w, id: newId };
+                }
+            });
+
+            // Главный холст активного проекта — его СОБСТВЕННОЕ содержимое
+            // адресует его литералом 'root', а не явным id окна (v13, «сироты
+            // на уровне 0 компактно остаются 'root'», см. IDEAL_INTERACTIONS
+            // §1). GeometryUtils.resolveContextCollisions группирует контекст
+            // СТРОКОЙ parentId — если слитое содержимое окажется на явном id
+            // окна ('lvlwin-root'), а исходное — на литерале 'root', коллизии
+            // между ними просто не заметят друг друга, хотя это ОДИН контекст.
+            const activeRootWinId = activeWindowsByLevel[0] ? activeWindowsByLevel[0].id : null;
+            const collapseRoot = (wid) => (wid && wid === activeRootWinId) ? 'root' : wid;
+
+            const remapParentId = (pid) => {
+                // «root» файла — его собственный Главный холст (levelIndex 0);
+                // сливается с Главным холстом активного проекта — тот есть всегда.
+                if (pid === 'root') return 'root';
+                if (windowIdMap[pid]) return collapseRoot(windowIdMap[pid]);
+                if (idMap[pid]) return idMap[pid];
+                return 'root'; // защитный фолбэк — не должен наступать при корректном файле
+            };
+
+            const remappedNodes = {};
+            Object.entries(loaded.nodes).forEach(([oldId, n]) => {
+                if (!n) return;
+                const newId = idMap[oldId];
+                remappedNodes[newId] = { ...n, id: newId, parentId: remapParentId(n.parentId) };
+            });
+            const remappedLayers = {};
+            Object.entries(loaded.layers).forEach(([oldId, l]) => {
+                if (!l) return;
+                const newId = idMap[oldId];
+                remappedLayers[newId] = { ...l, id: newId, parentId: remapParentId(l.parentId) };
+            });
+            const remappedPorts = {};
+            Object.entries(loaded.ports).forEach(([oldId, p]) => {
+                if (!p) return;
+                const newId = idMap[oldId];
+                remappedPorts[newId] = { ...p, id: newId, nodeId: idMap[p.nodeId] || p.nodeId };
+            });
+            const remappedLinks = {};
+            Object.entries(loaded.links).forEach(([oldId, l]) => {
+                if (!l) return;
+                const newId = idMap[oldId];
+                const proxyOverrides = l.proxyOverrides
+                    ? Object.fromEntries(Object.entries(l.proxyOverrides).map(([wid, ov]) => [windowIdMap[wid] || wid, ov]))
+                    : undefined;
+                remappedLinks[newId] = {
+                    ...l, id: newId,
+                    sourcePortId: idMap[l.sourcePortId] || l.sourcePortId,
+                    targetPortId: idMap[l.targetPortId] || l.targetPortId,
+                    ...(proxyOverrides ? { proxyOverrides } : {})
+                };
+            });
+
+            // Слияние словарей + авто-раздвижка коллизий на корне каждого
+            // уровня — как в LOAD_STATE, теперь на ОБЪЕДИНЁННОМ наборе
+            // (существующее содержимое активного проекта + новоприбывшее).
+            const mergedNodesRaw = { ...activeProj.nodes, ...remappedNodes };
+            const mergedLayers = { ...activeProj.layers, ...remappedLayers };
+            const G = getGeometry();
+            const mergedNodes = (G && G.resolveContextCollisions) ? G.resolveContextCollisions(mergedNodesRaw, mergedLayers) : mergedNodesRaw;
+            const mergedPorts = { ...activeProj.ports, ...remappedPorts };
+            const mergedLinks = { ...activeProj.links, ...remappedLinks };
+            const mergedLevelWindows = { ...activeProj.levelWindows, ...newWindows };
+            const mergedLevelViews = { ...activeProj.levelViews };
+            Object.keys(newWindows).forEach(wid => { if (!mergedLevelViews[wid]) mergedLevelViews[wid] = makeLevelView(); });
+
+            // externalGateways файла (Фаза 6.2) — portId уже смотрит на СТАРЫЙ
+            // id, переписывается той же картой; оседают в pendingGateways
+            // активного проекта, reconcilePendingGateways сразу пробует примирить.
+            const mergedPendingGateways = { ...(activeProj.pendingGateways || {}) };
+            if (Array.isArray(data.externalGateways)) {
+                data.externalGateways.forEach(gw => {
+                    if (!gw || !gw.linkId || !gw.portId) return;
+                    const newPortId = idMap[gw.portId];
+                    if (!newPortId) return;
+                    mergedPendingGateways[gw.linkId] = { ...gw, portId: newPortId };
+                });
+            }
+
+            const historyState = saveHistory(mergeActiveView(m), 'Слияние проекта из файла');
+            const mergedActiveProj = {
+                ...activeProj,
+                ...historyState,
+                nodes: mergedNodes, layers: mergedLayers, ports: mergedPorts, links: mergedLinks,
+                levelWindows: mergedLevelWindows, levelViews: mergedLevelViews,
+                pendingGateways: mergedPendingGateways
+            };
+
+            const next = { ...m, projects: { ...m.projects, [m.activeProjectId]: mergedActiveProj }, selectedIds: [] };
+            return reconcilePendingGateways(next);
         }
         case 'REMOVE_PROJECT': {
             const id = (action.payload && action.payload.id) || m.activeProjectId;
@@ -3611,6 +4170,43 @@ const multiReducer = (m, action) => {
             if (!id || !m.projects[id] || id === m.activeProjectId) return m;
             return { ...m, activeProjectId: id, selectedIds: [], isolatedIds: [] };
         }
+        case 'LOAD_GLOBAL_STATE': {
+            // Глобальный импорт рабочего пространства (Фаза 6.4): файл от
+            // handleExportWorkspace — все проекты разом, а не один. Полностью
+            // ЗАМЕНЯЕТ текущее рабочее пространство (деструктивно — UI
+            // спрашивает подтверждение ДО диспатча, здесь его уже нет).
+            const data = action.payload;
+            if (!data || !data.projects || !Array.isArray(data.projectOrder)) return m;
+            const { projects, projectOrder } = sanitizeLoadedProjects(data.projects, data.projectOrder);
+            if (projectOrder.length === 0) return m;
+            const activeProjectId = projects[data.activeProjectId] ? data.activeProjectId : projectOrder[0];
+            const next = pruneContainerIsolation({
+                ...m,
+                projects, projectOrder, activeProjectId,
+                projectCounter: data.projectCounter || projectOrder.length,
+                crossProjectLinks: data.crossProjectLinks || {},
+                canvas: data.canvas || m.canvas,
+                selectedIds: [], isolatedIds: [],
+                interactionMode: 'default',
+                pendingConnection: null,
+                dragGesture: null
+            });
+            // Файл мог сохранить неразрешённые штекеры с прошлого раза —
+            // если обе половины нашлись внутри ЭТОГО ЖЕ импорта, примиряем сразу.
+            return reconcilePendingGateways(next);
+        }
+        case 'REPARENT_ENTITY': {
+            // Кросс-проектный перенос (Фаза 6.3): targetProjectId задан и
+            // отличается от sourceProjectId — перехватывается ЗДЕСЬ, до
+            // delegateToActiveProject, поскольку трогает ДВА проекта разом.
+            // Обычный (внутрипроектный) REPARENT_ENTITY, для которого этих
+            // полей нет, падает в default — поведение не меняется.
+            const p = action.payload || {};
+            if (p.sourceProjectId && p.targetProjectId && p.sourceProjectId !== p.targetProjectId) {
+                return applyCrossProjectReparent(m, p);
+            }
+            return delegateToActiveProject(m, action);
+        }
         default:
             return delegateToActiveProject(m, action);
     }
@@ -3618,6 +4214,36 @@ const multiReducer = (m, action) => {
 
 // Начальное мультипроектное состояние: сохранённое v12 -> санитизация;
 // иначе легаси (v9/v10/v11 через getInitialState) -> обёртка в один проект.
+/**
+ * Санитизация словаря проектов из сырых сохранённых/импортированных данных:
+ * нормализация окон уровней и связей, транзиентные поля (past/future) с
+ * чистого листа. Общая для загрузки из localStorage (getInitialMultiState) и
+ * глобального импорта рабочего пространства (LOAD_GLOBAL_STATE, Фаза 6.4) —
+ * оба читают тот же формат v12-мультипроектного JSON.
+ * @param {Object<string, Object>} rawProjects
+ * @param {Array<string>} rawProjectOrder
+ * @returns {{ projects: Object<string, Object>, projectOrder: Array<string> }}
+ */
+const sanitizeLoadedProjects = (rawProjects, rawProjectOrder) => {
+    const projects = {};
+    Object.entries(rawProjects || {}).forEach(([pid, p]) => {
+        if (!p) return;
+        const norm = normalizeLevelWindows(p.levelWindows, p.nodes, p.layers, p.levelViews);
+        projects[pid] = {
+            ...p,
+            id: pid,
+            origin: p.origin || { x: 0, y: 0 },
+            links: normalizeLinks(p.links),
+            levelWindows: norm.levelWindows,
+            levelViews: norm.levelViews,
+            past: [], future: [],
+            historyLogs: p.historyLogs || ['Проект загружен']
+        };
+    });
+    const projectOrder = (rawProjectOrder || []).filter(pid => projects[pid]);
+    return { projects, projectOrder };
+};
+
 const getInitialMultiState = () => {
     if (typeof localStorage !== 'undefined') {
         try {
@@ -3625,22 +4251,7 @@ const getInitialMultiState = () => {
             if (savedMulti) {
                 const parsed = JSON.parse(savedMulti);
                 if (parsed && parsed.projects && Array.isArray(parsed.projectOrder)) {
-                    const projects = {};
-                    Object.entries(parsed.projects).forEach(([pid, p]) => {
-                        if (!p) return;
-                        const norm = normalizeLevelWindows(p.levelWindows, p.nodes, p.layers, p.levelViews);
-                        projects[pid] = {
-                            ...p,
-                            id: pid,
-                            origin: p.origin || { x: 0, y: 0 },
-                            links: normalizeLinks(p.links),
-                            levelWindows: norm.levelWindows,
-                            levelViews: norm.levelViews,
-                            past: [], future: [],
-                            historyLogs: p.historyLogs || ['Проект загружен']
-                        };
-                    });
-                    const projectOrder = parsed.projectOrder.filter(pid => projects[pid]);
+                    const { projects, projectOrder } = sanitizeLoadedProjects(parsed.projects, parsed.projectOrder);
                     const activeProjectId = projects[parsed.activeProjectId]
                         ? parsed.activeProjectId
                         : (projectOrder[0] || null);
@@ -3671,6 +4282,7 @@ const getInitialMultiState = () => {
                         aiChatHistory: parsed.aiChatHistory || defaultState.aiChatHistory,
                         aiChatHistoryByNode: parsed.aiChatHistoryByNode || {},
                         aiChatSessionsByNode: parsed.aiChatSessionsByNode || {},
+                        crossProjectLinks: parsed.crossProjectLinks || {},
                         ui,
                         projects,
                         projectOrder,
@@ -3694,6 +4306,6 @@ const getInitialMultiState = () => {
     return migrateToV13(wrapFlatToMulti(getInitialState()));
 };
 
-const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, FORMAT_VERSION_V13, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, migrateToV13, normalizeLevelWindows };
+const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, FORMAT_VERSION_V13, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, migrateToV13, normalizeLevelWindows, reconcilePendingGateways, applyRemoveProject };
 if (typeof window !== 'undefined') window.ArchitectorStore = ArchitectorStore;
 if (typeof module !== 'undefined') module.exports = ArchitectorStore;

@@ -227,16 +227,17 @@ function Port(props) {
 
             const H = window.HierarchyUtils;
             let targetPortId = null;
+            let targetProjectId = projectId;
             let minDist = 40 / zoom; // Snapping distance (40 screen pixels)
-            
+
             const { ports, nodes, layers } = state;
-            
+
             // 1. Поиск ближайшего существующего порта (на любом уровне / окне, узла или слоя)
             Object.values(ports || {}).forEach(port => {
                 if (port.id === data.id) return;
                 const host = (nodes && nodes[port.nodeId]) || (layers && layers[port.nodeId]);
                 if (!host) return;
-                
+
                 const absPos = H ? H.getPortWorldCoordinates(port.id, state) : null;
                 if (!absPos) return;
 
@@ -244,6 +245,7 @@ function Port(props) {
                 if (dist < minDist) {
                     minDist = dist;
                     targetPortId = port.id;
+                    targetProjectId = projectId;
                 }
             });
 
@@ -256,15 +258,51 @@ function Port(props) {
                         if (dist < minDist) {
                             minDist = dist;
                             targetPortId = proxy.myPortId !== data.id ? proxy.myPortId : proxy.otherPortId;
+                            targetProjectId = projectId;
                         }
                     });
                 });
             }
-            
-            if (targetPortId && ports && ports[targetPortId]) {
-                dispatch({ 
-                    type: 'ADD_LINK', 
-                    payload: { sourcePortId: data.id, targetPortId: targetPortId } 
+
+            // 1.2 Кросс-проектный порт (Фаза 6.1): те же критерии, что 1., но
+            // на портах ДРУГИХ проектов — их окна уже рисуются на этом же
+            // общем холсте в единой мировой системе координат (Canvas.js).
+            // Только реальные порты, не чужие прокси — прокси уже обозначает
+            // существующую связь, не место для новой.
+            if (!targetPortId && H && H.getPortWorldCoordinates) {
+                (state.projectOrder || []).forEach(pid => {
+                    if (pid === projectId) return;
+                    const otherView = getProjectFlatView(pid);
+                    if (!otherView || !otherView.ports) return;
+                    Object.values(otherView.ports).forEach(port => {
+                        const host = (otherView.nodes && otherView.nodes[port.nodeId]) || (otherView.layers && otherView.layers[port.nodeId]);
+                        if (!host) return;
+                        const absPos = H.getPortWorldCoordinates(port.id, otherView);
+                        if (!absPos) return;
+                        const dist = Math.hypot(p2x - absPos.x, p2y - absPos.y);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            targetPortId = port.id;
+                            targetProjectId = pid;
+                        }
+                    });
+                });
+            }
+
+            if (targetPortId && targetProjectId !== projectId) {
+                dispatch({
+                    type: 'ADD_CROSS_PROJECT_LINK',
+                    payload: {
+                        sourceProjectId: projectId,
+                        sourcePortId: data.id,
+                        targetProjectId,
+                        targetPortId
+                    }
+                });
+            } else if (targetPortId && ports && ports[targetPortId]) {
+                dispatch({
+                    type: 'ADD_LINK',
+                    payload: { sourcePortId: data.id, targetPortId: targetPortId }
                 });
             } else {
                 // 2. Дроп внутрь контура: Приоритет 1 = Узел, Приоритет 2 = Слой

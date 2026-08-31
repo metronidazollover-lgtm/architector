@@ -265,6 +265,9 @@ function ContextActionBar() {
     const barRef = React.useRef(null);
     // Импорт/экспорт проекта переехали сюда из тулбара (панель свойств проекта).
     const projectFileInputRef = React.useRef(null);
+    // Глобальный импорт рабочего пространства (Фаза 6.4) — отдельный input,
+    // чтобы не путать с локальным (разный формат файла, разный обработчик).
+    const workspaceFileInputRef = React.useRef(null);
 
     // Определяем, какому проекту принадлежит выбранный элемент
     const selectedPid = React.useMemo(() => {
@@ -307,6 +310,47 @@ function ContextActionBar() {
     const handleExportProject = () => {
         // Экспортируется АКТИВНЫЙ проект (плоский формат, обратно совместимый);
         // окна уровней и настройки проекта включены для точного восстановления
+
+        // externalGateways (Фаза 6.2): живые crossProjectLinks, задевающие
+        // ЭТОТ проект, не входят в его собственный `links` (глобальное поле) —
+        // без этого шага половина связи молча терялась бы при экспорте одного
+        // проекта. Каждая запись — воспроизводимый «разрыв»: тот же linkId,
+        // что был у живой связи, чтобы повторный импорт ОБЕИХ половин (в любом
+        // порядке) мог собрать связь заново (reconcilePendingGateways).
+        const H = window.HierarchyUtils;
+        const externalGateways = [];
+        Object.values(rootState.crossProjectLinks || {}).forEach(link => {
+            if (!link) return;
+            const isSource = link.sourceProjectId === selectedPid;
+            if (!isSource && link.targetProjectId !== selectedPid) return;
+            const portId = isSource ? link.sourcePortId : link.targetPortId;
+            const remoteProjectId = isSource ? link.targetProjectId : link.sourceProjectId;
+            const remotePortId = isSource ? link.targetPortId : link.sourcePortId;
+            const remoteProj = rootState.projects && rootState.projects[remoteProjectId];
+            const remotePort = remoteProj && remoteProj.ports && remoteProj.ports[remotePortId];
+
+            let edge = 'right';
+            let fraction = 0.5;
+            const myPort = state.ports && state.ports[portId];
+            const myNode = myPort && ((state.nodes && state.nodes[myPort.nodeId]) || (state.layers && state.layers[myPort.nodeId]));
+            if (H && myNode) {
+                const lvl = H.getEntityLevel(myNode.id, state.nodes, state.layers, state.levelWindows);
+                const win = H.getWindowOfLevel(lvl, state.levelWindows);
+                const proxy = win ? H.getExternalProxyForLink(link.id, win.id, selectedPid, rootState) : null;
+                if (proxy) { edge = proxy.edge; fraction = proxy.slotFraction; }
+            }
+
+            externalGateways.push({
+                linkId: link.id, portId,
+                direction: isSource ? 'out' : 'in',
+                remoteProjectId, remotePortId,
+                remoteProjectName: (remoteProj && remoteProj.projectName) || '',
+                remotePortName: (remotePort && remotePort.name) || '',
+                linkStyle: link.linkStyle, color: link.color, name: link.name, content: link.content,
+                edge, fraction
+            });
+        });
+
         const data = {
             formatVersion: state.formatVersion || 10,
             layers: state.layers,
@@ -319,7 +363,8 @@ function ContextActionBar() {
             projectColor: state.projectColor,
             projectFontFamily: state.projectFontFamily,
             projectContent: state.projectContent,
-            canvas: state.canvas
+            canvas: state.canvas,
+            ...(externalGateways.length ? { externalGateways } : {})
         };
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -340,12 +385,79 @@ function ContextActionBar() {
         reader.onload = (event) => {
             try {
                 const data = JSON.parse(event.target.result);
+                if (data.kind === 'global') {
+                    console.error('Это файл ВСЕГО рабочего пространства — используйте «Импортировать всё», а не «Импорт проекта»');
+                    return;
+                }
                 if (data.nodes && data.ports && data.links) {
-                    // Импорт ДОБАВЛЯЕТ новый проект на общий холст (правее
-                    // существующих), а не заменяет текущий
-                    dispatch({ type: 'ADD_PROJECT_FROM_FILE', payload: data });
+                    // Выбор варианта локального импорта (Фаза 6.5): «слить в
+                    // активный» (ремап id, MERGE_PROJECT_FROM_FILE) или «добавить
+                    // как новый проект» (раздельные словари, ADD_PROJECT_FROM_FILE,
+                    // как и раньше) — второе остаётся действием по умолчанию
+                    // (Отмена), чтобы не менять привычное поведение кнопки.
+                    if (window.confirm('ОК — слить содержимое файла с активным проектом (ремап id, коллизии позиций разводятся автоматически).\nОтмена — добавить как отдельный НОВЫЙ проект на холст (как раньше).')) {
+                        // Слияние трогает АКТИВНЫЙ проект напрямую, минуя
+                        // FOR_PROJECT-обёртку локального dispatch (см. его
+                        // определение выше) — у одно-проектного reducer нет
+                        // такого экшена, обёрнутый вызов молча ушёл бы в никуда.
+                        rawDispatch({ type: 'MERGE_PROJECT_FROM_FILE', payload: data });
+                    } else {
+                        dispatch({ type: 'ADD_PROJECT_FROM_FILE', payload: data });
+                    }
                 } else {
                     console.error('Некорректный файл проекта');
+                }
+            } catch (err) {
+                console.error('Ошибка чтения файла', err);
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    };
+
+    // Глобальный экспорт/импорт рабочего пространства целиком (Фаза 6.4):
+    // все проекты разом, включая кросс-проектные связи между ними — их файл
+    // ОДНОГО проекта (handleExportProject) в принципе не может унести, они
+    // не принадлежат ни одному проекту по отдельности.
+    const handleExportWorkspace = () => {
+        const data = {
+            formatVersion: rootState.formatVersion || 13,
+            kind: 'global',
+            projects: rootState.projects,
+            projectOrder: rootState.projectOrder,
+            activeProjectId: rootState.activeProjectId,
+            projectCounter: rootState.projectCounter,
+            crossProjectLinks: rootState.crossProjectLinks,
+            canvas: rootState.canvas
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `architector_workspace_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    const handleImportWorkspace = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const data = JSON.parse(event.target.result);
+                if (data.projects && Array.isArray(data.projectOrder)) {
+                    if (window.confirm('Импорт заменит ВСЁ текущее рабочее пространство — все открытые проекты и связи между ними. Действие нельзя отменить (Ctrl+Z не восстановит). Продолжить?')) {
+                        // Глобальный импорт трогает ВСЁ пространство разом, а не
+                        // один проект — не должен уйти через FOR_PROJECT-обёртку
+                        // локального dispatch (см. его определение выше).
+                        rawDispatch({ type: 'LOAD_GLOBAL_STATE', payload: data });
+                    }
+                } else {
+                    console.error('Некорректный файл рабочего пространства');
                 }
             } catch (err) {
                 console.error('Ошибка чтения файла', err);
@@ -925,6 +1037,33 @@ function ContextActionBar() {
                         onClick={handleExportProject}
                     >
                         <div className="icon-download text-lg"></div>
+                    </button>
+
+                    {/* Разделитель: ниже — глобальный импорт/экспорт ВСЕГО
+                        рабочего пространства (Фаза 6.4), не только этого проекта */}
+                    <div className="w-px h-6 bg-white/10 mx-0.5"></div>
+
+                    <button
+                        className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+                        title="Импортировать всё рабочее пространство (заменит текущее)"
+                        onClick={() => workspaceFileInputRef.current?.click()}
+                    >
+                        <div className="icon-cloud-upload text-lg"></div>
+                    </button>
+                    <input
+                        type="file"
+                        ref={workspaceFileInputRef}
+                        className="hidden"
+                        accept=".json"
+                        onChange={handleImportWorkspace}
+                    />
+
+                    <button
+                        className="btn w-10 h-10 p-0 rounded-lg flex items-center justify-center text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+                        title="Экспортировать всё рабочее пространство (все проекты и связи между ними)"
+                        onClick={handleExportWorkspace}
+                    >
+                        <div className="icon-cloud-download text-lg"></div>
                     </button>
 
                     <div className="flex-1"></div>

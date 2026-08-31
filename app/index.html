@@ -122,25 +122,36 @@
         outline: 2px solid color-mix(in srgb, var(--parent-pulse-color, #007AFF) 50%, transparent) !important;
         outline-offset: 4px !important;
     }
+
+    /* Кросс-проектная связь (Фаза 6.1): единственный визуальный маркер того,
+       что эта связь/прокси уходит за пределы проекта — сама геометрия и
+       остальной стиль (цвет, штрих) идентичны обычной межуровневой связи. */
+    @keyframes cross-project-link-pulse {
+        0%, 100% { opacity: 0.55; }
+        50% { opacity: 1; }
+    }
+    .cross-project-link-pulse {
+        animation: cross-project-link-pulse 1.6s ease-in-out infinite;
+    }
     </style>
 </head>
 <body>
     <div id="root"></div>
     <script type="text/babel" src="utils/geometry.js?v=10.35"></script>
-    <script type="text/babel" src="utils/hierarchy.js?v=10.39"></script>
-    <script type="text/babel" src="store/reducer.js?v=10.45"></script>
+    <script type="text/babel" src="utils/hierarchy.js?v=10.42"></script>
+    <script type="text/babel" src="store/reducer.js?v=10.50"></script>
     <script type="text/babel" src="store/engine.js?v=10.33"></script>
     <script type="text/babel" src="store/Store.js?v=10.33"></script>
-    <script type="text/babel" src="components/Layer.js?v=10.38"></script>
+    <script type="text/babel" src="components/Layer.js?v=10.39"></script>
     <script type="text/babel" src="components/Link.js?v=10.33"></script>
-    <script type="text/babel" src="components/Port.js?v=10.33"></script>
+    <script type="text/babel" src="components/Port.js?v=10.34"></script>
     <script type="text/babel" src="components/NodePreview.js?v=10.33"></script>
     <script type="text/babel" src="components/OutlinerTree.js?v=10.35"></script>
     <script type="text/babel" src="components/AIAgentNodeContent.js?v=10.36"></script>
-    <script type="text/babel" src="components/Node.js?v=10.36"></script>
-    <script type="text/babel" src="components/LevelWindow.js?v=10.36"></script>
-    <script type="text/babel" src="components/Canvas.js?v=10.36"></script>
-    <script type="text/babel" src="components/ContextActionBar.js?v=10.35"></script>
+    <script type="text/babel" src="components/Node.js?v=10.37"></script>
+    <script type="text/babel" src="components/LevelWindow.js?v=10.39"></script>
+    <script type="text/babel" src="components/Canvas.js?v=10.37"></script>
+    <script type="text/babel" src="components/ContextActionBar.js?v=10.39"></script>
     <script type="text/babel" src="components/Toolbar.js?v=10.34"></script>
     <script type="text/babel" src="components/Library.js?v=10.33"></script>
     <script type="text/babel" src="app.js?v=10.33"></script>

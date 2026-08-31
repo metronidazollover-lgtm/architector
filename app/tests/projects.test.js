@@ -11,7 +11,7 @@ global.HierarchyUtils = HierarchyUtils;
 
 const {
     defaultState, reducer, multiReducer, mergeActiveView, wrapFlatToMulti,
-    makeProject, PROJECT_FIELDS
+    makeProject, PROJECT_FIELDS, reconcilePendingGateways, projectFlatView
 } = require('../store/reducer.js');
 
 const makeFlat = () => ({
@@ -416,5 +416,661 @@ test('Окна: MOVE_LEVEL_WINDOW и UPDATE_LEVEL_PROPERTIES адресуютс�
 
     assert.equal(m.projects[pidA].levelViews[winA.id].isCollapsed, true, 'окно проекта A свернулось');
     assert.equal(m.projects[pidB].levelViews[winB.id].isCollapsed, false, 'окно проекта B не свернулось');
+});
+
+// === Фаза 6.1: кросс-проектные связи ===
+
+const makeTwoProjectsWithPorts = () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, {
+        type: 'FOR_PROJECT',
+        payload: { projectId: pidA, action: { type: 'ADD_PORT', payload: { id: 'portA1', nodeId: 'nodeA', name: 'PortA1' } } }
+    });
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+    m = multiReducer(m, {
+        type: 'FOR_PROJECT',
+        payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'Node B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } }
+    });
+    m = multiReducer(m, {
+        type: 'FOR_PROJECT',
+        payload: { projectId: pidB, action: { type: 'ADD_PORT', payload: { id: 'portB1', nodeId: 'nodeB', name: 'PortB1' } } }
+    });
+    return { m, pidA, pidB };
+};
+
+test('ADD_CROSS_PROJECT_LINK: связывает порты двух разных проектов, живёт в корне вне PROJECT_FIELDS', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const ids = Object.keys(m1.crossProjectLinks);
+    assert.equal(ids.length, 1, 'ровно одна кросс-проектная связь');
+    const link = m1.crossProjectLinks[ids[0]];
+    assert.equal(link.sourceProjectId, pidA);
+    assert.equal(link.sourcePortId, 'portA1');
+    assert.equal(link.targetProjectId, pidB);
+    assert.equal(link.targetPortId, 'portB1');
+    assert.equal(Object.keys(m1.projects[pidA].links).length, 0, 'связь НЕ попала в links ни одного из проектов');
+    assert.equal(Object.keys(m1.projects[pidB].links).length, 0);
+});
+
+test('ADD_CROSS_PROJECT_LINK: отклоняется — тот же проект, несуществующий порт, несуществующий проект', () => {
+    const { m: m0, pidA } = makeTwoProjectsWithPorts();
+    const sameProject = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidA, targetPortId: 'portA1' }
+    });
+    assert.equal(sameProject, m0, 'no-op: source === target project');
+
+    const badPort = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: 'ghost-project', targetPortId: 'ghost-port' }
+    });
+    assert.equal(badPort, m0, 'no-op: несуществующий проект');
+});
+
+test('REMOVE_CROSS_PROJECT_LINK: удаляет по id, no-op на отсутствующем id', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m1.crossProjectLinks)[0];
+    const m2 = multiReducer(m1, { type: 'REMOVE_CROSS_PROJECT_LINK', payload: linkId });
+    assert.deepEqual(m2.crossProjectLinks, {});
+    const m3 = multiReducer(m2, { type: 'REMOVE_CROSS_PROJECT_LINK', payload: linkId });
+    assert.equal(m3, m2, 'no-op: связь уже удалена');
+});
+
+test('UPDATE_CROSS_PROJECT_PROXY_PORT: пишет ручной оверрайд прокси в саму связь', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m1.crossProjectLinks)[0];
+    const winA = Object.values(m1.projects[pidA].levelWindows)[0];
+    const m2 = multiReducer(m1, {
+        type: 'UPDATE_CROSS_PROJECT_PROXY_PORT',
+        payload: { linkId, windowId: winA.id, edge: 'top', fraction: 0.25 }
+    });
+    assert.deepEqual(m2.crossProjectLinks[linkId].proxyOverrides[winA.id], { edge: 'top', fraction: 0.25 });
+});
+
+test('applyRemoveProject: удаление одной стороны демоутит связь в pendingGateways уцелевшего проекта', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m1.crossProjectLinks)[0];
+
+    const m2 = multiReducer(m1, { type: 'REMOVE_PROJECT', payload: { id: pidB } });
+    assert.deepEqual(m2.crossProjectLinks, {}, 'живая связь исчезла');
+    const gateway = m2.projects[pidA].pendingGateways[linkId];
+    assert.ok(gateway, 'демоутилась в pendingGateways проекта A');
+    assert.equal(gateway.portId, 'portA1', 'локальный порт — тот, что остался в A');
+    assert.equal(gateway.direction, 'out', 'A была sourceProjectId связи');
+    assert.equal(gateway.remoteProjectId, pidB);
+    assert.equal(gateway.remotePortId, 'portB1');
+    assert.equal(gateway.remoteProjectName, m1.projects[pidB].projectName);
+    assert.equal(gateway.remotePortName, 'PortB1');
+    assert.ok(['top', 'bottom', 'left', 'right'].includes(gateway.edge), 'грань по умолчанию проставлена');
+
+    // Удаление ВТОРОЙ (уже единственной оставшейся) стороны не оставляет мусора
+    const m3 = multiReducer(m2, { type: 'REMOVE_PROJECT', payload: { id: pidA } });
+    assert.equal(m3.projects[pidA], undefined);
+    assert.deepEqual(m3.crossProjectLinks, {});
+});
+
+test('HierarchyUtils.getExternalProxyPortsForWindow: прокси появляется на правильном окне с обеих сторон', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m1.crossProjectLinks)[0];
+    const winA = Object.values(m1.projects[pidA].levelWindows)[0];
+    const winB = Object.values(m1.projects[pidB].levelWindows)[0];
+
+    const proxiesA = HierarchyUtils.getExternalProxyPortsForWindow(winA.id, pidA, m1);
+    assert.equal(proxiesA.length, 1);
+    assert.equal(proxiesA[0].linkId, linkId);
+    assert.equal(proxiesA[0].isExternal, true);
+    assert.equal(proxiesA[0].otherProjectId, pidB);
+    assert.equal(proxiesA[0].myPortId, 'portA1');
+
+    const proxiesB = HierarchyUtils.getExternalProxyPortsForWindow(winB.id, pidB, m1);
+    assert.equal(proxiesB.length, 1);
+    assert.equal(proxiesB[0].myPortId, 'portB1');
+    assert.equal(proxiesB[0].otherProjectId, pidA);
+
+    // Ручной оверрайд уважается вместо авторасстановки
+    const m2 = multiReducer(m1, {
+        type: 'UPDATE_CROSS_PROJECT_PROXY_PORT',
+        payload: { linkId, windowId: winA.id, edge: 'left', fraction: 0.75 }
+    });
+    const overridden = HierarchyUtils.getExternalProxyPortsForWindow(winA.id, pidA, m2)[0];
+    assert.equal(overridden.edge, 'left');
+    assert.equal(overridden.slotFraction, 0.75);
+
+    // Окно без задействованных сущностей связи прокси не получает
+    const emptyProxies = HierarchyUtils.getExternalProxyPortsForWindow('unknown-window', pidA, m1);
+    assert.deepEqual(emptyProxies, []);
+});
+
+// === Фаза 6.2: externalGateway — примирение штекеров при повторном импорте ===
+
+test('reconcilePendingGateways: две половины с одним linkId в разных проектах собираются в живую связь', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    let m = { ...m0 };
+    m.projects = {
+        ...m.projects,
+        [pidA]: { ...m.projects[pidA], pendingGateways: {
+            'xlink-1': { linkId: 'xlink-1', portId: 'portA1', direction: 'out', remoteProjectId: pidB, remotePortId: 'portB1', remoteProjectName: 'B', remotePortName: 'PortB1', linkStyle: 'orthogonal', color: '#111', name: 'L', edge: 'right', fraction: 0.5 }
+        } },
+        [pidB]: { ...m.projects[pidB], pendingGateways: {
+            'xlink-1': { linkId: 'xlink-1', portId: 'portB1', direction: 'in', remoteProjectId: pidA, remotePortId: 'portA1', remoteProjectName: 'A', remotePortName: 'PortA1', linkStyle: 'orthogonal', color: '#111', name: 'L', edge: 'left', fraction: 0.5 }
+        } }
+    };
+    const m1 = reconcilePendingGateways(m);
+    const link = m1.crossProjectLinks['xlink-1'];
+    assert.ok(link, 'связь пересобрана');
+    assert.equal(link.sourceProjectId, pidA);
+    assert.equal(link.sourcePortId, 'portA1');
+    assert.equal(link.targetProjectId, pidB);
+    assert.equal(link.targetPortId, 'portB1');
+    assert.deepEqual(m1.projects[pidA].pendingGateways, {}, 'штекер A убран');
+    assert.deepEqual(m1.projects[pidB].pendingGateways, {}, 'штекер B убран');
+});
+
+test('reconcilePendingGateways: одиночный штекер (вторая половина не загружена) остаётся висеть', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    let m = { ...m0 };
+    m.projects = { ...m.projects, [pidA]: { ...m.projects[pidA], pendingGateways: {
+        'xlink-1': { linkId: 'xlink-1', portId: 'portA1', direction: 'out', remoteProjectId: pidB, remotePortId: 'portB1', remoteProjectName: 'B', remotePortName: 'PortB1', edge: 'right', fraction: 0.5 }
+    } } };
+    const m1 = reconcilePendingGateways(m);
+    assert.equal(m1, m, 'no-op: только одна сторона');
+    assert.ok(m1.projects[pidA].pendingGateways['xlink-1'], 'штекер никуда не делся');
+});
+
+test('ADD_PROJECT_FROM_FILE: externalGateways файла становятся pendingGateways нового проекта и примиряются с уже висящим штекером', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m1.crossProjectLinks)[0];
+
+    // Проект B удаляется — связь демоутится в pendingGateways проекта A
+    const m2 = multiReducer(m1, { type: 'REMOVE_PROJECT', payload: { id: pidB } });
+    assert.ok(m2.projects[pidA].pendingGateways[linkId], 'штекер на A есть');
+
+    // «Повторный импорт» проекта B из файла, который экспорт (6.2.2) снабдил
+    // бы тем же externalGateways.linkId — именно это поле и делает примирение
+    // возможным, остальное содержимое файла для этого теста не важно
+    const fileData = {
+        nodes: { nodeB: { id: 'nodeB', name: 'Node B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } },
+        ports: { portB1: { id: 'portB1', nodeId: 'nodeB', name: 'PortB1' } },
+        links: {},
+        externalGateways: [
+            { linkId, portId: 'portB1', direction: 'in', remoteProjectId: pidA, remotePortId: 'portA1', remoteProjectName: 'Project A', remotePortName: 'PortA1' }
+        ]
+    };
+    const m3 = multiReducer(m2, { type: 'ADD_PROJECT_FROM_FILE', payload: fileData });
+    const newPid = m3.activeProjectId;
+
+    const link = m3.crossProjectLinks[linkId];
+    assert.ok(link, 'связь автоматически восстановлена при повторном импорте второй половины');
+    assert.equal(link.sourceProjectId, pidA);
+    assert.equal(link.targetProjectId, newPid);
+    assert.deepEqual(m3.projects[pidA].pendingGateways, {}, 'штекер A убран после примирения');
+    assert.deepEqual(m3.projects[newPid].pendingGateways, {}, 'штекер нового проекта убран после примирения');
+});
+
+test('HierarchyUtils.getPendingGatewayProxiesForWindow: висящий штекер рисуется на правильном окне без магистрали', () => {
+    const { m: m0, pidA } = makeTwoProjectsWithPorts();
+    const winA = Object.values(m0.projects[pidA].levelWindows)[0];
+    let m = { ...m0 };
+    m.projects = { ...m.projects, [pidA]: { ...m.projects[pidA], pendingGateways: {
+        'xlink-1': { linkId: 'xlink-1', portId: 'portA1', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'ghost-port', remoteProjectName: 'Призрачный проект', remotePortName: 'Ghost', edge: 'left', fraction: 0.4 }
+    } } };
+    const proxies = HierarchyUtils.getPendingGatewayProxiesForWindow(winA.id, pidA, m);
+    assert.equal(proxies.length, 1);
+    assert.equal(proxies[0].isPending, true);
+    assert.equal(proxies[0].edge, 'left');
+    assert.equal(proxies[0].slotFraction, 0.4);
+    assert.equal(proxies[0].gateway.remoteProjectName, 'Призрачный проект');
+
+    // Порт другого узла того же проекта не заводит штекер на его окне
+    const otherWindow = 'nonexistent-window';
+    assert.deepEqual(HierarchyUtils.getPendingGatewayProxiesForWindow(otherWindow, pidA, m), []);
+});
+
+// === Фаза 6.3: кросс-проектный перенос сущностей (REPARENT_ENTITY + targetProjectId) ===
+
+test('REPARENT_ENTITY (кросс-проектный, Deep): узел с портом переезжает целиком, исчезая из исходного проекта', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_PORT', payload: { id: 'portA', nodeId: 'nodeA', name: 'PortA' } } } });
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'root', mode: 'deep' }
+    });
+
+    assert.equal(m.projects[pidA].nodes.nodeA, undefined, 'узел ушёл из A');
+    assert.equal(m.projects[pidA].ports.portA, undefined, 'порт ушёл вместе с узлом');
+    assert.ok(m.projects[pidB].nodes.nodeA, 'узел появился в B');
+    assert.equal(m.projects[pidB].nodes.nodeA.parentId, 'root');
+    assert.ok(m.projects[pidB].ports.portA, 'порт появился в B');
+    assert.equal(m.projects[pidA].ports.portA, undefined);
+});
+
+test('REPARENT_ENTITY (кросс-проектный, Deep): ветка (узел + дочерний узел) переезжает целиком', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_NODE', payload: { id: 'child', name: 'Child', position: { x: 10, y: 10 }, size: { w: 100, h: 60 }, parentId: 'nodeA' } } } });
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'root', mode: 'deep' }
+    });
+
+    assert.equal(m.projects[pidA].nodes.nodeA, undefined);
+    assert.equal(m.projects[pidA].nodes.child, undefined, 'ребёнок ушёл вместе с веткой');
+    assert.ok(m.projects[pidB].nodes.nodeA);
+    assert.ok(m.projects[pidB].nodes.child);
+    assert.equal(m.projects[pidB].nodes.child.parentId, 'nodeA', 'родство внутри ветки не тронуто');
+});
+
+test('REPARENT_ENTITY (кросс-проектный, Shallow): дети остаются в исходном проекте, усыновляются дедом', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_NODE', payload: { id: 'child', name: 'Child', position: { x: 10, y: 10 }, size: { w: 100, h: 60 }, parentId: 'nodeA' } } } });
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'root', mode: 'shallow' }
+    });
+
+    assert.equal(m.projects[pidA].nodes.nodeA, undefined, 'сама сущность уехала');
+    assert.ok(m.projects[pidA].nodes.child, 'ребёнок остался в A');
+    assert.equal(m.projects[pidA].nodes.child.parentId, 'root', 'усыновлён дедом (root)');
+    assert.ok(m.projects[pidB].nodes.nodeA, 'сущность появилась в B без детей');
+    assert.equal(m.projects[pidB].nodes.child, undefined);
+});
+
+test('REPARENT_ENTITY (кросс-проектный): переносит crossProjectLinks и pendingGateways вместе с портом', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    let m = multiReducer(m0, { type: 'ADD_PROJECT' });
+    const pidC = m.activeProjectId;
+
+    // Живая связь A<->B через portA1; штекер на A, ожидающий porta1-related linkId
+    m = multiReducer(m, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m.crossProjectLinks)[0];
+    m = {
+        ...m,
+        projects: { ...m.projects, [pidA]: { ...m.projects[pidA], pendingGateways: {
+            'xlink-extra': { linkId: 'xlink-extra', portId: 'portA1', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'ghost-port', remoteProjectName: 'Ghost', remotePortName: 'Ghost' }
+        } } }
+    };
+
+    // Узел nodeA (с портом portA1) переезжает из A в C
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidC, targetParentId: 'root', mode: 'deep' }
+    });
+
+    const link = m.crossProjectLinks[linkId];
+    assert.equal(link.sourceProjectId, pidC, 'живая связь переехала на новый projectId вместе с портом');
+    assert.equal(link.sourcePortId, 'portA1');
+    assert.deepEqual(m.projects[pidA].pendingGateways, {}, 'штекер ушёл из A');
+    assert.ok(m.projects[pidC].pendingGateways['xlink-extra'], 'штекер переехал на C вместе с портом');
+});
+
+test('REPARENT_ENTITY (кросс-проектный): targetLevelIndex создаёт/резолвит окно в целевом проекте, targetParentId=узел растит новый уровень', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } } });
+
+    // Перенос nodeA НА УЗЕЛ nodeB целевого проекта — растит уровень 1 в B
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'nodeB', mode: 'deep' }
+    });
+
+    assert.equal(m.projects[pidA].nodes.nodeA, undefined);
+    assert.equal(m.projects[pidB].nodes.nodeA.parentId, 'nodeB');
+    const winsB = Object.values(m.projects[pidB].levelWindows);
+    assert.ok(winsB.some(w => w.levelIndex === 1), 'новое окно уровня 1 достроилось в B под перенесённого ребёнка узла');
+});
+
+test('REPARENT_ENTITY (кросс-проектный): нет проекта-источника/цели — no-op', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    const before = m;
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: 'ghost-project', targetParentId: 'root' }
+    });
+    assert.equal(m, before, 'no-op: целевого проекта не существует');
+});
+
+test('HierarchyUtils.getDropTargetAcrossProjects: находит цель в ЧУЖОМ проекте, помечает projectId', () => {
+    let m = wrapFlatToMulti(makeFlat()); // nodeA в 'root' Главного холста, pos (0,0) size 200x100
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'ADD_PROJECT' }); // окно B ставится ПРАВЕЕ окна A (globalRightEdge)
+    const pidB = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } } });
+
+    // getDropTargetAcrossProjects зовёт window.getProjectFlatView — в Node это
+    // не браузер, стаб делает то же самое, что store/Store.js в реальном приложении.
+    global.window = { getProjectFlatView: (pid) => projectFlatView(m, pid) };
+    try {
+        const viewB = projectFlatView(m, pidB);
+        const winB = Object.values(viewB.levelWindows)[0];
+        // Мировая позиция nodeB зависит от того, куда ADD_PROJECT сдвинул окно
+        // B (globalRightEdge) — нельзя просто взять его ЛОКАЛЬНЫЕ (0,0).
+        const boundsB = HierarchyUtils.getEntityWorldBounds('nodeB', viewB);
+
+        // pickBest требует геометрического пересечения КОНТУРА перетаскиваемой
+        // сущности с кандидатом (указатель — только тай-брейк при наложении) —
+        // в живом жесте контур уже следует за мышью (MOVE_SELECTED на
+        // mousemove), здесь эмулируем тем же: подвигаем nodeA к nodeB.
+        // position — ЛОКАЛЬНЫЕ координаты внутри СВОЕГО окна (A), а не мировые —
+        // пересчёт через рамку окна A, как это делает computeDropPositions.
+        const viewA0 = projectFlatView(m, pidA);
+        const winA = Object.values(viewA0.levelWindows)[0];
+        const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
+        m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'UPDATE_NODE', payload: { id: 'nodeA', updates: { position: {
+            x: boundsB.x - winA.position.x - borderW,
+            y: boundsB.y - winA.position.y - borderW - headerH
+        } }, skipHistory: true } } } });
+
+        // Указатель — точно на nodeB (узел-приёмник в ДРУГОМ проекте)
+        const target = HierarchyUtils.getDropTargetAcrossProjects(
+            ['nodeA'], { x: boundsB.x + boundsB.w / 2, y: boundsB.y + boundsB.h / 2 }, m, pidA, { dragDropMode: true }
+        );
+        assert.ok(target, 'цель найдена');
+        assert.equal(target.projectId, pidB, 'цель — из проекта B, не A');
+        assert.equal(target.kind, 'node');
+        assert.equal(target.id, 'nodeB');
+        assert.equal(target.valid, true);
+
+        // Пустое место окна проекта B (вдали от nodeB, внутри тела окна) — цель
+        // window; isMove не путает номер уровня с id окна (регрессия 6.3.1: у
+        // обоих проектов Главный холст — levelIndex 0, но это РАЗНЫЕ окна).
+        // nodeA возвращается на своё исходное место — иначе dragRect остался бы
+        // наложен на nodeB независимо от точки указателя (pickBest игнорирует
+        // указатель для node/layer-кандидатов, он только для тай-брейка).
+        m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'UPDATE_NODE', payload: { id: 'nodeA', updates: { position: { x: 0, y: 0 } }, skipHistory: true } } } });
+        const emptySpot = { x: winB.position.x + winB.size.w - 50, y: winB.position.y + winB.size.h - 50 };
+        const winTarget = HierarchyUtils.getDropTargetAcrossProjects(['nodeA'], emptySpot, m, pidA, { dragDropMode: true });
+        assert.equal(winTarget.kind, 'window');
+        assert.equal(winTarget.id, winB.id);
+        assert.equal(winTarget.projectId, pidB);
+        assert.equal(winTarget.isMove, false, '«своим окном» цель в ДРУГОМ проекте быть не может, даже при том же levelIndex');
+    } finally {
+        delete global.window;
+    }
+});
+
+test('HierarchyUtils.computeDropPositions: с sourceState резолвит позицию переносимого из ЕГО проекта, камеру — из целевого', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+
+    const sourceView = projectFlatView(m, pidA);
+    const targetView = projectFlatView(m, pidB);
+    const winB = Object.values(targetView.levelWindows)[0];
+
+    const positions = HierarchyUtils.computeDropPositions(['nodeA'], winB, targetView, sourceView);
+    assert.ok(positions.nodeA, 'позиция посчитана из sourceState для сущности, которой нет в targetState');
+});
+
+// === Фаза 6.4: глобальный экспорт/импорт рабочего пространства ===
+
+test('LOAD_GLOBAL_STATE: заменяет всё рабочее пространство целиком, включая crossProjectLinks', () => {
+    const { m: source, pidA, pidB } = makeTwoProjectsWithPorts();
+    const withLink = multiReducer(source, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(withLink.crossProjectLinks)[0];
+
+    // «Файл», как его строит handleExportWorkspace — те же поля один в один
+    const fileData = {
+        formatVersion: 13, kind: 'global',
+        projects: withLink.projects, projectOrder: withLink.projectOrder,
+        activeProjectId: withLink.activeProjectId, projectCounter: withLink.projectCounter,
+        crossProjectLinks: withLink.crossProjectLinks, canvas: withLink.canvas
+    };
+
+    // Импорт в СОВЕРШЕННО ДРУГОЕ пространство (третий, не связанный проект)
+    let target = wrapFlatToMulti(makeFlat());
+    target = multiReducer(target, { type: 'SET_SELECTED', payload: 'nodeA' });
+    target = multiReducer(target, { type: 'LOAD_GLOBAL_STATE', payload: fileData });
+
+    assert.deepEqual(target.projectOrder.slice().sort(), [pidA, pidB].sort(), 'ровно те же два проекта, что в файле');
+    assert.equal(target.projects[pidA].ports.portA1.name, 'PortA1', 'содержимое проекта A перенеслось');
+    assert.ok(target.projects[pidB].nodes.nodeB, 'содержимое проекта B перенеслось');
+    assert.ok(target.crossProjectLinks[linkId], 'кросс-проектная связь восстановилась');
+    assert.deepEqual(target.selectedIds, [], 'выделение (указывавшее на сущность из СТАРОГО пространства) сброшено');
+});
+
+test('LOAD_GLOBAL_STATE: невалидный файл — no-op; activeProjectId не из файла — фолбэк на первый проект', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const before = m;
+
+    const m1 = multiReducer(m, { type: 'LOAD_GLOBAL_STATE', payload: { projects: {} } }); // нет projectOrder
+    assert.equal(m1, before, 'no-op: не массив projectOrder');
+
+    const m2 = multiReducer(m, { type: 'LOAD_GLOBAL_STATE', payload: null });
+    assert.equal(m2, before, 'no-op: пустой payload');
+
+    const { m: twoProj, pidA } = makeTwoProjectsWithPorts();
+    const fileData = {
+        projects: twoProj.projects, projectOrder: twoProj.projectOrder,
+        activeProjectId: 'проект-которого-нет-в-файле', projectCounter: 2
+    };
+    const m3 = multiReducer(m, { type: 'LOAD_GLOBAL_STATE', payload: fileData });
+    assert.equal(m3.activeProjectId, m3.projectOrder[0], 'activeProjectId, которого нет среди загруженных, откатился на первый');
+});
+
+test('LOAD_GLOBAL_STATE: неразрешённые pendingGateways в самом файле примиряются сразу после загрузки', () => {
+    const { m: twoProj, pidA, pidB } = makeTwoProjectsWithPorts();
+    let m = {
+        ...twoProj,
+        projects: {
+            ...twoProj.projects,
+            [pidA]: { ...twoProj.projects[pidA], pendingGateways: {
+                'xlink-1': { linkId: 'xlink-1', portId: 'portA1', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'portB1', remoteProjectName: 'B', remotePortName: 'PortB1' }
+            } },
+            [pidB]: { ...twoProj.projects[pidB], pendingGateways: {
+                'xlink-1': { linkId: 'xlink-1', portId: 'portB1', direction: 'in', remoteProjectId: 'ghost2', remotePortId: 'portA1', remoteProjectName: 'A', remotePortName: 'PortA1' }
+            } }
+        }
+    };
+    const fileData = { projects: m.projects, projectOrder: m.projectOrder, activeProjectId: m.activeProjectId, projectCounter: 2 };
+
+    let target = wrapFlatToMulti(makeFlat());
+    target = multiReducer(target, { type: 'LOAD_GLOBAL_STATE', payload: fileData });
+
+    const link = target.crossProjectLinks['xlink-1'];
+    assert.ok(link, 'обе половины штекера нашлись в одном и том же импорте и пересобрались в живую связь');
+    assert.deepEqual(target.projects[pidA].pendingGateways, {});
+    assert.deepEqual(target.projects[pidB].pendingGateways, {});
+});
+
+// === Фаза 6.5: локальный импорт — слияние в активный проект ===
+
+test('MERGE_PROJECT_FROM_FILE: сущности файла получают свежие id, existing-содержимое активного проекта не трогается по id', () => {
+    let m = wrapFlatToMulti(makeFlat()); // активный проект уже содержит nodeA
+    const pidActive = m.activeProjectId;
+
+    const fileData = {
+        nodes: { nodeA: { id: 'nodeA', name: 'Импортированный тёзка', position: { x: 500, y: 500 }, size: { w: 200, h: 100 }, parentId: 'root' } },
+        ports: { portX: { id: 'portX', nodeId: 'nodeA', name: 'PortX' } },
+        links: {}
+    };
+    m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
+
+    const proj = m.projects[pidActive];
+    assert.ok(proj.nodes.nodeA, 'исходный nodeA активного проекта не задет (тот же id, старое имя)');
+    assert.equal(proj.nodes.nodeA.name, 'A');
+    const importedIds = Object.keys(proj.nodes).filter(id => id !== 'nodeA');
+    assert.equal(importedIds.length, 1, 'ровно один новый узел добавился под СВЕЖИМ id');
+    assert.equal(proj.nodes[importedIds[0]].name, 'Импортированный тёзка');
+    const importedPortIds = Object.keys(proj.ports).filter(id => id !== 'portX' && proj.ports[id].nodeId === importedIds[0]);
+    assert.equal(importedPortIds.length, 1, 'порт файла тоже получил свежий id и указывает на remapped nodeId');
+    assert.notEqual(importedPortIds[0], 'portX');
+});
+
+test('MERGE_PROJECT_FROM_FILE: связь внутри файла остаётся целой после ремапа обоих портов', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidActive = m.activeProjectId;
+    const fileData = {
+        nodes: {
+            n1: { id: 'n1', name: 'N1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' },
+            n2: { id: 'n2', name: 'N2', position: { x: 300, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' }
+        },
+        ports: {
+            p1: { id: 'p1', nodeId: 'n1', name: 'Out' },
+            p2: { id: 'p2', nodeId: 'n2', name: 'In' }
+        },
+        links: { l1: { id: 'l1', sourcePortId: 'p1', targetPortId: 'p2', name: 'Link' } }
+    };
+    m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
+
+    const proj = m.projects[pidActive];
+    const linkIds = Object.keys(proj.links);
+    assert.equal(linkIds.length, 1);
+    const link = proj.links[linkIds[0]];
+    assert.notEqual(link.sourcePortId, 'p1', 'sourcePortId переписан на новый id');
+    assert.ok(proj.ports[link.sourcePortId], 'переписанный sourcePortId существует среди перенесённых портов');
+    assert.ok(proj.ports[link.targetPortId], 'переписанный targetPortId существует среди перенесённых портов');
+});
+
+test('MERGE_PROJECT_FROM_FILE: окно того же levelIndex сливается в СУЩЕСТВУЮЩЕЕ; отсутствующий уровень заводит новое', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const pidActive = m.activeProjectId;
+    const activeWinBefore = Object.values(m.projects[pidActive].levelWindows)[0];
+
+    // Файл с двумя уровнями: 0 (сольётся с существующим) и 1 (новый в активном)
+    const fileData = {
+        nodes: {
+            fRoot: { id: 'fRoot', name: 'FRoot', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' },
+            fChild: { id: 'fChild', name: 'FChild', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'fRoot' }
+        },
+        ports: {},
+        links: {},
+        levelWindows: {
+            'file-lvl0': { id: 'file-lvl0', levelIndex: 0, name: 'File L0', position: { x: 0, y: 0 }, size: { w: 1000, h: 700 } },
+            'file-lvl1': { id: 'file-lvl1', levelIndex: 1, name: 'File L1', position: { x: 0, y: 800 }, size: { w: 1000, h: 700 } }
+        },
+        levelViews: {}
+    };
+    m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
+
+    const proj = m.projects[pidActive];
+    const windowsAfter = Object.values(proj.levelWindows);
+    assert.equal(windowsAfter.filter(w => w.levelIndex === 0).length, 1, 'на levelIndex 0 по-прежнему ровно одно окно (слияние, не дубликат)');
+    assert.equal(windowsAfter.filter(w => w.levelIndex === 1).length, 1, 'на levelIndex 1 появилось ровно одно НОВОЕ окно');
+    assert.ok(proj.levelWindows[activeWinBefore.id], 'существующее окно активного проекта пережило слияние (тот же id)');
+
+    const fRootId = Object.keys(proj.nodes).find(id => proj.nodes[id].name === 'FRoot');
+    const fChildId = Object.keys(proj.nodes).find(id => proj.nodes[id].name === 'FChild');
+    // Литерал 'root', не явный id окна — тем же адресуется и родное
+    // содержимое активного проекта (nodeA), иначе resolveContextCollisions
+    // (группировка по СТРОКЕ parentId) не видела бы их общим контекстом.
+    assert.equal(proj.nodes[fRootId].parentId, 'root', '«root» файла слился с Главным холстом активного проекта — литералом root');
+    assert.equal(proj.nodes[fChildId].parentId, fRootId, 'внутреннее родство (узел -> узел) пережило ремап id');
+});
+
+test('MERGE_PROJECT_FROM_FILE: коллизия на корне разводит совпадающие позиции, не трогая структуру', () => {
+    let m = wrapFlatToMulti(makeFlat()); // nodeA: position (0,0) size 200x100, parentId 'root'
+    const pidActive = m.activeProjectId;
+    const fileData = {
+        nodes: { imported: { id: 'imported', name: 'Imported', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } },
+        ports: {}, links: {}
+    };
+    m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
+
+    const proj = m.projects[pidActive];
+    const importedId = Object.keys(proj.nodes).find(id => proj.nodes[id].name === 'Imported');
+    const a = proj.nodes.nodeA.position;
+    const b = proj.nodes[importedId].position;
+    const overlapX = a.x < b.x + 200 && a.x + 200 > b.x;
+    const overlapY = a.y < b.y + 100 && a.y + 100 > b.y;
+    assert.ok(!(overlapX && overlapY), 'resolveContextCollisions развёл наложившиеся друг на друга узлы');
+});
+
+test('MERGE_PROJECT_FROM_FILE: externalGateways файла оседают в pendingGateways с перемаппленным portId и сразу примиряются с ДРУГИМ проектом', () => {
+    // Реалистичный сценарий: где-то ТРЕТИЙ проект C уже хранит штекер (его
+    // контрагент когда-то был удалён/экспортирован без него) — сливаемый файл
+    // несёт вторую половину ТОГО ЖЕ linkId. Обе половины должны остаться в
+    // РАЗНЫХ проектах после слияния (A и C), иначе это уже не кросс-проектная
+    // связь, а обычная внутрипроектная — самой ADD_CROSS_PROJECT_LINK такое
+    // намеренно отклоняет (sourceProjectId !== targetProjectId).
+    let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'ADD_PROJECT' }); // делает C активным
+    const pidC = m.activeProjectId;
+    m = {
+        ...m,
+        projects: { ...m.projects, [pidC]: { ...m.projects[pidC], pendingGateways: {
+            'xlink-shared': { linkId: 'xlink-shared', portId: 'portC', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'importedPort', remoteProjectName: 'Ghost', remotePortName: 'ImportedPort' }
+        } } },
+        activeProjectId: pidA // сливаем В A, штекер-ожидание — на C
+    };
+
+    const fileData = {
+        nodes: { imp: { id: 'imp', name: 'Imp', position: { x: 900, y: 900 }, size: { w: 200, h: 100 }, parentId: 'root' } },
+        ports: { importedPort: { id: 'importedPort', nodeId: 'imp', name: 'ImportedPort' } },
+        links: {},
+        externalGateways: [
+            { linkId: 'xlink-shared', portId: 'importedPort', direction: 'in', remoteProjectId: 'unrelated', remotePortId: 'portC', remoteProjectName: 'X', remotePortName: 'Y' }
+        ]
+    };
+    m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
+
+    const link = m.crossProjectLinks['xlink-shared'];
+    assert.ok(link, 'штекер проекта C и штекер из файла, слитого в A, нашли друг друга по linkId');
+    assert.equal(link.sourceProjectId, pidC);
+    assert.equal(link.sourcePortId, 'portC');
+    assert.equal(link.targetProjectId, pidA, 'слитый порт остался в A — том проекте, куда шло слияние');
+    const importedPortNewId = link.targetPortId;
+    assert.notEqual(importedPortNewId, 'importedPort', 'portId в примирённой связи — уже ПЕРЕМАППЛЕННЫЙ id, а не исходный из файла');
+    assert.ok(m.projects[pidA].ports[importedPortNewId], 'перемаппленный порт реально существует в A');
+    assert.deepEqual(m.projects[pidA].pendingGateways, {});
+    assert.deepEqual(m.projects[pidC].pendingGateways, {});
+});
+
+test('MERGE_PROJECT_FROM_FILE: невалидный файл или отсутствие активного проекта — no-op', () => {
+    let m = wrapFlatToMulti(makeFlat());
+    const before = m;
+    const m1 = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: { nodes: {} } }); // нет ports/links
+    assert.equal(m1, before);
+
+    const noActive = { ...m, activeProjectId: null };
+    const m2 = multiReducer(noActive, { type: 'MERGE_PROJECT_FROM_FILE', payload: { nodes: {}, ports: {}, links: {} } });
+    assert.equal(m2, noActive);
 });
 

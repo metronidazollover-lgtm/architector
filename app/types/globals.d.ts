@@ -10,6 +10,10 @@ interface Window {
     ArchitectorStore: any;
     StoreEngine: any;
     SceneFixtures: any;
+    // Плоский вид произвольного проекта (store/Store.js) — hierarchy.js
+    // зовёт его напрямую в getDropTargetAcrossProjects (Фаза 6.3), других
+    // объявлений из Store.js здесь намеренно нет (вне объёма этой правки).
+    getProjectFlatView: any;
     // Стор доступен инструментам и бенчмаркам
     __archStore: any;
     // Профилирование перерисовок (включается из консоли)
