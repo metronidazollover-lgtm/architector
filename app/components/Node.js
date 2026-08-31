@@ -133,12 +133,17 @@ function NodeView(props) {
         let cumulativeDx = 0;
         let cumulativeDy = 0;
 
-        // Режим переноса (обычный/'shallow') фиксируется на старте жеста, а не
-        // читается заново в момент отпускания мыши: переключить тумблер той же
-        // рукой, что держит перетаскивание, нельзя, но хоткеем — можно, и это
-        // не должно подменить исход уже начатого переноса (PLAN_SHALLOW_TRANSFER_DND.md,
-        // премортем, риск 7).
+        // Тумблер Drag&Drop фиксируется на старте жеста, а не читается заново в
+        // момент отпускания мыши: переключить его той же рукой, что держит
+        // перетаскивание, нельзя, но хоткеем — можно, и это не должно подменить
+        // исход уже начатого переноса (PLAN_SHALLOW_TRANSFER_DND.md, премортем, риск 7).
         const dragDropModeAtStart = (state.ui && state.ui.dragDropMode) || false;
+
+        // Deep/Shallow (v13, REPARENT_ENTITY): в отличие от тумблера DnD, режим
+        // переноса ЖИВОЙ — Alt можно нажать или отпустить в процессе перетаскивания,
+        // не только держать с самого начала (PLAN_V12_CLEAN_HIERARCHY_AND_INTERACTIONS.md,
+        // Фаза 5.2). Читается в момент mouseup, а не фиксируется на старте.
+        let shallowMode = e.altKey;
 
         // ==== Drag&Drop: резолвер цели под перетаскиваемыми элементами ====
         const H = window.HierarchyUtils;
@@ -180,11 +185,12 @@ function NodeView(props) {
             });
         };
         const updateGesture = (ev) => {
+            lastMoveEvent = ev;
             const { st, ids, target } = computeTarget(ev);
-            const key = target ? `${target.kind}:${target.id}:${target.valid}` : 'void';
+            const key = (target ? `${target.kind}:${target.id}:${target.valid}` : 'void') + ':' + (shallowMode ? 'shallow' : 'deep');
             if (key === lastTargetKey) return;
             lastTargetKey = key;
-            dispatch({ type: 'SET_DRAG_GESTURE', payload: { ids, target } });
+            dispatch({ type: 'SET_DRAG_GESTURE', payload: { ids, target, mode: shallowMode ? 'shallow' : 'deep' } });
             // Курсор «нельзя»: в режиме Drag&Drop — пустота и невалидные цели
             const dndOn = !!(st.ui && st.ui.dragDropMode);
             document.body.style.cursor = (dndOn && (!target || !target.valid)) ? 'not-allowed' : '';
@@ -194,6 +200,7 @@ function NodeView(props) {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
             window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
             document.body.style.cursor = '';
         };
 
@@ -203,11 +210,24 @@ function NodeView(props) {
         };
 
         const handleKeyDown = (kev) => {
-            if (kev.key !== 'Escape') return;
-            cleanup();
-            if (hasMoved) restoreGesture();
-            else dispatch({ type: 'SET_DRAG_GESTURE', payload: null });
+            if (kev.key === 'Escape') {
+                cleanup();
+                if (hasMoved) restoreGesture();
+                else dispatch({ type: 'SET_DRAG_GESTURE', payload: null });
+                return;
+            }
+            if (kev.key === 'Alt' && !shallowMode) {
+                shallowMode = true;
+                if (hasMoved) updateGestureThrottled(lastMoveEvent);
+            }
         };
+        const handleKeyUp = (kev) => {
+            if (kev.key === 'Alt' && shallowMode) {
+                shallowMode = false;
+                if (hasMoved) updateGestureThrottled(lastMoveEvent);
+            }
+        };
+        let lastMoveEvent = e;
 
         const handleMouseMove = (moveEvent) => {
             const distMoved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
@@ -272,14 +292,15 @@ function NodeView(props) {
             // Перенос: валидная цель, не являющаяся «своим окном» (обычным перемещением)
             const isTransfer = target && target.valid && !(target.kind === 'window' && target.isMove);
             if (isTransfer && H) {
+                const mode = shallowMode ? 'shallow' : 'deep';
                 const text = H.buildTransferConfirmText
-                    ? H.buildTransferConfirmText(ids, target, st, dragDropModeAtStart)
+                    ? H.buildTransferConfirmText(ids, target, st, mode)
                     : 'Перенести выбранные элементы?';
                 if (window.confirm(text)) {
                     clearGesture();
                     const basePayload = {
                         ids,
-                        mode: dragDropModeAtStart,
+                        mode,
                         // Весь жест (движение + перенос) — один шаг Undo
                         historySnapshot: {
                             nodes: initialSnapshot.nodes,
@@ -288,17 +309,16 @@ function NodeView(props) {
                             links: initialSnapshot.links
                         }
                     };
-                    if (target.kind === 'node') {
-                        const ownerLvl = H.getEntityLevel(target.id, st.nodes, st.layers);
-                        dispatch({ type: 'TRANSFER_NODE', payload: { ...basePayload, targetLevelIndex: ownerLvl + 1, newOwnerId: target.id } });
-                    } else if (target.kind === 'layer') {
-                        dispatch({ type: 'TRANSFER_NODE', payload: { ...basePayload, targetLayerId: target.id } });
+                    // v13 REPARENT_ENTITY: цель узла/слоя — это напрямую targetParentId
+                    // (единственное поле родства), окно резолвится в targetLevelIndex.
+                    if (target.kind === 'node' || target.kind === 'layer') {
+                        dispatch({ type: 'REPARENT_ENTITY', payload: { ...basePayload, targetParentId: target.id } });
                     } else {
                         const win = st.levelWindows[target.id];
                         const positionsById = H.computeDropPositions
                             ? H.computeDropPositions(ids, win, st)
                             : null;
-                        dispatch({ type: 'TRANSFER_NODE', payload: { ...basePayload, targetLevelIndex: win.levelIndex, ...(positionsById ? { positionsById } : {}) } });
+                        dispatch({ type: 'REPARENT_ENTITY', payload: { ...basePayload, targetLevelIndex: win.levelIndex, ...(positionsById ? { positionsById } : {}) } });
                     }
                 } else {
                     restoreGesture();
@@ -323,6 +343,7 @@ function NodeView(props) {
         window.addEventListener('mousemove', handleMouseMove);
         window.addEventListener('mouseup', handleMouseUp);
         window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
     };
 
     const handleResizeMouseDown = (e) => {
