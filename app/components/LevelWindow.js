@@ -156,15 +156,20 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
         const external = (H && H.getExternalProxyPortsForWindow && projectId)
             ? H.getExternalProxyPortsForWindow(windowId, projectId, state)
             : [];
-        const list = external.length ? internal.concat(external) : internal;
+        // Штекеры непримирённых гейтвеев (Фаза 6.2): второй половины связи
+        // сейчас нет — только внутренний отрезок до рамки, без магистрали.
+        const pending = (H && H.getPendingGatewayProxiesForWindow && projectId)
+            ? H.getPendingGatewayProxiesForWindow(windowId, projectId, state)
+            : [];
+        const list = internal.concat(external, pending);
         if (!H || !H.isEntityVisible) return list;
         return list.filter(proxy => {
             const myPort = ports && ports[proxy.myPortId];
             if (myPort && myPort.nodeId && !H.isEntityVisible(myPort.nodeId, state)) return false;
             // Второй конец связи: узел другого уровня (мастер-порты без nodeId не фильтруем).
-            // Для внешнего прокси второй конец лежит в ДРУГОМ проекте — его
-            // видимость проверяет CrossProjectLinkLayer на стороне магистрали.
-            if (proxy.isExternal) return true;
+            // Для внешнего прокси и штекера второй конец либо в ДРУГОМ проекте,
+            // либо вовсе не загружен — видимость нечем проверить, кроме своей стороны.
+            if (proxy.isExternal || proxy.isPending) return true;
             const link = proxy.link;
             if (link) {
                 const otherPortId = link.sourcePortId === proxy.myPortId ? link.targetPortId : link.sourcePortId;
@@ -801,12 +806,13 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                         const myPort = ports && ports[proxy.myPortId];
                         const myNode = myPort && nodes ? nodes[myPort.nodeId] : null;
                         const otherProj = proxy.isExternal && state.projects ? state.projects[proxy.otherProjectId] : null;
-                        const otherPort = proxy.isExternal ? (otherProj && otherProj.ports && otherProj.ports[proxy.otherPortId]) : (ports && ports[proxy.otherPortId]);
+                        const otherPort = proxy.isPending ? null
+                            : (proxy.isExternal ? (otherProj && otherProj.ports && otherProj.ports[proxy.otherPortId]) : (ports && ports[proxy.otherPortId]));
                         const otherNodeId = otherPort ? otherPort.nodeId : null;
                         const bridgeSelected = selectedIds && (
                             selectedIds.includes(proxy.linkId)
                             || selectedIds.includes(proxy.myPortId)
-                            || selectedIds.includes(proxy.otherPortId)
+                            || (!proxy.isPending && selectedIds.includes(proxy.otherPortId))
                             || (myNode && selectedIds.includes(myNode.id))
                             || (otherNodeId && selectedIds.includes(otherNodeId))
                         );
@@ -820,10 +826,13 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                                 stroke={proxy.color || '#38bdf8'}
                                 strokeWidth={bridgeSelected ? '4.5' : '2.5'}
                                 strokeLinecap="round"
-                                strokeDasharray="3, 5"
+                                strokeDasharray={proxy.isPending ? '2, 4' : '3, 5'}
                                 vectorEffect="non-scaling-stroke"
                                 className={proxy.isExternal ? 'cross-project-link-pulse' : ''}
-                                style={{ filter: bridgeSelected ? `drop-shadow(0 0 10px ${proxy.color || '#38bdf8'})` : 'none' }}
+                                style={{
+                                    opacity: proxy.isPending ? 0.55 : 1,
+                                    filter: bridgeSelected ? `drop-shadow(0 0 10px ${proxy.color || '#38bdf8'})` : 'none'
+                                }}
                             />
                         );
                     })}
@@ -838,11 +847,15 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                     style={{
                         left: `${proxy.framePos.x}px`,
                         top: `${proxy.framePos.y}px`,
-                        borderColor: proxy.color || '#38bdf8'
+                        borderColor: proxy.color || '#38bdf8',
+                        opacity: proxy.isPending ? 0.55 : 1,
+                        borderStyle: proxy.isPending ? 'dashed' : 'solid'
                     }}
-                    title={proxy.isExternal
-                        ? `Кросс-проектная связь (${proxy.link.name || proxy.linkId}). Shift+драг — переместить по рамке`
-                        : `Прокси-порт к Уровню ${proxy.targetLevel} (Связь: ${proxy.link.name || proxy.linkId}). Shift+драг — переместить по рамке`}
+                    title={proxy.isPending
+                        ? `Связано с «${proxy.gateway.remotePortName || proxy.gateway.remotePortId || '?'}» в проекте «${proxy.gateway.remoteProjectName || 'без имени'}» (сейчас не загружен)`
+                        : proxy.isExternal
+                            ? `Кросс-проектная связь (${proxy.link.name || proxy.linkId}). Shift+драг — переместить по рамке`
+                            : `Прокси-порт к Уровню ${proxy.targetLevel} (Связь: ${proxy.link.name || proxy.linkId}). Shift+драг — переместить по рамке`}
                     onClick={(e) => {
                         e.stopPropagation();
                         dispatch({ type: 'SET_SELECTED', payload: proxy.linkId });
@@ -911,6 +924,15 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                                 dispatch({
                                     type: 'UPDATE_CROSS_PROJECT_PROXY_PORT',
                                     payload: { linkId: proxy.linkId, windowId: windowData.id, edge: newEdge, fraction }
+                                });
+                                return;
+                            }
+                            // Штекер (Фаза 6.2): один-единственный локальный конец — оверрайд
+                            // не привязан к windowId, второго окна для сравнения нет.
+                            if (proxy.isPending) {
+                                dispatch({
+                                    type: 'UPDATE_PENDING_GATEWAY_PROXY',
+                                    payload: { linkId: proxy.linkId, edge: newEdge, fraction, skipHistory: true }
                                 });
                                 return;
                             }
@@ -1008,7 +1030,11 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                                 const INWARD = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
                                 const b = { x: bp.x, y: bp.y, edge: INWARD[proxy.edge] || 'top' };
                                 const stubPath = G2.buildLinkPath(a, b, proxy.link.linkStyle, 0);
-                                const otherPortId = proxy.link.sourcePortId === proxy.myPortId ? proxy.link.targetPortId : proxy.link.sourcePortId;
+                                // Штекер (Фаза 6.2): второй половины связи нет вовсе — не с
+                                // чем резолвить otherPortId, и незачем: gateway уже несёт
+                                // remotePortName/remoteProjectName для тултипа напрямую.
+                                const otherPortId = proxy.isPending ? null
+                                    : (proxy.link.sourcePortId === proxy.myPortId ? proxy.link.targetPortId : proxy.link.sourcePortId);
                                 // Внешний прокси (Фаза 6.1): второй порт живёт в ДРУГОМ
                                 // проекте, а не в локальном ports этого окна.
                                 const otherProj = proxy.isExternal && state.projects ? state.projects[proxy.otherProjectId] : null;
@@ -1051,11 +1077,21 @@ function LevelWindow({ windowData, nodes, layers, ports, links, selectedIds, iso
                                             strokeWidth={stubSelected ? '4.5' : '2.5'}
                                             strokeLinecap="round"
                                             strokeLinejoin="round"
-                                            strokeDasharray="3, 5"
+                                            strokeDasharray={proxy.isPending ? '2, 4' : '3, 5'}
                                             vectorEffect="non-scaling-stroke"
                                             className={`pointer-events-none transition-all duration-150${proxy.isExternal ? ' cross-project-link-pulse' : ''}`}
-                                            style={{ filter: stubSelected ? `drop-shadow(0 0 10px ${proxy.color || '#38bdf8'})` : 'none' }}
+                                            style={{
+                                                opacity: proxy.isPending ? 0.55 : 1,
+                                                filter: stubSelected ? `drop-shadow(0 0 10px ${proxy.color || '#38bdf8'})` : 'none'
+                                            }}
                                         />
+                                        {/* Маркер разрыва (Фаза 6.2): полая точка на конце штекера
+                                            + тултип с именем второй, сейчас не загруженной стороны. */}
+                                        {proxy.isPending && (
+                                            <circle cx={b.x} cy={b.y} r="4" fill="none" stroke={proxy.color || '#38bdf8'} strokeWidth="1.5" opacity="0.7">
+                                                <title>{`Связано с «${proxy.gateway.remotePortName || proxy.gateway.remotePortId || '?'}» в проекте «${proxy.gateway.remoteProjectName || 'без имени'}» (сейчас не загружен)`}</title>
+                                            </circle>
+                                        )}
                                     </g>
                                 );
                             })}

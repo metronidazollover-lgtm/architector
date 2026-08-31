@@ -282,13 +282,14 @@ architector-main/
 
 Панели (`Toolbar.js`, `Library.js`, `ContextActionBar.js`) на проектно-адресный слой НЕ переведены — используют обычные `useStore()`/`useSelector()`/`useDispatch()` и осознанно работают только с активным проектом.
 
-#### Кросс-проектные связи (Фаза 6.1)
+#### Кросс-проектные связи (Фаза 6.1) и штекеры разрыва (Фаза 6.2)
 
 | Экшен | Payload | Описание |
 |---|---|---|
 | `ADD_CROSS_PROJECT_LINK` | `{ id?, sourceProjectId, sourcePortId, targetProjectId, targetPortId, name?, color?, linkStyle? }` | Создать связь между портами ДВУХ РАЗНЫХ проектов. Обрабатывается в `multiReducer` напрямую (не делегируется) |
 | `REMOVE_CROSS_PROJECT_LINK` | `id` | Удалить кросс-проектную связь |
 | `UPDATE_CROSS_PROJECT_PROXY_PORT` | `{ linkId, windowId, edge, fraction }` | Аналог `UPDATE_PROXY_PORT` для связи из `crossProjectLinks` (пишет в `link.proxyOverrides[windowId]`, а не в `state.links`) |
+| `UPDATE_PENDING_GATEWAY_PROXY` | `{ linkId, edge, fraction, skipHistory? }` | Ручное положение прокси НЕПРИМИРЁННОГО штекера (`project.pendingGateways[linkId]`) — проектное поле, участвует в обычном Undo проекта |
 
 **`state.crossProjectLinks`** — глобальное поле (НЕ `PROJECT_FIELD`), форма как у обычной связи + `sourceProjectId`/`targetProjectId`. Живёт ВНЕ истории Undo обоих проектов, как `canvas`/`containerIsolation`: связь трогает ДВА проекта разом, а `past`/`future` — раздельная история КАЖДОГО проекта, единого места для одного атомарного шага здесь нет.
 
@@ -296,7 +297,9 @@ architector-main/
 
 **Прокси-геометрия расширена на границу проекта (`hierarchy.js`).** `buildWindowProxyGeometry(win, winIndex, item, edge, fraction)` — чистая формула точки на рамке, вынесенная из `getProxyPortsForWindow` (`makeProxy` теперь тонкая обёртка над ней). `getExternalProxyPortsForWindow(windowId, projectId, multiState)` — та же геометрия для `crossProjectLinks`: грань выбирается сравнением МИРОВЫХ центров двух окон по доминирующей оси (между проектами нет общего «уровня», сравнивать нечего). `getExternalProxyForLink(linkId, windowId, projectId, multiState)` — точечный поиск, аналог `getProxyForLink`. `LevelWindow.js` подмешивает внешние прокси к внутренним в `proxyPorts` (единый список, единый рендер внутреннего отрезка); `Canvas.js`'s `CrossProjectLinkLayer` — новый слой магистралей, ОДИН на холст (не на проект, в отличие от `CrossLevelLinkLayer`), резолвящий обе стороны через `getExternalProxyForLink`. Единственное визуальное отличие от обычной межуровневой связи — CSS-класс `cross-project-link-pulse` (keyframe в `index.html`) на обоих сегментах и на самой точке прокси.
 
-**Удаление проекта демоутит связь, а не теряет её.** `applyRemoveProject` для каждой `crossProjectLinks`-записи, задевающей удаляемый проект: если проект на другой стороне ещё жив — запись переносится в его `pendingGateways[linkId]` (снимок направления, удалённого порта/проекта по имени, грани/доли прокси на момент разрыва) вместо молчаливого удаления; если гибнут обе стороны — запись пропадает совсем. `pendingGateways` — новый `PROJECT_FIELD`, задел под автопримирение связи при повторном импорте обеих половин (Фаза 6.2, `externalGateway`) — сама визуализация «висящего штекера» и авто-восстановление ещё не реализованы, только хранилище и заполнение при удалении.
+**Удаление проекта демоутит связь, а не теряет её.** `applyRemoveProject` для каждой `crossProjectLinks`-записи, задевающей удаляемый проект: если проект на другой стороне ещё жив — запись переносится в его `pendingGateways[linkId]` (снимок направления, удалённого порта/проекта по имени, грани/доли прокси на момент разрыва) вместо молчаливого удаления; если гибнут обе стороны — запись пропадает совсем. `pendingGateways` — `PROJECT_FIELD`.
+
+**`externalGateway`: локальный экспорт и автовосстановление (Фаза 6.2).** `handleExportProject` (`ContextActionBar.js`) добавляет в файл `externalGateways` — по одной записи на каждую `crossProjectLinks`, задевающую экспортируемый проект, с тем же `linkId`, что был у живой связи. При импорте («добавить как новый проект», `ADD_PROJECT_FROM_FILE`) эти записи копируются в `pendingGateways` нового проекта как есть — id портов внутри одного файла коллизий не создают. `reconcilePendingGateways(m)` (вызывается после `ADD_PROJECT_FROM_FILE` и после демоушена в `applyRemoveProject`) группирует `pendingGateways` ВСЕХ проектов по `linkId`; там, где нашлась ровно одна пара с противоположными `direction` ('out'+'in') — синтезирует живую `crossProjectLinks`-запись и убирает оба штекера. **Сверка идёт только по `linkId`, БЕЗ проверки совпадения `remoteProjectId`** — при повторном импорте контрагент получает СВЕЖИЙ `projectId` (`newProjectId()`), а уцелевшая сторона продолжает помнить СТАРЫЙ, уже удалённый; именно нестабильность `projectId` между экспортом/импортом и есть причина, почему опорный идентификатор — `linkId` связи, а не id проекта на другом конце. Непримирённый штекер рисуется как маркер разрыва на рамке окна — `HierarchyUtils.getPendingGatewayProxiesForWindow(windowId, projectId, multiState)` (грань/доля берутся из самой записи, НЕ пересчитываются — сравнивать не с чем, второе окно не загружено), только внутренний отрезок, без магистрали (`CrossProjectLinkLayer` штекеры не рисует). Тултип у штекера — `«{remotePortName}» в проекте «{remoteProjectName}» (сейчас не загружен)`.
 
 #### Выделение контейнеров и их изоляция
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-08-31 (2) — Фаза 6.2: `externalGateway` — экспорт разрыва и автопримирение штекеров
+
+- **`project.pendingGateways`:** новый `PROJECT_FIELD` — «висящие штекеры», непримирённые половины кросс-проектных связей. Ключ — `linkId` исходной живой `crossProjectLinks`-записи (опорный идентификатор для последующего примирения).
+- **Локальный экспорт (`ContextActionBar.js`/`handleExportProject`):** файл экспортируемого проекта дополняется `externalGateways` — по одной записи на каждую `crossProjectLinks`, задевающую этот проект (иначе половина связи молча терялась бы при экспорте одного проекта отдельно от другого).
+- **`reconcilePendingGateways(m)` (`reducer.js`):** группирует `pendingGateways` ВСЕХ проектов по `linkId`; ровно одна пара с противоположными `direction` ('out'+'in') — синтезирует живую `crossProjectLinks`-запись, убирает оба штекера. Вызывается после `ADD_PROJECT_FROM_FILE` (заполняет `pendingGateways` нового проекта из `data.externalGateways`) и после демоушена в `applyRemoveProject`. **Сверка только по `linkId`**, без проверки `remoteProjectId` — контрагент при повторном импорте получает свежий `projectId`, уцелевшая сторона помнит старый.
+- **Новый экшен `UPDATE_PENDING_GATEWAY_PROXY`** (в однопроектном `reducer`, участвует в обычном Undo проекта) — Shift+драг штекера по рамке окна, аналог `UPDATE_PROXY_PORT`/`UPDATE_CROSS_PROJECT_PROXY_PORT`.
+- **Визуализация:** `HierarchyUtils.getPendingGatewayProxiesForWindow` — новый прокси на рамке окна, грань/доля из самой записи (не пересчитываются). `LevelWindow.js` рисует только внутренний отрезок (без магистрали — рисовать нечего), маркер разрыва (полая точка) с тултипом «связано с «Порт» в проекте «Проект» (сейчас не загружен)», приглушённый пунктир вместо пульсации.
+- **Тестирование:** +4 юнит-теста (`app/tests/projects.test.js`): примирение двух половин, одиночный штекер остаётся висеть, полный цикл `ADD_CROSS_PROJECT_LINK` → `REMOVE_PROJECT` (демоушен) → `ADD_PROJECT_FROM_FILE` (реимпорт с `externalGateways`, свежий `projectId`) → связь автоматически восстановлена, `getPendingGatewayProxiesForWindow`. Итого 240 юнит-тестов, 100% PASS; `tsc` — без новых ошибок. Живая проверка в браузере: полный цикл экспорт (смоделирован тем же кодом, что `handleExportProject`) → удаление проекта → штекер с корректным тултипом на холсте → повторный импорт → связь пересобралась и снова пульсирует, штекер исчез.
+- **Кэш-бастинг:** `utils/hierarchy.js` → `?v=10.41`; `store/reducer.js` → `?v=10.47`; `components/LevelWindow.js` → `?v=10.38`; `components/ContextActionBar.js` → `?v=10.36`.
+
 ## 2026-08-31 — Фаза 6.1: кросс-проектные связи (`PLAN_V12_CLEAN_HIERARCHY_AND_INTERACTIONS.md`)
 
 - **`state.crossProjectLinks`:** новое глобальное поле — связи между портами двух РАЗНЫХ проектов, вне `PROJECT_FIELDS` и вне истории Undo (как `canvas`/`containerIsolation`). Новые экшены в `multiReducer`: `ADD_CROSS_PROJECT_LINK`, `REMOVE_CROSS_PROJECT_LINK`, `UPDATE_CROSS_PROJECT_PROXY_PORT`.

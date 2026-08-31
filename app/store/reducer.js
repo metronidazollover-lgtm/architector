@@ -1645,6 +1645,25 @@ const reducer = (state, action) => {
                 }
             };
         }
+        case 'UPDATE_PENDING_GATEWAY_PROXY': {
+            // Ручное положение прокси НЕПРИМИРЁННОГО штекера (Фаза 6.2) — тот же
+            // смысл, что UPDATE_PROXY_PORT, но хранится в pendingGateways[linkId]:
+            // второй половины связи ещё нет, писать в state.links/crossProjectLinks
+            // некуда. Проектное поле — в отличие от crossProjectLinks, полностью
+            // локально одному проекту, поэтому спокойно участвует в его Undo.
+            const { linkId, edge, fraction, skipHistory } = action.payload || {};
+            if (!linkId || !state.pendingGateways || !state.pendingGateways[linkId]) return state;
+            if (!['top', 'bottom', 'left', 'right'].includes(edge)) return state;
+            const f2 = Math.max(0.03, Math.min(0.97, Number(fraction)));
+            if (Number.isNaN(f2)) return state;
+            const gw = state.pendingGateways[linkId];
+            const historyState2 = skipHistory ? {} : saveHistory(state, 'Перемещён штекер связи');
+            return {
+                ...state,
+                ...historyState2,
+                pendingGateways: { ...state.pendingGateways, [linkId]: { ...gw, edge, fraction: f2 } }
+            };
+        }
         case 'ADD_LINK': {
             const { sourcePortId, targetPortId } = action.payload || {};
             if (!sourcePortId || !targetPortId || sourcePortId === targetPortId) return state;
@@ -3422,6 +3441,70 @@ const resolveContainerSelection = (m, selectedIds) => {
 
 
 /**
+ * Автопримирение «висящих штекеров» (Фаза 6.2): группирует pendingGateways
+ * ВСЕХ проектов по linkId — тому же id, что был у исходной живой связи (см.
+ * applyRemoveProject и локальный экспорт в ContextActionBar.js). Там, где
+ * один и тот же linkId нашёлся РОВНО в двух разных проектах — одна половина
+ * demote'нута удалением/экспортом-без-контрагента, другая только что
+ * импортирована (или наоборот) — синтезирует живую crossProjectLinks-запись
+ * из обеих половин и убирает обе записи pendingGateways. Несовпавшие
+ * (единственная сторона) остаются висеть как штекеры.
+ *
+ * ВАЖНО: сверка идёт ТОЛЬКО по linkId + противоположным direction, БЕЗ
+ * проверки remoteProjectId на совпадение с фактическим pid контрагента —
+ * при повторном импорте «как новый проект» контрагент получает СВЕЖИЙ id
+ * (`ADD_PROJECT_FROM_FILE`), и остаток на пережившей стороне закономерно
+ * продолжает указывать на СТАРЫЙ, уже удалённый id. Именно нестабильность
+ * projectId и есть причина, по которой опорным идентификатором служит
+ * linkId связи, а не id проекта на другом конце.
+ * @param {Object} m мультисостояние
+ * @returns {Object}
+ */
+const reconcilePendingGateways = (m) => {
+    const byLink = {};
+    Object.keys(m.projects || {}).forEach(pid => {
+        const proj = m.projects[pid];
+        Object.values((proj && proj.pendingGateways) || {}).forEach(gw => {
+            if (!gw || !gw.linkId) return;
+            if (!byLink[gw.linkId]) byLink[gw.linkId] = [];
+            byLink[gw.linkId].push({ pid, gw });
+        });
+    });
+
+    const ready = Object.keys(byLink).filter(linkId => byLink[linkId].length === 2);
+    if (ready.length === 0) return m;
+
+    let projects = m.projects;
+    const crossProjectLinks = { ...(m.crossProjectLinks || {}) };
+    ready.forEach(linkId => {
+        const [a, b] = byLink[linkId];
+        const src = a.gw.direction === 'out' ? a : b;
+        const tgt = src === a ? b : a;
+        // Единственная реальная проверка согласованности, доступная здесь:
+        // ровно одна сторона 'out', другая 'in' (см. комментарий функции —
+        // remoteProjectId сверять не с чем, он смотрит на уже мёртвый id).
+        if (src.gw.direction !== 'out' || tgt.gw.direction !== 'in') return;
+
+        crossProjectLinks[linkId] = {
+            id: linkId,
+            sourceProjectId: src.pid, sourcePortId: src.gw.portId,
+            targetProjectId: tgt.pid, targetPortId: tgt.gw.portId,
+            color: src.gw.color, name: src.gw.name, content: src.gw.content,
+            linkStyle: src.gw.linkStyle
+        };
+        [a, b].forEach(({ pid, gw }) => {
+            const proj = { ...projects[pid] };
+            const pg = { ...(proj.pendingGateways || {}) };
+            delete pg[gw.linkId];
+            proj.pendingGateways = pg;
+            projects = { ...projects, [pid]: proj };
+        });
+    });
+
+    return { ...m, projects, crossProjectLinks };
+};
+
+/**
  * Полное удаление проекта. Вынесена из switch, чтобы массовое удаление могло
  * переиспользовать её напрямую: самовызов multiReducer ломает публикацию
  * top-level const в babel-standalone (см. AGENTS.md, правило Zero-Build).
@@ -3491,12 +3574,15 @@ const applyRemoveProject = (m, id) => {
 
     // Изоляция удалённого проекта и его окон снимается: иначе на холсте не
     // осталось бы ни одного видимого контейнера — и кнопки выхода из изоляции
-    return pruneContainerIsolation({
+    const next = pruneContainerIsolation({
         ...m,
         projects, projectOrder, activeProjectId, crossProjectLinks,
         ui: { ...m.ui, outlinerOpen },
         selectedIds: [], isolatedIds: []
     });
+    // Новый pendingGateway на уцелевшей стороне мог совпасть с уже висящим
+    // штекером ДРУГОГО проекта (импортированным ранее) — примиряем сразу.
+    return reconcilePendingGateways(next);
 };
 
 const multiReducer = (m, action) => {
@@ -3686,9 +3772,18 @@ const multiReducer = (m, action) => {
             proj.past = [];
             proj.future = [];
             proj.historyLogs = ['Проект импортирован из файла'];
+            // externalGateways (Фаза 6.2): «разрывы» кросс-проектных связей,
+            // записанные при локальном экспорте одной из половин (см.
+            // ContextActionBar.js/handleExportProject) — оседают как штекеры,
+            // пока не найдётся вторая половина с тем же linkId (см. ниже).
+            if (Array.isArray(data.externalGateways) && data.externalGateways.length) {
+                const pendingGateways = {};
+                data.externalGateways.forEach(gw => { if (gw && gw.linkId) pendingGateways[gw.linkId] = gw; });
+                proj.pendingGateways = pendingGateways;
+            }
             const right = globalRightEdge(m.projects);
             if (right !== null) proj = shiftProjectWindows(proj, right + PROJECT_SLOT_GAP, -400);
-            return {
+            const next = {
                 ...m,
                 projects: { ...m.projects, [id]: proj },
                 projectOrder: [...m.projectOrder, id],
@@ -3697,6 +3792,7 @@ const multiReducer = (m, action) => {
                 selectedIds: [],
                 isolatedIds: []
             };
+            return reconcilePendingGateways(next);
         }
         case 'REMOVE_PROJECT': {
             const id = (action.payload && action.payload.id) || m.activeProjectId;
@@ -3797,6 +3893,6 @@ const getInitialMultiState = () => {
     return migrateToV13(wrapFlatToMulti(getInitialState()));
 };
 
-const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, FORMAT_VERSION_V13, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, migrateToV13, normalizeLevelWindows };
+const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, FORMAT_VERSION_V13, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, migrateToV13, normalizeLevelWindows, reconcilePendingGateways, applyRemoveProject };
 if (typeof window !== 'undefined') window.ArchitectorStore = ArchitectorStore;
 if (typeof module !== 'undefined') module.exports = ArchitectorStore;

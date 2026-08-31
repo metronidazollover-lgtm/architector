@@ -2023,6 +2023,53 @@ const HierarchyUtils = {
         return list.find(p => p.linkId === linkId) || null;
     },
 
+    /**
+     * Прокси непримирённых «штекеров» (Фаза 6.2, project.pendingGateways) на
+     * рамке окна — визуальный маркер того, что здесь раньше была кросс-
+     * проектная связь, второй половины сейчас нет в загруженном рабочем
+     * пространстве. В отличие от getExternalProxyPortsForWindow, грань/доля
+     * НЕ пересчитываются (сравнивать не с чем — второе окно не загружено),
+     * а берутся из самой записи (снимок на момент разрыва либо ручной Shift+
+     * драг штекера, UPDATE_PENDING_GATEWAY_PROXY). Магистрали для этих
+     * прокси не бывает — рисовать её не к чему.
+     * @param {string} windowId @param {string} projectId @param {Object} multiState
+     * @returns {Array<Object>} прокси в форме getProxyPortsForWindow + isPending/gateway
+     */
+    getPendingGatewayProxiesForWindow: (windowId, projectId, multiState) => {
+        if (!multiState || !projectId) return [];
+        const proj = multiState.projects && multiState.projects[projectId];
+        if (!proj || !proj.pendingGateways) return [];
+        const win = proj.levelWindows && proj.levelWindows[windowId];
+        if (!win) return [];
+
+        const proxies = [];
+        Object.values(proj.pendingGateways).forEach(gw => {
+            if (!gw || !gw.portId) return;
+            const myPort = proj.ports && proj.ports[gw.portId];
+            if (!myPort) return;
+            const myNode = (proj.nodes && proj.nodes[myPort.nodeId]) || (proj.layers && proj.layers[myPort.nodeId]);
+            if (!myNode) return;
+            const lvl = HierarchyUtils.getEntityLevel(myNode.id, proj.nodes, proj.layers, proj.levelWindows);
+            const myWin = HierarchyUtils.getWindowOfLevel(lvl, proj.levelWindows);
+            if (!myWin || myWin.id !== windowId) return;
+
+            const edge = ['top', 'bottom', 'left', 'right'].includes(gw.edge) ? gw.edge : 'right';
+            const fraction = Math.max(0.03, Math.min(0.97, typeof gw.fraction === 'number' ? gw.fraction : 0.5));
+            const pseudoItem = {
+                link: { id: gw.linkId, color: gw.color, linkStyle: gw.linkStyle, name: gw.name },
+                isSource: gw.direction === 'out',
+                myPort,
+                otherPort: { id: gw.remotePortId || null }
+            };
+            proxies.push({
+                ...HierarchyUtils.buildWindowProxyGeometry(win, win.levelIndex, pseudoItem, edge, fraction),
+                isPending: true,
+                gateway: gw
+            });
+        });
+        return proxies;
+    },
+
     getProxyPortsForWindow: (winIndex, state) => {
         if (!state || !state.levelWindows) return [];
         const win = state.levelWindows[winIndex] || HierarchyUtils.getWindowOfLevel(Number(winIndex), state.levelWindows);

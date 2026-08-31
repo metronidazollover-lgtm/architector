@@ -307,6 +307,47 @@ function ContextActionBar() {
     const handleExportProject = () => {
         // Экспортируется АКТИВНЫЙ проект (плоский формат, обратно совместимый);
         // окна уровней и настройки проекта включены для точного восстановления
+
+        // externalGateways (Фаза 6.2): живые crossProjectLinks, задевающие
+        // ЭТОТ проект, не входят в его собственный `links` (глобальное поле) —
+        // без этого шага половина связи молча терялась бы при экспорте одного
+        // проекта. Каждая запись — воспроизводимый «разрыв»: тот же linkId,
+        // что был у живой связи, чтобы повторный импорт ОБЕИХ половин (в любом
+        // порядке) мог собрать связь заново (reconcilePendingGateways).
+        const H = window.HierarchyUtils;
+        const externalGateways = [];
+        Object.values(rootState.crossProjectLinks || {}).forEach(link => {
+            if (!link) return;
+            const isSource = link.sourceProjectId === selectedPid;
+            if (!isSource && link.targetProjectId !== selectedPid) return;
+            const portId = isSource ? link.sourcePortId : link.targetPortId;
+            const remoteProjectId = isSource ? link.targetProjectId : link.sourceProjectId;
+            const remotePortId = isSource ? link.targetPortId : link.sourcePortId;
+            const remoteProj = rootState.projects && rootState.projects[remoteProjectId];
+            const remotePort = remoteProj && remoteProj.ports && remoteProj.ports[remotePortId];
+
+            let edge = 'right';
+            let fraction = 0.5;
+            const myPort = state.ports && state.ports[portId];
+            const myNode = myPort && ((state.nodes && state.nodes[myPort.nodeId]) || (state.layers && state.layers[myPort.nodeId]));
+            if (H && myNode) {
+                const lvl = H.getEntityLevel(myNode.id, state.nodes, state.layers, state.levelWindows);
+                const win = H.getWindowOfLevel(lvl, state.levelWindows);
+                const proxy = win ? H.getExternalProxyForLink(link.id, win.id, selectedPid, rootState) : null;
+                if (proxy) { edge = proxy.edge; fraction = proxy.slotFraction; }
+            }
+
+            externalGateways.push({
+                linkId: link.id, portId,
+                direction: isSource ? 'out' : 'in',
+                remoteProjectId, remotePortId,
+                remoteProjectName: (remoteProj && remoteProj.projectName) || '',
+                remotePortName: (remotePort && remotePort.name) || '',
+                linkStyle: link.linkStyle, color: link.color, name: link.name, content: link.content,
+                edge, fraction
+            });
+        });
+
         const data = {
             formatVersion: state.formatVersion || 10,
             layers: state.layers,
@@ -319,7 +360,8 @@ function ContextActionBar() {
             projectColor: state.projectColor,
             projectFontFamily: state.projectFontFamily,
             projectContent: state.projectContent,
-            canvas: state.canvas
+            canvas: state.canvas,
+            ...(externalGateways.length ? { externalGateways } : {})
         };
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);

@@ -11,7 +11,7 @@ global.HierarchyUtils = HierarchyUtils;
 
 const {
     defaultState, reducer, multiReducer, mergeActiveView, wrapFlatToMulti,
-    makeProject, PROJECT_FIELDS
+    makeProject, PROJECT_FIELDS, reconcilePendingGateways
 } = require('../store/reducer.js');
 
 const makeFlat = () => ({
@@ -560,5 +560,94 @@ test('HierarchyUtils.getExternalProxyPortsForWindow: прокси появляе
     // Окно без задействованных сущностей связи прокси не получает
     const emptyProxies = HierarchyUtils.getExternalProxyPortsForWindow('unknown-window', pidA, m1);
     assert.deepEqual(emptyProxies, []);
+});
+
+// === Фаза 6.2: externalGateway — примирение штекеров при повторном импорте ===
+
+test('reconcilePendingGateways: две половины с одним linkId в разных проектах собираются в живую связь', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    let m = { ...m0 };
+    m.projects = {
+        ...m.projects,
+        [pidA]: { ...m.projects[pidA], pendingGateways: {
+            'xlink-1': { linkId: 'xlink-1', portId: 'portA1', direction: 'out', remoteProjectId: pidB, remotePortId: 'portB1', remoteProjectName: 'B', remotePortName: 'PortB1', linkStyle: 'orthogonal', color: '#111', name: 'L', edge: 'right', fraction: 0.5 }
+        } },
+        [pidB]: { ...m.projects[pidB], pendingGateways: {
+            'xlink-1': { linkId: 'xlink-1', portId: 'portB1', direction: 'in', remoteProjectId: pidA, remotePortId: 'portA1', remoteProjectName: 'A', remotePortName: 'PortA1', linkStyle: 'orthogonal', color: '#111', name: 'L', edge: 'left', fraction: 0.5 }
+        } }
+    };
+    const m1 = reconcilePendingGateways(m);
+    const link = m1.crossProjectLinks['xlink-1'];
+    assert.ok(link, 'связь пересобрана');
+    assert.equal(link.sourceProjectId, pidA);
+    assert.equal(link.sourcePortId, 'portA1');
+    assert.equal(link.targetProjectId, pidB);
+    assert.equal(link.targetPortId, 'portB1');
+    assert.deepEqual(m1.projects[pidA].pendingGateways, {}, 'штекер A убран');
+    assert.deepEqual(m1.projects[pidB].pendingGateways, {}, 'штекер B убран');
+});
+
+test('reconcilePendingGateways: одиночный штекер (вторая половина не загружена) остаётся висеть', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    let m = { ...m0 };
+    m.projects = { ...m.projects, [pidA]: { ...m.projects[pidA], pendingGateways: {
+        'xlink-1': { linkId: 'xlink-1', portId: 'portA1', direction: 'out', remoteProjectId: pidB, remotePortId: 'portB1', remoteProjectName: 'B', remotePortName: 'PortB1', edge: 'right', fraction: 0.5 }
+    } } };
+    const m1 = reconcilePendingGateways(m);
+    assert.equal(m1, m, 'no-op: только одна сторона');
+    assert.ok(m1.projects[pidA].pendingGateways['xlink-1'], 'штекер никуда не делся');
+});
+
+test('ADD_PROJECT_FROM_FILE: externalGateways файла становятся pendingGateways нового проекта и примиряются с уже висящим штекером', () => {
+    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
+    const m1 = multiReducer(m0, {
+        type: 'ADD_CROSS_PROJECT_LINK',
+        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+    });
+    const linkId = Object.keys(m1.crossProjectLinks)[0];
+
+    // Проект B удаляется — связь демоутится в pendingGateways проекта A
+    const m2 = multiReducer(m1, { type: 'REMOVE_PROJECT', payload: { id: pidB } });
+    assert.ok(m2.projects[pidA].pendingGateways[linkId], 'штекер на A есть');
+
+    // «Повторный импорт» проекта B из файла, который экспорт (6.2.2) снабдил
+    // бы тем же externalGateways.linkId — именно это поле и делает примирение
+    // возможным, остальное содержимое файла для этого теста не важно
+    const fileData = {
+        nodes: { nodeB: { id: 'nodeB', name: 'Node B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } },
+        ports: { portB1: { id: 'portB1', nodeId: 'nodeB', name: 'PortB1' } },
+        links: {},
+        externalGateways: [
+            { linkId, portId: 'portB1', direction: 'in', remoteProjectId: pidA, remotePortId: 'portA1', remoteProjectName: 'Project A', remotePortName: 'PortA1' }
+        ]
+    };
+    const m3 = multiReducer(m2, { type: 'ADD_PROJECT_FROM_FILE', payload: fileData });
+    const newPid = m3.activeProjectId;
+
+    const link = m3.crossProjectLinks[linkId];
+    assert.ok(link, 'связь автоматически восстановлена при повторном импорте второй половины');
+    assert.equal(link.sourceProjectId, pidA);
+    assert.equal(link.targetProjectId, newPid);
+    assert.deepEqual(m3.projects[pidA].pendingGateways, {}, 'штекер A убран после примирения');
+    assert.deepEqual(m3.projects[newPid].pendingGateways, {}, 'штекер нового проекта убран после примирения');
+});
+
+test('HierarchyUtils.getPendingGatewayProxiesForWindow: висящий штекер рисуется на правильном окне без магистрали', () => {
+    const { m: m0, pidA } = makeTwoProjectsWithPorts();
+    const winA = Object.values(m0.projects[pidA].levelWindows)[0];
+    let m = { ...m0 };
+    m.projects = { ...m.projects, [pidA]: { ...m.projects[pidA], pendingGateways: {
+        'xlink-1': { linkId: 'xlink-1', portId: 'portA1', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'ghost-port', remoteProjectName: 'Призрачный проект', remotePortName: 'Ghost', edge: 'left', fraction: 0.4 }
+    } } };
+    const proxies = HierarchyUtils.getPendingGatewayProxiesForWindow(winA.id, pidA, m);
+    assert.equal(proxies.length, 1);
+    assert.equal(proxies[0].isPending, true);
+    assert.equal(proxies[0].edge, 'left');
+    assert.equal(proxies[0].slotFraction, 0.4);
+    assert.equal(proxies[0].gateway.remoteProjectName, 'Призрачный проект');
+
+    // Порт другого узла того же проекта не заводит штекер на его окне
+    const otherWindow = 'nonexistent-window';
+    assert.deepEqual(HierarchyUtils.getPendingGatewayProxiesForWindow(otherWindow, pidA, m), []);
 });
 
