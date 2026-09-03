@@ -3053,7 +3053,6 @@ const applyRemoveProject = (m, id) => {
     // экспорта половины связи) — «одна из сторон пропала» выглядит одинаково,
     // вызвано ли это удалением проекта или экспортом без него. Если обе
     // стороны исчезают разом (или второй уже нет) — запись удаляется совсем.
-    const H = getHierarchy();
     const crossProjectLinks = { ...(m.crossProjectLinks || {}) };
     const gatewaysByProject = {};
     Object.keys(m.crossProjectLinks || {}).forEach(linkId => {
@@ -3066,17 +3065,13 @@ const applyRemoveProject = (m, id) => {
         const survivorPortId = survivorIsSource ? link.sourcePortId : link.targetPortId;
         const removedPortId = survivorIsSource ? link.targetPortId : link.sourcePortId;
         const removedPort = removedProj.ports && removedProj.ports[removedPortId];
-        const survivorProj = projects[survivorPid];
-        const survivorPortObj = survivorProj.ports && survivorProj.ports[survivorPortId];
-        const survivorNodeId = survivorPortObj && survivorPortObj.nodeId;
-        let edge = null, fraction = null;
-        if (survivorNodeId && H) {
-            const lvl = H.getEntityLevel(survivorNodeId, survivorProj.nodes, survivorProj.layers, survivorProj.levelWindows);
-            const win = H.getWindowOfLevel(lvl, survivorProj.levelWindows);
-            const ov = win && link.proxyOverrides && link.proxyOverrides[win.id];
-            if (ov) { edge = ov.edge; fraction = ov.fraction; }
-        }
-        if (!edge) { edge = 'right'; fraction = 0.5; }
+        // v14: нет понятия «окно уровня» у порта — ручной оверрайд прокси
+        // адресован конкретному ОКНУ, а мы не знаем, в каком из окон целевого
+        // проекта сейчас открыта дорожка survivorNodeId, так что штекеру всегда
+        // назначается дефолтная грань/доля (тот же исход, что и раньше давал
+        // этот блок на любом реальном v14-проекте — getWindowOfLevel всегда
+        // возвращал null, poскольку survivorProj.levelWindows не существует).
+        const edge = 'right', fraction = 0.5;
         if (!gatewaysByProject[survivorPid]) gatewaysByProject[survivorPid] = {};
         gatewaysByProject[survivorPid][linkId] = {
             linkId, portId: survivorPortId,

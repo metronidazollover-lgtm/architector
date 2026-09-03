@@ -233,7 +233,10 @@ test('Фаза 2: Сериализация состояния для localStorag
     assert.ok(safeState.projects['proj-1'].nodes['n1'], 'Сущности проекта должны быть сохранены');
 });
 
-test('Фаза 3: Быстрые пространственные индексы HierarchyUtils (getPortsByNodeId, getLinksByPortId, getNodesByParentId, getLayersByParentId)', () => {
+// v14 (Фаза 6): проверки getNodesByParentId/getLayersByParentId убраны из
+// этого теста вместе с самими функциями — v13-only индексы по координатному
+// parentId, замена — getChildrenByParent (см. hierarchy.test.js, v14-раздел).
+test('Фаза 3: Быстрые пространственные индексы HierarchyUtils (getPortsByNodeId, getLinksByPortId)', () => {
     const ports = {
         'p1': { id: 'p1', nodeId: 'n1', name: 'Port 1' },
         'p2': { id: 'p2', nodeId: 'n1', name: 'Port 2' },
@@ -243,17 +246,6 @@ test('Фаза 3: Быстрые пространственные индексы
     const links = {
         'l1': { id: 'l1', sourcePortId: 'p1', targetPortId: 'p3' },
         'l2': { id: 'l2', sourcePortId: 'p2', targetPortId: 'p3' }
-    };
-
-    const nodes = {
-        'n1': { id: 'n1', parentId: 'layer-1' },
-        'n2': { id: 'n2', parentId: 'layer-1' },
-        'n3': { id: 'n3', parentId: 'root' }
-    };
-
-    const layers = {
-        'layer-1': { id: 'layer-1', parentId: 'root' },
-        'layer-sub': { id: 'layer-sub', parentId: 'layer-1' }
     };
 
     // Проверка getPortsByNodeId
@@ -270,18 +262,6 @@ test('Фаза 3: Быстрые пространственные индексы
     assert.equal(linksByPort['p2'].length, 1);
     assert.equal(linksByPort['p3'].length, 2); // Входят обе связи
     assert.equal(HierarchyUtils.getLinksByPortId(links), linksByPort);
-
-    // Проверка getNodesByParentId
-    const nodesByParent = HierarchyUtils.getNodesByParentId(nodes);
-    assert.equal(nodesByParent['layer-1'].length, 2);
-    assert.equal(nodesByParent['root'].length, 1);
-    assert.equal(HierarchyUtils.getNodesByParentId(nodes), nodesByParent);
-
-    // Проверка getLayersByParentId
-    const layersByParent = HierarchyUtils.getLayersByParentId(layers);
-    assert.equal(layersByParent['root'].length, 1);
-    assert.equal(layersByParent['layer-1'].length, 1);
-    assert.equal(HierarchyUtils.getLayersByParentId(layers), layersByParent);
 });
 
 test('getInitialMultiState: активированная migrateToV14 санитизирует v11-сохранение при загрузке (Фаза 4, финал)', () => {

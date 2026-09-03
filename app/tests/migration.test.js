@@ -160,7 +160,7 @@ test('REPARENT_ENTITY: перенос НА УЗЕЛ (порождение под
     // — то самое численное совпадение, которое раньше подделывалось под «то же окно».
     const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'child1', targetParentId: 'root1' } });
     assert.equal(s1.nodes.child1.parentId, 'root1');
-    assert.equal(HierarchyUtils.getEntityLevel('child1', s1.nodes, s1.layers, s1.levelWindows), 1);
+    assert.equal(HierarchyUtils.getLevel('child1', s1.nodes, s1.layers, s1.levelWindows), 1);
     // НЕ toRelativePosition(child1.position={10,10}, root1.position={0,0}) = {10,10} по
     // совпадению — а findFreePosition рядом с исходной позицией {10,10}, что для
     // пустого целевого контейнера совпадает {10,10}. Различие проявится там, где
@@ -387,7 +387,7 @@ test('CREATE_NESTED_NODE (v13): новый узел получает parentId н
 
     assert.equal(s.nodes.child1.parentId, 'root1');
     assert.equal(s.nodes.child1.ownerId, undefined);
-    assert.equal(H.getEntityLevel('child1', s.nodes, s.layers, s.levelWindows), 1);
+    assert.equal(H.getLevel('child1', s.nodes, s.layers, s.levelWindows), 1);
 });
 
 test('CREATE_NESTED_NODE (v14): создание глубокой цепочки автоматически открывает дорожку каждого нового родителя', () => {

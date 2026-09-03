@@ -338,52 +338,10 @@ test('LOAD_STATE: отдельные ноды автоматически ото�
     assert.ok(!(overlapX && overlapY), `Свободная нода должна быть вне зоны слоя + 30px: ${JSON.stringify(nOutside.position)}`);
 });
 
-// === Автовыравнивание и сортировка слоев ===
-
-test('GeometryUtils.alignLayers: сортирует слои по имени (natural sort) и выстраивает вертикально с зазором 90px', () => {
-    const layers = {
-        L3: { id: 'L3', name: 'Слой 3', position: { x: 50, y: 300 }, size: { w: 300, h: 200 }, parentId: 'root' },
-        L1: { id: 'L1', name: 'Слой 1', position: { x: 100, y: 100 }, size: { w: 300, h: 200 }, parentId: 'root' },
-        L2: { id: 'L2', name: 'Слой 2', position: { x: 20, y: 500 }, size: { w: 300, h: 200 }, parentId: 'root' },
-        L10: { id: 'L10', name: 'Слой 10', position: { x: 0, y: 0 }, size: { w: 300, h: 200 }, parentId: 'root' }
-    };
-
-    const aligned = GeometryUtils.alignLayers(layers, {}, 'root', 90);
-
-    // Natural sort: Слой 1 -> Слой 2 -> Слой 3 -> Слой 10
-    // Выравнивание по X минимальному (которое равно 0 из L10)
-    assert.equal(aligned.L1.position.x, 0);
-    assert.equal(aligned.L2.position.x, 0);
-    assert.equal(aligned.L3.position.x, 0);
-    assert.equal(aligned.L10.position.x, 0);
-
-    // Слой 1 Y остается исходным = 100
-    assert.equal(aligned.L1.position.y, 100);
-    // Слой 2 Y = L1 Y (100) + H (200) + gap (90) = 390
-    assert.equal(aligned.L2.position.y, 390);
-    // Слой 3 Y = L2 Y (390) + H (200) + gap (90) = 680
-    assert.equal(aligned.L3.position.y, 680);
-    // Слой 10 Y = L3 Y (680) + H (200) + gap (90) = 970
-    assert.equal(aligned.L10.position.y, 970);
-});
-
-test('GeometryUtils.alignLayers: во вложенных контекстах выравнивает слои с отступом 100px от самого широкого слоя предыдущего уровня', () => {
-    const layers = {
-        L_root: { id: 'L_root', name: 'Слой Родитель', position: { x: 0, y: 0 }, size: { w: 500, h: 400 }, parentId: 'root' },
-        L_child: { id: 'L_child', name: 'Слой Ребенок', position: { x: 10, y: 10 }, size: { w: 200, h: 200 }, parentId: 'node_sub' }
-    };
-    const nodes = {
-        node_sub: { id: 'node_sub', name: 'Вложенный узел', position: { x: 100, y: 50 }, size: { w: 600, h: 400 }, parentId: 'root' }
-    };
-
-    const aligned = GeometryUtils.alignLayers(layers, nodes, 'node_sub', 90);
-
-    // Правый край L_root (абсолютный) = 0 + 500 = 500.
-    // Ожидаемый абсолютный X для L_child = 500 + 100 = 600.
-    // Абсолютный X узла node_sub = 100.
-    // Относительный X слоя L_child внутри node_sub должен быть = 600 - 100 = 500.
-    assert.equal(aligned.L_child.position.x, 500);
-});
+// v14 (Фаза 6): GeometryUtils.alignLayers удалена вместе с обоими тестами —
+// обслуживала только ALIGN_LAYERS (уже удалён как обработчик экшена, слоёв
+// нет), v14-аналог — ALIGN_WINDOWS (раскладка окон по колонкам глубины,
+// см. reducer.test.js).
 
 // v14 (§3 плана): ALIGN_LAYERS удалён как обработчик экшена — слоёв нет,
 // см. ALIGN_WINDOWS в новом v14-разделе (раскладка окон по колонкам глубины).

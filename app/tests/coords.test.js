@@ -42,15 +42,9 @@ const makeState = (overrides = {}) => ({
     ...overrides
 });
 
-test('Метрики окна уровня заданы в одном месте', () => {
-    const M = HierarchyUtils.LEVEL_WINDOW_METRICS;
-    assert.ok(M, 'HierarchyUtils.LEVEL_WINDOW_METRICS должен существовать');
-    assert.equal(typeof M.headerH, 'number');
-    assert.equal(typeof M.borderW, 'number');
-    assert.equal(M.headerH, 40);
-    assert.equal(M.borderW, 2);
-});
-
+// v14 (Фаза 6): «Метрики окна уровня заданы в одном месте» удалён —
+// LEVEL_WINDOW_METRICS не существует (заменена WINDOW_METRICS в v14-разделе
+// hierarchy.js, своя проверка не заводилась — константа тривиальна).
 test('getLevel: уровень выводится из цепочки ownerId, а не из parentId', () => {
     const s = makeState();
     assert.equal(HierarchyUtils.getLevel('a', s.nodes, s.layers), 0);
@@ -64,87 +58,12 @@ test('getLevel: уровень выводится из цепочки ownerId, �
     assert.equal(HierarchyUtils.getLevel('inLayer', withLayer.nodes, withLayer.layers), 1);
 });
 
-test('getLocalPosition: цепочка parentId никогда не пересекает границу уровня', () => {
-    const s = makeState();
-    s.layers = { lay1: { id: 'lay1', parentId: 'root', ownerId: 'a', position: { x: 5, y: 5 } } };
-    s.nodes.inLayer = { id: 'inLayer', parentId: 'lay1', ownerId: null, position: { x: 7, y: 8 }, size: { w: 100, h: 50 } };
-
-    // Узел уровня 1 не должен тащить за собой позицию узла-владельца с уровня 0
-    assert.deepEqual(HierarchyUtils.getLocalPosition('a1', s.nodes, s.layers), { x: 30, y: 40 });
-    // Внутри слоя позиции складываются как обычно
-    assert.deepEqual(HierarchyUtils.getLocalPosition('inLayer', s.nodes, s.layers), { x: 12, y: 13 });
-});
-
-test('getWorldTransform: рамка, шапка, панорама и масштаб окна учтены ровно один раз', () => {
-    const s = makeState();
-    const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
-
-    const t0 = HierarchyUtils.getWorldTransform('a', s);
-    assert.deepEqual(t0, { x: 0 + borderW + 0 + 10, y: 0 + borderW + headerH + 0 + 10, scale: 1 });
-
-    const t1 = HierarchyUtils.getWorldTransform('a1', s);
-    // x = win.x + border + innerOffset.x + local.x * innerZoom = 100 + 2 + 50 + 60
-    // y = win.y + border + header + innerOffset.y + local.y * innerZoom = 200 + 2 + 40 + 60 + 80
-    assert.deepEqual(t1, { x: 212, y: 382, scale: 2 });
-});
-
-test('getNodeWorldBounds: габариты узла масштабируются внутренним зумом окна', () => {
-    const s = makeState();
-    const b = HierarchyUtils.getNodeWorldBounds('a1', s);
-    assert.deepEqual(b, { x: 212, y: 382, w: 400, h: 200 });
-});
-
-test('getPortWorldPosition: точка порта = мировая точка узла плюс смещение по грани', () => {
-    const s = makeState();
-    const t = HierarchyUtils.getWorldTransform('a1', s);
-    const rel = GeometryUtils.getPortRelativePosition(s.ports['p-a1-in'], s.nodes.a1);
-
-    const p = HierarchyUtils.getPortWorldPosition('p-a1-in', s);
-    assert.deepEqual(p, { x: t.x + rel.x * t.scale, y: t.y + rel.y * t.scale });
-});
-
-test('getLinkEndpoints: концы связи совпадают с мировыми точками её портов', () => {
-    const s = makeState();
-    const ends = HierarchyUtils.getLinkEndpoints('link-cross', s);
-    assert.ok(ends, 'getLinkEndpoints должен возвращать концы связи');
-
-    const p1 = HierarchyUtils.getPortWorldPosition('p-a-out', s);
-    const p2 = HierarchyUtils.getPortWorldPosition('p-a1-in', s);
-
-    assert.equal(ends.p1.x, p1.x);
-    assert.equal(ends.p1.y, p1.y);
-    assert.equal(ends.p2.x, p2.x);
-    assert.equal(ends.p2.y, p2.y);
-    assert.equal(ends.isCrossLevel, true, 'связь между уровнями 0 и 1 — межуровневая');
-});
-
-test('getLinkEndpoints: внутриуровневая связь помечается как таковая', () => {
-    const s = makeState();
-    s.nodes.a2 = { id: 'a2', parentId: 'root', ownerId: 'a', position: { x: 300, y: 40 }, size: { w: 200, h: 100 } };
-    s.ports['p-a2-in'] = { id: 'p-a2-in', nodeId: 'a2', edge: 'left', position: 0.5 };
-    s.links['link-intra'] = { id: 'link-intra', sourcePortId: 'p-a1-in', targetPortId: 'p-a2-in' };
-
-    const ends = HierarchyUtils.getLinkEndpoints('link-intra', s);
-    assert.equal(ends.isCrossLevel, false);
-    assert.equal(ends.levelIndex, 1, 'внутриуровневая связь знает свой уровень');
-});
-
-test('Кэш координат инвалидируется при изменении камеры окна', () => {
-    const s = makeState();
-    const before = HierarchyUtils.getWorldTransform('a1', s);
-
-    const s2 = {
-        ...s,
-        levelViews: {
-            ...s.levelViews,
-            'lvlwin-1': { innerOffset: { x: 50, y: 60 }, innerZoom: 3, isCollapsed: false }
-        }
-    };
-    const after = HierarchyUtils.getWorldTransform('a1', s2);
-
-    assert.notDeepEqual(before, after, 'смена innerZoom обязана менять мировую трансформацию');
-    assert.equal(after.scale, 3);
-});
+// v14 (Фаза 6): getLocalPosition/getWorldTransform/getNodeWorldBounds/
+// getPortWorldPosition/getLinkEndpoints и «Кэш координат инвалидируется...»
+// удалены вместе с проверяемыми функциями (levelWindows/levelViews не
+// существуют) — те же инварианты (координатное ядро, кэш камеры) уже
+// покрыты v14-версиями ниже (getWorldTransformV14/getNodeWorldRect/
+// getPortWorldPositionV14/«v14 Кэш координат...»).
 
 // v14 (Фаза 5, §7.15 плана): старый тест "содержимое попадает внутрь рамки
 // своего уровня" проверял, что per-level окно (в v13 всегда авто-подгонялось

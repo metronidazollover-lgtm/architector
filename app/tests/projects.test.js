@@ -548,24 +548,12 @@ test('ADD_PROJECT_FROM_FILE: externalGateways файла становятся pe
     assert.deepEqual(m3.projects[newPid].pendingGateways, {}, 'штекер нового проекта убран после примирения');
 });
 
-test('HierarchyUtils.getPendingGatewayProxiesForWindow: висящий штекер рисуется на правильном окне без магистрали', () => {
-    const { m: m0, pidA } = makeTwoProjectsWithPorts();
-    const winA = Object.values(m0.projects[pidA].levelWindows)[0];
-    let m = { ...m0 };
-    m.projects = { ...m.projects, [pidA]: { ...m.projects[pidA], pendingGateways: {
-        'xlink-1': { linkId: 'xlink-1', portId: 'portA1', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'ghost-port', remoteProjectName: 'Призрачный проект', remotePortName: 'Ghost', edge: 'left', fraction: 0.4 }
-    } } };
-    const proxies = HierarchyUtils.getPendingGatewayProxiesForWindow(winA.id, pidA, m);
-    assert.equal(proxies.length, 1);
-    assert.equal(proxies[0].isPending, true);
-    assert.equal(proxies[0].edge, 'left');
-    assert.equal(proxies[0].slotFraction, 0.4);
-    assert.equal(proxies[0].gateway.remoteProjectName, 'Призрачный проект');
-
-    // Порт другого узла того же проекта не заводит штекер на его окне
-    const otherWindow = 'nonexistent-window';
-    assert.deepEqual(HierarchyUtils.getPendingGatewayProxiesForWindow(otherWindow, pidA, m), []);
-});
+// v14 (Фаза 6): getPendingGatewayProxiesForWindow (маркер разрыва непримирённого
+// штекера на грани окна) удалена — v13-only прокси-геометрия, окна больше не
+// адресуются глубиной/levelIndex. pendingGateways сам по себе (данные, авто-
+// примирение через reconcilePendingGateways) остаётся живым и покрыт другими
+// тестами этого файла — только ВИЗУАЛЬНЫЙ маркер на грани окна пока не имеет
+// v14-реализации (см. отдельную задачу).
 
 // === Фаза 6.3: кросс-проектный перенос сущностей (REPARENT_ENTITY + targetProjectId) ===
 // v14 (Фаза 6): тесты на wrapFlatToMulti-фикстурах НЕ мигрированного v13-
@@ -688,85 +676,13 @@ test('REPARENT_ENTITY (кросс-проектный, v14): переносит c
     assert.equal(link.sourcePortId, 'portA1');
 });
 
-test('HierarchyUtils.getDropTargetAcrossProjects: находит цель в ЧУЖОМ проекте, помечает projectId', () => {
-    let m = wrapFlatToMulti(makeFlat()); // nodeA в 'root' Главного холста, pos (0,0) size 200x100
-    const pidA = m.activeProjectId;
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pidB = m.activeProjectId;
-    // v14: ADD_PROJECT/makeProject больше не создают стартовое окно уровня 0
-    // (§10.7 LANES_MODEL.md) — эта проверка работает с ЕЩЁ НЕ мигрированным
-    // (wrapFlatToMulti напрямую, без migrateToV13/migrateToV14) v13-состоянием
-    // и намеренно тестирует старый резолвер getDropTargetAcrossProjects,
-    // которому для фикстуры нужно РЕАЛЬНОЕ окно — восстанавливаем его вручную,
-    // ровно как раньше это делал makeProject (окно B правее окна A).
-    const winBId = 'lvlwin-test-b';
-    m = {
-        ...m,
-        projects: {
-            ...m.projects,
-            [pidB]: { ...m.projects[pidB], levelWindows: { [winBId]: { id: winBId, levelIndex: 0, position: { x: 1500, y: -400 }, size: { w: 1000, h: 700 } } } }
-        }
-    };
-    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } } });
-
-    // getDropTargetAcrossProjects зовёт window.getProjectFlatView — в Node это
-    // не браузер, стаб делает то же самое, что store/Store.js в реальном приложении.
-    global.window = { getProjectFlatView: (pid) => projectFlatView(m, pid) };
-    try {
-        const viewB = projectFlatView(m, pidB);
-        const winB = Object.values(viewB.levelWindows)[0];
-        // Мировая позиция nodeB зависит от того, куда ADD_PROJECT сдвинул окно
-        // B (globalRightEdge) — нельзя просто взять его ЛОКАЛЬНЫЕ (0,0).
-        const boundsB = HierarchyUtils.getEntityWorldBounds('nodeB', viewB);
-
-        // pickBest требует геометрического пересечения КОНТУРА перетаскиваемой
-        // сущности с кандидатом (указатель — только тай-брейк при наложении) —
-        // в живом жесте контур уже следует за мышью (MOVE_SELECTED на
-        // mousemove), здесь эмулируем тем же: подвигаем nodeA к nodeB.
-        // position — ЛОКАЛЬНЫЕ координаты внутри СВОЕГО окна (A), а не мировые —
-        // пересчёт через рамку окна A, как это делает computeDropPositions.
-        const viewA0 = projectFlatView(m, pidA);
-        const winA = Object.values(viewA0.levelWindows)[0];
-        const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
-        m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'UPDATE_NODE', payload: { id: 'nodeA', updates: { position: {
-            x: boundsB.x - winA.position.x - borderW,
-            y: boundsB.y - winA.position.y - borderW - headerH
-        } }, skipHistory: true } } } });
-
-        // Указатель — точно на nodeB (узел-приёмник в ДРУГОМ проекте)
-        const target = HierarchyUtils.getDropTargetAcrossProjects(
-            ['nodeA'], { x: boundsB.x + boundsB.w / 2, y: boundsB.y + boundsB.h / 2 }, m, pidA, { dragDropMode: true }
-        );
-        assert.ok(target, 'цель найдена');
-        assert.equal(target.projectId, pidB, 'цель — из проекта B, не A');
-        assert.equal(target.kind, 'node');
-        assert.equal(target.id, 'nodeB');
-        assert.equal(target.valid, true);
-
-        // Пустое место окна проекта B (вдали от nodeB, внутри тела окна) — цель
-        // window; isMove не путает номер уровня с id окна (регрессия 6.3.1: у
-        // обоих проектов Главный холст — levelIndex 0, но это РАЗНЫЕ окна).
-        // nodeA возвращается на своё исходное место — иначе dragRect остался бы
-        // наложен на nodeB независимо от точки указателя (pickBest игнорирует
-        // указатель для node/layer-кандидатов, он только для тай-брейка).
-        m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'UPDATE_NODE', payload: { id: 'nodeA', updates: { position: { x: 0, y: 0 } }, skipHistory: true } } } });
-        const emptySpot = { x: winB.position.x + winB.size.w - 50, y: winB.position.y + winB.size.h - 50 };
-        const winTarget = HierarchyUtils.getDropTargetAcrossProjects(['nodeA'], emptySpot, m, pidA, { dragDropMode: true });
-        assert.equal(winTarget.kind, 'window');
-        assert.equal(winTarget.id, winB.id);
-        assert.equal(winTarget.projectId, pidB);
-        assert.equal(winTarget.isMove, false, '«своим окном» цель в ДРУГОМ проекте быть не может, даже при том же levelIndex');
-    } finally {
-        delete global.window;
-    }
-});
-
-// v14: computeDropPositions — раскладка при дропе в окно уровня; ни один
-// живой компонент её больше не вызывает (v14 REPARENT_ENTITY считает позицию
-// через findFreePosition/явный курсор, см. reducer.js). Тест сломан фикстурой
-// (ADD_PROJECT больше не создаёт окно) и удалён вместе с проверяемым (более
-// не достижимым) поведением, а не перенесён — см. §7.13 плана. Функция сама
-// остаётся в hierarchy.js нетронутой до её v14-переписи в Фазе 5.
+// v14 (Фаза 6): getDropTargetAcrossProjects/computeDropPositions удалены
+// вместе с проверяемым v13-only резолвером дропа (levelIndex-адресация окон,
+// getEntityWorldBounds/LEVEL_WINDOW_METRICS) — ни один живой компонент их не
+// вызывает: v14 REPARENT_ENTITY считает позицию через findFreePosition/явный
+// курсор (см. reducer.js), а живой Drag&Drop-резолвер — HierarchyUtils.
+// resolveDropTarget — пока однопроектный (кросс-проектный вариант из живого
+// UI не реализован, см. AGENTS.md, «Кросс-проектный Drag&Drop»).
 
 // === Фаза 6.4: глобальный экспорт/импорт рабочего пространства ===
 
