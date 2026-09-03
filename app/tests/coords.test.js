@@ -186,26 +186,10 @@ test('LOAD_STATE демо-проекта: результат — валидна�
     assert.ok(checked > 0, 'хотя бы один узел демо-проекта должен был попасть в открытую дорожку');
 });
 
-test('UPDATE_LEVEL_PROPERTIES: поля камеры маршрутизируются в levelViews, а не теряются', () => {
-    // Регрессия: обработчики панорамы и зума внутри окна шлют именно этот экшен.
-    // Если он отбросит innerOffset/innerZoom, панорамирование внутри уровня просто перестанет работать.
-    const winId = Object.values(defaultState.levelWindows)[0].id;
-
-    let s = reducer(defaultState, {
-        type: 'UPDATE_LEVEL_PROPERTIES',
-        payload: { index: 0, updates: { innerOffset: { x: 33, y: 44 }, innerZoom: 1.7 }, skipHistory: true }
-    });
-    assert.deepEqual(s.levelViews[winId].innerOffset, { x: 33, y: 44 });
-    assert.equal(s.levelViews[winId].innerZoom, 1.7);
-    assert.equal(s.past.length, 0, 'движение камеры не пишет историю');
-    assert.equal(s.levelWindows[winId].innerZoom, undefined, 'камера не протекает в запись окна');
-
-    // Свойства рамки по-прежнему меняются и попадают в историю, камера при этом цела
-    s = reducer(s, { type: 'UPDATE_LEVEL_PROPERTIES', payload: { index: 0, updates: { name: 'Переименован' } } });
-    assert.equal(s.levelWindows[winId].name, 'Переименован');
-    assert.equal(s.levelViews[winId].innerZoom, 1.7);
-    assert.equal(s.past.length, 1);
-});
+// v14 (Фаза 6): UPDATE_LEVEL_PROPERTIES удалён вместе с окнами уровней
+// (levelWindows/levelViews не существуют в v14) — маршрутизация «камера vs
+// свойства окна» покрыта v14-версией, UPDATE_WINDOW_PROPERTIES, см.
+// reducer.test.js.
 
 // v14 (Фаза 4): CENTER_ON_ENTITY переписан — центрирует только мировую камеру
 // (упрощение, см. reducer.js), отдельной подстройки камеры окна больше нет.

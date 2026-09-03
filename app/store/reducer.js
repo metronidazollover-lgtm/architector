@@ -24,15 +24,6 @@ const getHierarchy = () =>
     (typeof global !== 'undefined' && global.HierarchyUtils) ? global.HierarchyUtils :
     (typeof module !== 'undefined' && typeof require !== 'undefined') ? require('../utils/hierarchy.js') : null;
 
-// Мировая точка порта — через единое координатное ядро (учитывает окно уровня).
-const getPortAbs = (port, node, state) => {
-    const H = getHierarchy();
-    const world = H.getPortWorldPosition(port.id, state);
-    if (world) return { x: world.x, y: world.y, edge: port.edge };
-    const local = H.getLocalPosition(node.id, state.nodes, state.layers);
-    return getGeometry().getPortAbsolutePosition(port, node, local);
-};
-
 // Миграция формата сохранений: v9 хранил все позиции в мировых координатах,
 // v10 хранит позиции детей относительно родителя.
 const migrateToV10 = (data) => {
@@ -418,92 +409,13 @@ const normalizeContainer = (entity) => {
 // центрирует только мировую камеру и её не вызывает. Проверено grep'ом по
 // всему app/ — остаточных вызовов нет.
 
-// Окно по стабильному id либо по номеру уровня (легаси-вызовы из компонентов).
-const resolveWindow = (state, key) => {
-    if (key === undefined || key === null) return null;
-    const wins = state.levelWindows || {};
-    if (wins[key]) return wins[key];
-    const num = Number(key);
-    if (Number.isNaN(num)) return null;
-    return Object.values(wins).find(w => w && w.levelIndex === num) || null;
-};
-
-// Пересчёт фокус-наборов веток из текущего выделения.
-// Уровень 0: фокус-корни = выделенные корневые сущности (их ветки просвечивает
-// глобальный глаз на всех уровнях). Уровень N>=1: фокус = владельцы выделенных
-// детей (мульти-выделение с разными родителями даёт несколько веток).
-// Уровни, не затронутые выделением, сохраняют прежние наборы — ветка «прилипает»
-// и остаётся рабочей после снятия выделения.
-const withSelectionFocus = (state, selectedIds) => {
-    const H = getHierarchy();
-    if (!H || !selectedIds || selectedIds.length === 0) return {};
-    const byLevel = {};
-    selectedIds.forEach(id => {
-        const entity = (state.nodes && state.nodes[id]) || (state.layers && state.layers[id]);
-        if (!entity) return; // окна, связи, порты фокус не задают
-        const lvl = H.getEntityLevel(id, state.nodes, state.layers);
-        if (lvl === 0) {
-            (byLevel[0] = byLevel[0] || new Set()).add(id);
-        } else {
-            const owner = H.getBranchOwner ? H.getBranchOwner(id, state.nodes, state.layers) : null;
-            if (owner) (byLevel[lvl] = byLevel[lvl] || new Set()).add(owner);
-        }
-    });
-    if (Object.keys(byLevel).length === 0) return {};
-    const next = { ...state.levelFocusParentId };
-    Object.entries(byLevel).forEach(([lvl, set]) => {
-        const owners = Array.from(set);
-        // Стабильный обзор: пока глаз этого уровня включён, выделение УЖЕ
-        // видимой ветки (владельцы — подмножество текущего набора) набор не
-        // сужает — иначе вторая ветка исчезала бы с экрана прямо под руками.
-        // Сузить набор можно, переключив глаз при новом выделении, или выделив
-        // сущность вне видимых веток (тогда набор переписывается).
-        const eyeOn = state.levelHideNeighbors && state.levelHideNeighbors[lvl];
-        const current = H.toFocusList ? H.toFocusList(next[lvl]) : [];
-        if (eyeOn && current.length > 0 && owners.every(o => current.includes(o))) {
-            return;
-        }
-        next[lvl] = owners;
-    });
-    return { levelFocusParentId: next };
-};
-
-// Обновление камеры окна. Камера живёт вне снапшотов истории (как state.canvas),
-// поэтому Undo структурных правок не сбрасывает панораму и зум.
-const withLevelView = (state, winId, patch) => ({
-    ...state,
-    levelViews: {
-        ...state.levelViews,
-        [winId]: { ...makeLevelView(state.levelViews && state.levelViews[winId]), ...patch }
-    }
-});
-
-// v14 (Фаза 4, финальный коммит): getWindowContentArea/applyFocusConnectedElements
-// физически удалены — обслуживали только старую (per-window) реализацию
-// FOCUS_CONNECTED_ELEMENTS; новая v14-версия (см. её case ниже) центрирует
-// только мировую камеру и обе не вызывает. Проверено grep'ом по всему app/ —
-// остаточных вызовов нет. revertFocusSnapshot ниже остаётся: она по-прежнему
-// вызывается из SET_SELECTED и защищена собственной проверкой `if (!snap)
-// return {}` — раз focusSnapshot больше никто не выставляет, она становится
-// безвредным no-op, а не мёртвым кодом с висячим вызовом.
-
-// Откат к виду ДО серии двойных кликов «показать связанные элементы».
-// Вызывается из SET_SELECTED при явном сбросе выделения (клик по пустому
-// месту, Esc) — см. её case ниже.
-const revertFocusSnapshot = (state) => {
-    const snap = state.focusSnapshot;
-    if (!snap) return {};
-    const nextViews = { ...state.levelViews };
-    Object.entries(snap.windows || {}).forEach(([winId, saved]) => {
-        if (!nextViews[winId]) return; // окно могло быть удалено за это время
-        nextViews[winId] = { ...makeLevelView(nextViews[winId]), ...saved };
-    });
-    return {
-        levelViews: nextViews,
-        canvas: snap.camera ? { ...state.canvas, ...snap.camera } : state.canvas,
-        focusSnapshot: null
-    };
-};
+// v14 (Фаза 6): resolveWindow/withSelectionFocus/withLevelView/revertFocusSnapshot
+// удалены — обслуживали только v13 окна уровней (levelWindows/levelViews) и
+// «глаз»-фокус веток (levelFocusParentId/levelHideNeighbors), ни то ни другое
+// в v14 не существует. focusSnapshot удалён по той же причине — его некому
+// было выставлять уже с конца Фазы 4 (getWindowContentArea/
+// applyFocusConnectedElements физически удалены тогда же), revertFocusSnapshot
+// была безвредным no-op.
 
 const defaultState = {
     projectName: 'Проект Архитектуры',
@@ -543,12 +455,6 @@ const defaultState = {
     // Текущий жест перетаскивания (Drag&Drop): { ids, target } либо null.
     // Живёт вне истории и вне сохранений — сбрасывается при любой загрузке.
     dragGesture: null,
-    // Снимок камеры и окон ДО первого двойного клика «показать связанные
-    // элементы» (FOCUS_CONNECTED_ELEMENTS) в текущей сессии фокуса. Клик по
-    // пустому месту (SET_SELECTED с payload=null) откатывает к этому снимку
-    // и обнуляет поле. Живёт вне истории Undo — это состояние обзора, а не
-    // данных (как и camera/dragGesture).
-    focusSnapshot: null,
     canvas: {
         offset: { x: -30, y: -50 },
         zoom: 0.65
@@ -695,32 +601,29 @@ const getInitialState = () => {
 
 // Хелпер для сохранения истории
 
-// === Выделение контейнеров: проекты и окна уровней ===
+// === Выделение контейнеров: проекты и окна ===
 //
 // Контейнеры адресуются префиксами, чтобы отличать их от сущностей графа и друг
-// от друга. Прежде проект выделялся литералом 'project' (всегда «активный» —
-// конкретный указать было нельзя), а окно строкой level-window-<номер уровня>,
-// который не уникален между проектами: уровень 1 есть у каждого. Обе старые
-// формы продолжают распознаваться — selectedIds персистится, и после обновления
-// в хранилище могут лежать прежние значения.
+// от друга: 'project:<id>' и 'window:<id>' (id окна стабилен и уникален между
+// проектами — не завязан на глубину/уровень). Легаси-литерал 'project' (без id,
+// всегда «активный») распознаётся и сейчас — persisted selectedIds могли
+// пережить обновление до появления id-адресации.
 const SEL_PROJECT = 'project:';
 const SEL_WINDOW = 'window:';
 const SEL_LEGACY_PROJECT = 'project';
-const SEL_LEGACY_WINDOW = 'level-window-';
 
 /** @param {*} sid @returns {boolean} это идентификатор контейнера, а не сущности графа */
 const isContainerSelectionId = (sid) => typeof sid === 'string' && (
     sid === SEL_LEGACY_PROJECT ||
     sid.startsWith(SEL_PROJECT) ||
-    sid.startsWith(SEL_WINDOW) ||
-    sid.startsWith(SEL_LEGACY_WINDOW)
+    sid.startsWith(SEL_WINDOW)
 );
 
 /** @param {*} sid @returns {?('project'|'window')} */
 const containerSelectionKind = (sid) => {
     if (typeof sid !== 'string') return null;
     if (sid === SEL_LEGACY_PROJECT || sid.startsWith(SEL_PROJECT)) return 'project';
-    if (sid.startsWith(SEL_WINDOW) || sid.startsWith(SEL_LEGACY_WINDOW)) return 'window';
+    if (sid.startsWith(SEL_WINDOW)) return 'window';
     return null;
 };
 
@@ -812,237 +715,17 @@ const saveHistory = (state, logMessage, snapshotOverride = null) => {
     };
 };
 
-/**
- * Структурный родитель сущности («на уровень выше через УЗЕЛ», семантический
- * шаг v13, см. docs/IDEAL_INTERACTIONS.md §1.1) — единообразно для ещё не
- * мигрированных v11-сущностей (ownerId) и уже v13-сущностей (parentId
- * указывает прямо на узел, что сегодня может произойти только через
- * REPARENT_ENTITY — TRANSFER_NODE/CREATE_NESTED_NODE пока всегда пишут
- * ownerId). parentId, указывающий на СЛОЙ, — координата, не родство,
- * сюда не попадает (слои не меняют уровень, см. правило семантического шага).
- * @param {Object} entity
- * @param {Object<string, Object>} nodes
- * @returns {?string}
- */
-const structuralParentOf = (entity, nodes) => {
-    if (entity.ownerId) return entity.ownerId;
-    if (entity.parentId && entity.parentId !== 'root' && nodes && nodes[entity.parentId]) return entity.parentId;
-    return null;
-};
-
-// Общая реализация удаления уровня: используется экшеном REMOVE_LEVEL_WINDOW
-// и клавишей Delete (DELETE_SELECTED при выделенном окне уровня). Вынесена из
-// switch, чтобы редьюсер не ссылался сам на себя (самовызов ломал загрузку
-// через babel-standalone: top-level const переставал быть виден другим скриптам).
-//
-// allowRoot: удаление Главного холста (уровень 0) разрешено, если есть уровень 1,
-// готовый занять его место — окно уровня 1 занимает его место со своим именем и цветом.
-const applyRemoveLevelWindow = (state, win, allowRoot = true) => {
-    if (!win) return state;
-    const removedLevel = win.levelIndex;
-    if (removedLevel === 0 && !allowRoot) return state;
-    // Удалять Главный холст можно, лишь когда есть уровень 1, готовый занять его место
-    if (removedLevel === 0 && !Object.values(state.levelWindows || {}).some(w => w && w.levelIndex === 1)) {
-        return state;
-    }
-
-    const historyState = saveHistory(state, removedLevel === 0 ? 'Удаление Главного холста' : `Удаление Уровня ${removedLevel}`);
-    const H = getHierarchy();
-    const levelOf = (eid) => (H ? H.getEntityLevel(eid, state.nodes, state.layers) : 0);
-    const gapOf = (e) => (H && H.getOwnerGap) ? H.getOwnerGap(e) : 1;
-    // Дистанция до владельца пишется в ownerGap только когда она больше 1 —
-    // дефолт (1) не засоряет сохранения и старые проекты
-    const withGap = (e, gap) => {
-        if (gap > 1) return { ...e, ownerGap: gap };
-        if (e.ownerGap !== undefined) { const { ownerGap, ...rest } = e; return rest; }
-        return e;
-    };
-
-    // 1. Сущности удаляемого уровня (узлы И слои)
-    const removedIds = new Set();
-    Object.keys(state.nodes || {}).forEach(eid => { if (levelOf(eid) === removedLevel) removedIds.add(eid); });
-    Object.keys(state.layers || {}).forEach(eid => { if (levelOf(eid) === removedLevel) removedIds.add(eid); });
-
-    // 2. Выжившие сущности; осиротевшие структурные цепочки пере-якорятся.
-    // structuralParentOf унифицирует ownerId (v11) и parentId-на-узел (v13,
-    // сегодня возможно только через REPARENT_ENTITY) — «внук — деду» работает
-    // одинаково независимо от того, какой цепочкой сущность сюда попала.
-    // v11 несёт свою дистанцию до родителя в ownerGap; v13 (нет ownerId) её не
-    // хранит вовсе — расстояние всегда ровно 1 по определению модели.
-    const gapOf2 = (ent) => (ent && ent.ownerId ? gapOf(ent) : 1);
-
-    const reanchor = (entity) => {
-        let e = entity;
-        const myParent = structuralParentOf(e, state.nodes);
-        if (myParent && removedIds.has(myParent)) {
-            const deadParent = (state.nodes && state.nodes[myParent]) || (state.layers && state.layers[myParent]);
-            const grandparent = deadParent ? structuralParentOf(deadParent, state.nodes) : null;
-            // v13 (нет ownerId у e): прямая ссылка parentId=дед безопасна ТОЛЬКО
-            // если реальная дистанция дед→мёртвый родитель ровно 1 — иначе v13
-            // не может выразить растянутую дистанцию (gap у неё не существует)
-            // и сущность обязана явно заякориться (см. else-ветку), как и
-            // migrateToV13 делает для ownerGap > 1.
-            const canDirectLink = !!e.ownerId || gapOf2(deadParent) === 1;
-            if (grandparent && !removedIds.has(grandparent) && canDirectLink) {
-                if (e.ownerId) {
-                    // «Внук — деду» (v11): дистанции складываются, минус один снятый уровень
-                    e = withGap({ ...e, ownerId: grandparent }, gapOf(e) + gapOf(deadParent) - 1);
-                } else {
-                    // v13: связь всегда прямая (дистанция ровно 1, gap не существует)
-                    e = { ...e, parentId: grandparent };
-                }
-            } else {
-                // Родитель был корневым/сиротой-якорем удаляемого уровня:
-                // ребёнок сам становится якорем на ТЕКУЩЕМ уровне (removedLevel +
-                // дистанция); общий блок сдвига якорей ниже опустит значение на
-                // один вместе с остальными уровнями — двойного сдвига нет.
-                // Мёртвую parentId-ссылку (если структурная связь была через
-                // parentId, не ownerId) тоже нужно снять — homeLevel становится
-                // единственным источником уровня сироты-якоря.
-                e = withGap({
-                    ...e,
-                    ownerId: null,
-                    homeLevel: removedLevel + gapOf2(e),
-                    ...(e.ownerId ? {} : { parentId: 'root' })
-                }, 1);
-            }
-        } else if (myParent) {
-            // Родитель жив. Если связь через поколение (только ownerId, v11)
-            // ПЕРЕПРЫГИВАЛА удаляемый уровень, дистанция сокращается на один
-            // вместе со сдвигом уровней. v13 (parentId-на-узел): дистанция
-            // всегда ровно 1 по определению, «перепрыгивания» не бывает.
-            if (e.ownerId) {
-                const ownerLvl = levelOf(myParent);
-                const myLvl = levelOf(e.id);
-                if (ownerLvl < removedLevel && myLvl > removedLevel) {
-                    e = withGap({ ...e }, gapOf(e) - 1);
-                }
-            }
-        }
-        // Координатный контейнер (СЛОЙ) удалён — сущность встаёт на холст
-        // уровня. Узел уже обработан выше (структурная ветка) — здесь остаются
-        // только слои (и живой parentId, не заменённый на grandparent/'root' там).
-        if (e.parentId && e.parentId !== 'root' && removedIds.has(e.parentId) && !(state.nodes && state.nodes[e.parentId])) {
-            e = { ...e, parentId: 'root' };
-        }
-        // Якоря независимых веток сдвигаются вместе с уровнями
-        if (typeof e.homeLevel === 'number' && e.homeLevel > removedLevel) {
-            e = { ...e, homeLevel: e.homeLevel - 1 };
-        }
-        return e;
-    };
-    const newNodes = {};
-    Object.entries(state.nodes || {}).forEach(([eid, n]) => { if (n && !removedIds.has(eid)) newNodes[eid] = reanchor(n); });
-    const newLayers = {};
-    Object.entries(state.layers || {}).forEach(([eid, l]) => { if (l && !removedIds.has(eid)) newLayers[eid] = reanchor(l); });
-
-    // 3. Порты: обычные живут при живом узле; мастер-порты уровней
-    //    сдвигаются вместе с уровнем (id кодирует номер уровня)
-    const newPorts = {};
-    const portRename = {};
-    Object.entries(state.ports || {}).forEach(([pid, p]) => {
-        if (!p) return;
-        if (p.isMaster || p.windowIndex != null) {
-            const lvl = p.windowIndex;
-            if (lvl === removedLevel) return; // мастер-порт удалённого уровня
-            if (lvl != null && lvl > removedLevel) {
-                const nid = 'port-master-level-' + (lvl - 1);
-                newPorts[nid] = { ...p, id: nid, windowIndex: lvl - 1 };
-                portRename[pid] = nid;
-            } else {
-                newPorts[pid] = p;
-            }
-            return;
-        }
-        if (newNodes[p.nodeId]) newPorts[pid] = p;
-    });
-
-    // 4. Связи: живут, только если живы оба порта (с учётом переименования)
-    const mapPid = (pid) => portRename[pid] || pid;
-    const newLinks = {};
-    Object.entries(state.links || {}).forEach(([lid, l]) => {
-        if (!l) return;
-        const sp = mapPid(l.sourcePortId);
-        const tp = mapPid(l.targetPortId);
-        if (newPorts[sp] && newPorts[tp]) {
-            let nl = (sp !== l.sourcePortId || tp !== l.targetPortId)
-                ? { ...l, sourcePortId: sp, targetPortId: tp }
-                : l;
-            // Ручные позиции прокси удалённого окна больше не нужны
-            if (nl.proxyOverrides && nl.proxyOverrides[win.id]) {
-                const rest = { ...nl.proxyOverrides };
-                delete rest[win.id];
-                nl = { ...nl, proxyOverrides: rest };
-            }
-            newLinks[lid] = nl;
-        }
-    });
-
-    // 5. Окна: своё удаляем, нижние сдвигаем вверх с сохранением рамки.
-    //    Нормализация чинит инвариант и вычищает камеры исчезнувших окон;
-    //    камеры выживших ключуются по id и переезжают без изменений.
-    const shiftedWindows = {};
-    Object.values(state.levelWindows || {}).forEach(w => {
-        if (!w || w.id === win.id) return;
-        shiftedWindows[w.id] = w.levelIndex > removedLevel ? { ...w, levelIndex: w.levelIndex - 1 } : w;
-    });
-    const normalized = normalizeLevelWindows(shiftedWindows, newNodes, newLayers, state.levelViews);
-
-    // 6. Пер-уровневые словари UI сдвигаются вместе с уровнями
-    const shiftLevelKeyed = (dict) => {
-        const res = {};
-        Object.entries(dict || {}).forEach(([k, v]) => {
-            const lvl = Number(k);
-            if (Number.isNaN(lvl) || lvl === removedLevel) return;
-            res[lvl > removedLevel ? lvl - 1 : lvl] = v;
-        });
-        return res;
-    };
-    // Фокус-наборы: сдвиг + пере-якорение. Если фокус-владелец удалён вместе с
-    // уровнем, ветку наследует его владелец («внук — деду») — как и сами узлы.
-    const shiftedFocus = {};
-    Object.entries(shiftLevelKeyed(state.levelFocusParentId)).forEach(([k, v]) => {
-        const list = (Array.isArray(v) ? v : (v ? [v] : []))
-            .map(fid => {
-                if (!removedIds.has(fid)) return fid;
-                const dead = (state.nodes && state.nodes[fid]) || (state.layers && state.layers[fid]);
-                return (dead && dead.ownerId) || null;
-            })
-            .filter(fid => fid && (newNodes[fid] || newLayers[fid]));
-        if (list.length > 0) shiftedFocus[k] = Array.from(new Set(list));
-    });
-
-    return {
-        ...state,
-        ...historyState,
-        nodes: newNodes,
-        layers: newLayers,
-        ports: newPorts,
-        links: newLinks,
-        levelWindows: normalized.levelWindows,
-        levelViews: normalized.levelViews,
-        levelHideNeighbors: shiftLevelKeyed(state.levelHideNeighbors),
-        levelFocusParentId: shiftedFocus,
-        activeLevelIndex: state.activeLevelIndex === removedLevel
-            ? Math.max(0, removedLevel - 1)
-            : (state.activeLevelIndex > removedLevel ? state.activeLevelIndex - 1 : state.activeLevelIndex),
-        selectedIds: [],
-        isolatedIds: (state.isolatedIds || []).filter(eid => !removedIds.has(eid))
-    };
-};
+// v14 (Фаза 6): structuralParentOf/applyRemoveLevelWindow удалены — единственные
+// пользователи (REMOVE_LEVEL_WINDOW и «Delete» на выделенном окне уровня) сами
+// давно мертвы (окна уровней, ownerId/ownerGap/homeLevel в v14 не существуют,
+// см. DELETE_SELECTED в multiReducer — v14-версия просто закрывает окно как вид).
 
 // =============================================================================
-// v14 (Фаза 3, «Отчеты, аудиты, планы/Lanes_v14/PLAN_V14_LANES.md» §3/§7.12/§7.13).
-// Обработчики экшенов дорожек/окон/рамок. Добавлено АДДИТИВНО в тот же
-// switch — старые v13-обработчики (MOVE_LEVEL_WINDOW, UPDATE_LEVEL_PROPERTIES,
-// TOGGLE_LEVEL_COLLAPSE, PAN/ZOOM_LEVEL_WINDOW, ALIGN_LEVEL_WINDOWS,
-// CLEAR_PROJECT, DELETE_SELECTED и т.д.) НЕ входят в список «Удаляются» этой
-// фазы и остаются нетронутыми — их продолжают вызывать normalizeLevelWindows/
-// migrateProjectEntitiesToV13 (через getInitialMultiState -> migrateToV13) и
-// компоненты Layer.js/LevelWindow.js вплоть до конца Фазы 4. Экшены ниже
-// работают ИСКЛЮЧИТЕЛЬНО с v14-полями состояния (nodes/frames/windows) —
-// на живом v13-состоянии (без frames/windows) они безопасно no-op'ят на
-// пустых словарях, а не падают.
+// v14 («Отчеты, аудиты, планы/Lanes_v14/PLAN_V14_LANES.md» §3/§7.12/§7.13).
+// Обработчики экшенов дорожек/окон/рамок — единственный живой реестр для этих
+// сущностей с конца Фазы 4 (старые v13-обработчики удалены в Фазе 6, см. выше).
+// Экшены ниже работают ИСКЛЮЧИТЕЛЬНО с v14-полями состояния (nodes/frames/
+// windows).
 // =============================================================================
 
 const WINDOW_SIZE_V14 = { w: 1000, h: 700 };
@@ -2175,21 +1858,18 @@ const reducer = (state, action) => {
         }
         case 'SET_SELECTED': {
             const sel = action.payload ? [action.payload] : [];
-            // Явный сброс выделения (клик по пустому месту, Esc) откатывает
-            // и вид, подобранный FOCUS_CONNECTED_ELEMENTS, если такой активен.
-            const revert = action.payload ? {} : revertFocusSnapshot(state);
-            return { ...state, selectedIds: sel, ...withSelectionFocus(state, sel), ...revert };
+            return { ...state, selectedIds: sel };
         }
         case 'SET_MULTI_SELECTED': {
             const sel = Array.isArray(action.payload) ? action.payload : [];
-            return { ...state, selectedIds: sel, ...withSelectionFocus(state, sel) };
+            return { ...state, selectedIds: sel };
         }
         case 'TOGGLE_SELECTED': {
             const id = action.payload;
             // Классы взаимоисключающи: Shift+клик по узлу после выбора окна
             // заменяет выделение, а не смешивает контейнеры с содержимым
             const sel = toggleSelectionWithClass(state.selectedIds, id);
-            return { ...state, selectedIds: sel, ...withSelectionFocus(state, sel) };
+            return { ...state, selectedIds: sel };
         }
         case 'SET_ISOLATED':
             return { ...state, isolatedIds: action.payload };
@@ -2510,60 +2190,6 @@ const reducer = (state, action) => {
                 selectedIds: [newNodeId]
             };
         }
-        case 'MOVE_LEVEL_WINDOW': {
-            const { id, windowId, index, dx = 0, dy = 0, position, skipHistory } = action.payload || {};
-            const targetKey = windowId !== undefined ? windowId : (id !== undefined ? id : index);
-            const win = resolveWindow(state, targetKey);
-            if (!win) return state;
-
-            const historyState = skipHistory ? {} : saveHistory(state, 'Перемещение окна уровня ' + win.levelIndex);
-            const newPos = position || { x: win.position.x + dx, y: win.position.y + dy };
-
-            return {
-                ...state,
-                ...historyState,
-                levelWindows: { ...state.levelWindows, [win.id]: { ...win, position: newPos } }
-            };
-        }
-        case 'RESIZE_LEVEL_WINDOW': {
-            const { id, windowId, index, size, skipHistory } = action.payload || {};
-            const targetKey = windowId !== undefined ? windowId : (id !== undefined ? id : index);
-            const win = resolveWindow(state, targetKey);
-            if (!win) return state;
-
-            const historyState = skipHistory ? {} : saveHistory(state, 'Изменение размера окна уровня ' + win.levelIndex);
-            const newSize = {
-                w: Math.max(400, (size && size.w) || win.size.w),
-                h: Math.max(300, (size && size.h) || win.size.h)
-            };
-
-            return {
-                ...state,
-                ...historyState,
-                levelWindows: { ...state.levelWindows, [win.id]: { ...win, size: newSize } }
-            };
-        }
-        case 'ALIGN_LEVEL_WINDOWS': {
-            const historyState = saveHistory(state, 'Выравнивание окон уровней');
-            const updatedWindows = { ...state.levelWindows };
-            const ordered = Object.values(updatedWindows).sort((a, b) => a.levelIndex - b.levelIndex);
-
-            // Выравнивание — в СОБСТВЕННОЙ колонке проекта (по верхнему окну),
-            // а не по жёсткому x=-500: при мультипроекте проект не должен
-            // «переезжать» в чужую колонку
-            const anchor = projectWindowAnchor(updatedWindows);
-            let cursorY = anchor.topY;
-            ordered.forEach((w) => {
-                updatedWindows[w.id] = { ...w, position: { x: anchor.x, y: cursorY } };
-                cursorY += (w.size && w.size.h ? w.size.h : LEVEL_WINDOW_DEFAULT_SIZE.h) + LEVEL_WINDOW_GAP;
-            });
-
-            return {
-                ...state,
-                ...historyState,
-                levelWindows: updatedWindows
-            };
-        }
         case 'UPDATE_PROJECT_PROPERTIES': {
             const { updates = {}, skipHistory } = action.payload || {};
             const historyState = skipHistory ? {} : saveHistory(state, 'Изменение свойств проекта');
@@ -2577,67 +2203,13 @@ const reducer = (state, action) => {
                 projectContent: updates.projectContent !== undefined ? updates.projectContent : state.projectContent
             };
         }
-        case 'PAN_LEVEL_WINDOW': {
-            const { id, windowId, index, offset } = action.payload || {};
-            const targetKey = windowId !== undefined ? windowId : (id !== undefined ? id : index);
-            const win = resolveWindow(state, targetKey);
-            if (!win || !offset) return state;
-            return withLevelView(state, win.id, { innerOffset: offset });
-        }
-        case 'ZOOM_LEVEL_WINDOW': {
-            const { id, windowId, index, innerZoom, innerOffset } = action.payload || {};
-            const targetKey = windowId !== undefined ? windowId : (id !== undefined ? id : index);
-            const win = resolveWindow(state, targetKey);
-            if (!win) return state;
-            const patch = {};
-            if (innerZoom !== undefined) patch.innerZoom = innerZoom;
-            if (innerOffset !== undefined) patch.innerOffset = innerOffset;
-            return withLevelView(state, win.id, patch);
-        }
-        case 'UPDATE_LEVEL_PROPERTIES': {
-            const { id, windowId, index, updates = {}, skipHistory } = action.payload || {};
-            const targetKey = windowId !== undefined ? windowId : (id !== undefined ? id : index);
-            const win = resolveWindow(state, targetKey);
-            if (!win) return state;
-
-            // Свойства рамки и камера хранятся раздельно, но экшен принимает и то и другое:
-            // поля камеры МАРШРУТИЗИРУЮТСЯ в levelViews, а не отбрасываются. Молчаливая
-            // потеря поля здесь означала бы неработающие панораму и зум внутри окна.
-            const frameUpdates = { ...updates };
-            const cameraUpdates = {};
-            ['innerOffset', 'innerZoom', 'isCollapsed'].forEach(k => {
-                if (frameUpdates[k] !== undefined) {
-                    cameraUpdates[k] = frameUpdates[k];
-                    delete frameUpdates[k];
-                }
-            });
-            delete frameUpdates.id;
-            delete frameUpdates.levelIndex;
-
-            const hasFrameChange = Object.keys(frameUpdates).length > 0;
-            // Движение камеры не пишет историю, даже если вызвано без skipHistory
-            const historyState = (skipHistory || !hasFrameChange) ? {} : saveHistory(state, 'Изменение свойств уровня ' + win.levelIndex);
-
-            const nextState = Object.keys(cameraUpdates).length > 0
-                ? withLevelView(state, win.id, cameraUpdates)
-                : state;
-
-            return {
-                ...nextState,
-                ...historyState,
-                levelWindows: hasFrameChange
-                    ? { ...state.levelWindows, [win.id]: { ...win, ...frameUpdates } }
-                    : state.levelWindows
-            };
-        }
-        case 'TOGGLE_LEVEL_COLLAPSE': {
-            const { id, windowId, index } = action.payload || {};
-            const targetKey = windowId !== undefined ? windowId : (id !== undefined ? id : index);
-            const win = resolveWindow(state, targetKey);
-            if (!win) return state;
-            const view = (state.levelViews && state.levelViews[win.id]) || {};
-            return withLevelView(state, win.id, { isCollapsed: !view.isCollapsed });
-        }
+        // v14 (Фаза 6): MOVE_LEVEL_WINDOW/RESIZE_LEVEL_WINDOW/ALIGN_LEVEL_WINDOWS/
+        // PAN_LEVEL_WINDOW/ZOOM_LEVEL_WINDOW/UPDATE_LEVEL_PROPERTIES/
+        // TOGGLE_LEVEL_COLLAPSE удалены — читали/писали levelWindows/levelViews,
+        // ни то ни другое в v14 не существует, и ни один живой компонент их не
+        // диспатчил с конца Фазы 4 (LaneWindow.js/Lane.js используют
+        // MOVE_WINDOW/RESIZE_WINDOW/UPDATE_WINDOW_PROPERTIES/
+        // TOGGLE_WINDOW_COLLAPSE/ALIGN_WINDOWS в v14-разделе ниже).
         // v14: FOCUS_CONNECTED_ELEMENTS переписан на месте (Фаза 4 — вызывающие
         // места, Node.js/Port.js/Link.js/Frame.js, переписываются в этой же
         // фазе). Упрощение относительно v13 (applyFocusConnectedElements,
@@ -3374,27 +2946,16 @@ const resolveContainerSelection = (m, selectedIds) => {
             return;
         }
 
-        let windowId = null;
-        if (sid.startsWith(SEL_WINDOW)) {
-            windowId = sid.slice(SEL_WINDOW.length);
-        } else if (sid.startsWith(SEL_LEGACY_WINDOW)) {
-            // Легаси-форма адресует окно НОМЕРОМ УРОВНЯ в активном проекте:
-            // номер не уникален между проектами, поэтому только активный
-            const idx = parseInt(sid.slice(SEL_LEGACY_WINDOW.length), 10);
-            const proj = m.activeProjectId && m.projects[m.activeProjectId];
-            if (proj && !Number.isNaN(idx)) {
-                const win = Object.values(proj.levelWindows || {}).find(w => w && w.levelIndex === idx);
-                if (win) windowId = win.id;
-            }
-        }
+        if (!sid.startsWith(SEL_WINDOW)) return;
+        const windowId = sid.slice(SEL_WINDOW.length);
         if (!windowId || seenWindows.has(windowId)) return;
 
         // Окно ищется во всех проектах: id окон уникальны между проектами
         Object.keys(m.projects || {}).forEach(pid => {
-            const win = m.projects[pid].levelWindows && m.projects[pid].levelWindows[windowId];
+            const win = m.projects[pid].windows && m.projects[pid].windows[windowId];
             if (win) {
                 seenWindows.add(windowId);
-                windows.push({ projectId: pid, windowId, levelIndex: win.levelIndex });
+                windows.push({ projectId: pid, windowId });
             }
         });
     });
@@ -3966,31 +3527,6 @@ const multiReducer = (m, action) => {
                 }
             };
         }
-        case 'MOVE_LEVEL_WINDOW':
-        case 'RESIZE_LEVEL_WINDOW':
-        case 'UPDATE_LEVEL_PROPERTIES':
-        case 'PAN_LEVEL_WINDOW':
-        case 'ZOOM_LEVEL_WINDOW':
-        case 'TOGGLE_LEVEL_COLLAPSE':
-        case 'TOGGLE_LEVEL_NEIGHBORS':
-        case 'CLEAR_LEVEL_WINDOW':
-        case 'REMOVE_LEVEL_WINDOW': {
-            const payload = action.payload || {};
-            const winId = payload.windowId || (typeof payload.id === 'string' && !/^\d+$/.test(payload.id) ? payload.id : null);
-            let targetPid = m.activeProjectId;
-            if (winId && m.projects) {
-                const found = Object.keys(m.projects).find(pid => {
-                    const p = m.projects[pid];
-                    return p && p.levelWindows && p.levelWindows[winId];
-                });
-                if (found) targetPid = found;
-            }
-            if (!targetPid || !m.projects[targetPid]) return delegateToActiveProject(m, action);
-            const flatIn = projectFlatView(m, targetPid);
-            const flatOut = reducer(flatIn, action);
-            if (flatOut === flatIn) return m;
-            return writeProjectView(m, targetPid, flatOut);
-        }
         case 'DELETE_SELECTED': {
             // Массовое удаление КОНТЕЙНЕРОВ. Выделение сущностей графа сюда не
             // попадает: классы взаимоисключающи, поэтому Delete всегда однозначен.
@@ -4002,38 +3538,33 @@ const multiReducer = (m, action) => {
 
             let next = m;
 
-            // 1. Окна уровней — только тех проектов, что не удаляются целиком.
-            //    Внутри проекта идём СВЕРХУ ВНИЗ по номеру уровня: удаление окна
-            //    поднимает нижние уровни на один, и при другом порядке номера
-            //    разъехались бы. Весь набор по проекту — один шаг Undo.
+            // 1. Окна — только тех проектов, что не удаляются целиком. Просто
+            //    закрытие вида (v14 не адресует окна номером уровня, нечего
+            //    сортировать/перенумеровывать при удалении, в отличие от
+            //    старых окон уровней) — весь набор одного проекта всё ещё один
+            //    шаг Undo. Закрытие всех окон проекта НЕ удаляет сам проект —
+            //    в v14 окно лишь вид, а не структура (в отличие от v13, где
+            //    окно уровня было структурным элементом).
             const doomedProjects = new Set(projectIds);
             const byProject = {};
             windows.forEach(w => {
                 if (doomedProjects.has(w.projectId)) return;
-                if (!byProject[w.projectId]) byProject[w.projectId] = [];
-                byProject[w.projectId].push(w);
+                (byProject[w.projectId] || (byProject[w.projectId] = [])).push(w.windowId);
             });
 
             Object.keys(byProject).forEach(pid => {
-                const list = byProject[pid].slice().sort((a, b) => b.levelIndex - a.levelIndex);
+                const list = byProject[pid];
                 let flat = projectFlatView(next, pid);
                 if (!flat) return;
                 flat = reducer(flat, {
                     type: 'BEGIN_HISTORY_BATCH',
-                    payload: { logMessage: `Удалено уровней: ${list.length}` }
+                    payload: { logMessage: `Окон закрыто: ${list.length}` }
                 });
-                list.forEach(w => {
-                    const win = flat.levelWindows && flat.levelWindows[w.windowId];
-                    if (!win) return;
-                    flat = applyRemoveLevelWindow(flat, win, true);
-                });
+                const remainingWindows = { ...(flat.windows || {}) };
+                list.forEach(wid => { delete remainingWindows[wid]; });
+                flat = { ...flat, windows: remainingWindows };
                 flat = reducer(flat, { type: 'COMMIT_HISTORY' });
-                const remainingWins = Object.values(flat.levelWindows || {}).filter(Boolean);
-                if (remainingWins.length === 0) {
-                    next = applyRemoveProject(next, pid);
-                } else {
-                    next = writeProjectView(next, pid, flat);
-                }
+                next = writeProjectView(next, pid, flat);
             });
 
             // 2. Проекты целиком
