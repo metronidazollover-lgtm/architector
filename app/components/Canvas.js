@@ -94,6 +94,63 @@ function DragOverlay() {
     );
 }
 
+// v14 (Фаза 5, §5 плана; было в v13 — Фаза 6.1): кросс-проектные связи
+// (state.crossProjectLinks) — глобальное поле, не принадлежит ни одному
+// проекту, поэтому рисуется ОДИН раз поверх всех проектов (не внутри
+// ProjectContext.Provider, как CrossWindowLinkLayer). Та же идея, что и
+// CrossWindowLinkLayer: оба конца уже лежат в общем мировом пространстве
+// (Canvas рисует окна всех проектов на одном холсте), так что достаточно
+// прямой линии между HierarchyUtils.getPortWorldPositionV14 обеих сторон —
+// никакой отдельной прокси-геометрии на грани окна не нужно.
+function CrossProjectLinkLayer() {
+    const { state, dispatch } = useStore();
+    const HU = window.HierarchyUtils;
+    const links = (HU && state && state.crossProjectLinks) ? Object.values(state.crossProjectLinks).filter(Boolean) : [];
+    if (!links.length) return null;
+
+    const derived = links.map(link => {
+        const sProj = state.projects && state.projects[link.sourceProjectId];
+        const tProj = state.projects && state.projects[link.targetProjectId];
+        if (!sProj || !tProj) return null;
+        if (HU.isProjectVisible && (!HU.isProjectVisible(link.sourceProjectId, state.containerIsolation, sProj.windows)
+            || !HU.isProjectVisible(link.targetProjectId, state.containerIsolation, tProj.windows))) return null;
+
+        const sView = getProjectFlatView(link.sourceProjectId);
+        const tView = getProjectFlatView(link.targetProjectId);
+        const p1 = HU.getPortWorldPositionV14(link.sourcePortId, sView);
+        const p2 = HU.getPortWorldPositionV14(link.targetPortId, tView);
+        if (!p1 || !p2) return null;
+
+        const isSelected = (state.selectedIds || []).includes(link.id)
+            || (state.selectedIds || []).includes(link.sourcePortId)
+            || (state.selectedIds || []).includes(link.targetPortId);
+        return { id: link.id, p1x: p1.x, p1y: p1.y, p2x: p2.x, p2y: p2.y, color: link.color || '#38bdf8', isSelected };
+    }).filter(Boolean);
+
+    if (!derived.length) return null;
+    return (
+        <svg className="absolute top-0 left-0 pointer-events-none" style={{ width: '1px', height: '1px', overflow: 'visible', zIndex: 35 }}>
+            {derived.map(l => {
+                const d = `M ${l.p1x} ${l.p1y} L ${l.p2x} ${l.p2y}`;
+                return (
+                    <g key={`cross-project-link-${l.id}`}>
+                        <path d={d} fill="none" stroke="transparent" strokeWidth="16"
+                            className="pointer-events-auto cursor-pointer"
+                            onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_SELECTED', payload: l.id }); }}
+                            onDoubleClick={(e) => { e.stopPropagation(); dispatch({ type: 'FOCUS_CONNECTED_ELEMENTS', payload: { entityId: l.id } }); }}
+                        />
+                        <path d={d} fill="none" stroke={l.color} strokeWidth={l.isSelected ? '4.5' : '2.5'}
+                            strokeLinecap="round" strokeLinejoin="round" strokeDasharray="3,5"
+                            vectorEffect="non-scaling-stroke" className="pointer-events-none"
+                            style={{ filter: l.isSelected ? `drop-shadow(0 0 10px ${l.color})` : `drop-shadow(0 0 4px ${l.color}66)` }}
+                        />
+                    </g>
+                );
+            })}
+        </svg>
+    );
+}
+
 function Canvas() {
     if (typeof StoreEngine !== 'undefined') StoreEngine.profileRender('Canvas');
     const { state, dispatch } = useStore();
@@ -473,6 +530,7 @@ function Canvas() {
                     });
                 })()}
 
+                <CrossProjectLinkLayer />
                 <PendingLink />
             </div>
         </div>

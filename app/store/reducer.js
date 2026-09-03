@@ -3549,6 +3549,58 @@ const applyRemoveProject = (m, id) => {
 };
 
 /**
+ * Кросс-проектные связи/штекеры (Фаза 6.1/6.2), чей порт уехал вместе с
+ * веткой при кросс-проектном REPARENT_ENTITY, переписываются на новый
+ * projectId — перенос не должен рвать ни живую связь, ни висящий штекер.
+ * Общая для v13- и v14-веток applyCrossProjectReparent (сама структура
+ * crossProjectLinks/pendingGateways не менялась в Фазе 5). Как и
+ * создание/удаление таких связей, этот шаг не входит в Undo ни одного из
+ * двух проектов (см. AGENTS.md).
+ * @param {Object} m мультисостояние (уже с перенесёнными nodes/ports/links)
+ * @param {string} sourceProjectId
+ * @param {string} targetProjectId
+ * @param {Set<string>} movedPortIds
+ * @returns {Object}
+ */
+const relocateCrossProjectGateways = (m, sourceProjectId, targetProjectId, movedPortIds) => {
+    if (!movedPortIds || movedPortIds.size === 0) return m;
+    let next = m;
+
+    const crossProjectLinks = { ...(next.crossProjectLinks || {}) };
+    Object.keys(crossProjectLinks).forEach(id => {
+        const link = crossProjectLinks[id];
+        if (!link) return;
+        let changed = false;
+        let updated = link;
+        if (link.sourceProjectId === sourceProjectId && movedPortIds.has(link.sourcePortId)) { updated = { ...updated, sourceProjectId: targetProjectId }; changed = true; }
+        if (link.targetProjectId === sourceProjectId && movedPortIds.has(link.targetPortId)) { updated = { ...updated, targetProjectId: targetProjectId }; changed = true; }
+        if (changed) crossProjectLinks[id] = updated;
+    });
+    next = { ...next, crossProjectLinks };
+
+    const remainingSourcePending = { ...(next.projects[sourceProjectId].pendingGateways || {}) };
+    const movingPending = {};
+    Object.keys(remainingSourcePending).forEach(linkId => {
+        const gw = remainingSourcePending[linkId];
+        if (gw && movedPortIds.has(gw.portId)) {
+            movingPending[linkId] = gw;
+            delete remainingSourcePending[linkId];
+        }
+    });
+    if (Object.keys(movingPending).length > 0) {
+        next = {
+            ...next,
+            projects: {
+                ...next.projects,
+                [sourceProjectId]: { ...next.projects[sourceProjectId], pendingGateways: remainingSourcePending },
+                [targetProjectId]: { ...next.projects[targetProjectId], pendingGateways: { ...(next.projects[targetProjectId].pendingGateways || {}), ...movingPending } }
+            }
+        };
+    }
+    return next;
+};
+
+/**
  * Кросс-проектный перенос сущности/ветки (Фаза 6.3): REPARENT_ENTITY, чей
  * targetProjectId отличается от sourceProjectId. Перехватывается в
  * multiReducer ДО delegateToActiveProject — обычный (внутрипроектный)
@@ -3566,16 +3618,6 @@ const applyRemoveProject = (m, id) => {
  * @returns {Object}
  */
 const applyCrossProjectReparent = (m, p) => {
-    // v14 (§7.14 плана): барьер до переписи Фазы 5. Эта функция всё ещё
-    // вызывает H.isDescendantOf/H.canReparentTo со старой сигнатурой
-    // (nodes, layers, levelWindows) — после подключения migrateToV14 живые
-    // state.projects[pid] этих полей не несут вовсе. Без барьера — не просто
-    // падение, а риск тихо пропустить проверку цикла на undefined-полях и
-    // испортить структуру проекта. С барьером кросс-проектный перенос между
-    // v14-проектами — явный no-op до полной переписи в Фазе 5 (тогда же барьер
-    // убирается вместе с переводом на isDescendantOfV14/canReparentToV14).
-    if ((m.formatVersion || 0) >= FORMAT_VERSION_V14) return m;
-
     const sourceProjectId = p.sourceProjectId;
     const targetProjectId = p.targetProjectId;
     if (!sourceProjectId || !targetProjectId || sourceProjectId === targetProjectId) return m;
@@ -3587,6 +3629,126 @@ const applyCrossProjectReparent = (m, p) => {
 
     const sourceView = projectFlatView(m, sourceProjectId);
     const targetView = projectFlatView(m, targetProjectId);
+
+    // v14 (§7.14/§7.15 плана, переписано в Фазе 5): барьер снят — живые
+    // проекты после подключения migrateToV14 всегда v14-формы (nodes/frames/
+    // windows, без layers/levelWindows), так что этой веткой идёт КАЖДЫЙ
+    // реальный вызов. Только рамки/узлы v11-фикстур тестов, собранные
+    // wrapFlatToMulti НАПРЯМУЮ (без migrateToV13/migrateToV14) — намеренно
+    // остаются на v13-логике ниже, см. комментарий у теста
+    // getDropTargetAcrossProjects в projects.test.js.
+    if ((m.formatVersion || 0) >= FORMAT_VERSION_V14) {
+        const targetParentId = p.targetParentId !== undefined ? p.targetParentId : p.newParentId;
+        if (!targetParentId) return m;
+
+        const mode = p.mode === 'shallow' ? 'shallow' : 'deep';
+        const getEntity = (eid) => sourceView.nodes && sourceView.nodes[eid];
+        const rawIds = Array.isArray(p.ids) ? p.ids : (p.id ? [p.id] : []);
+        const requestedIds = rawIds.filter(eid => getEntity(eid));
+        if (requestedIds.length === 0) return m;
+
+        // «Только верхние» — как в однопроектном REPARENT_ENTITY.
+        const topIds = requestedIds.filter(eid => !requestedIds.some(other =>
+            other !== eid && H.isDescendantOfV14(eid, other, sourceView.nodes)));
+
+        // canReparentToV14: существование сущности — в SOURCE (entityDicts),
+        // цели и цикл — в TARGET; цикл геометрически невозможен между двумя
+        // разными проектами (eNodes !== safeNodes пропускает эту ветку).
+        const validIds = topIds.filter(eid => {
+            const entity = getEntity(eid);
+            if (!entity) return false;
+            return H.canReparentToV14(eid, targetParentId, targetView.nodes, { nodes: sourceView.nodes }).ok;
+        });
+        if (validIds.length === 0) return m;
+
+        const srcNodes = { ...sourceView.nodes };
+        const srcPorts = { ...sourceView.ports };
+        const srcLinks = { ...sourceView.links };
+        const tgtNodes = { ...targetView.nodes };
+        const tgtPorts = { ...targetView.ports };
+        const tgtLinks = { ...targetView.links };
+        const movedPortIds = new Set();
+
+        const stripLegacy = (e) => { const { ownerId, ownerGap, homeLevel, ...rest } = e; return rest; };
+        const rectsIn = (nodesDict, containerId) => Object.values(nodesDict)
+            .filter(n => n && n.parentId === containerId)
+            .map(n => ({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }));
+        const collectSubtree = (rootId) => {
+            const ids = new Set([rootId]);
+            let changed = true;
+            while (changed) {
+                changed = false;
+                Object.values(srcNodes).forEach(n => { if (n && ids.has(n.parentId) && !ids.has(n.id)) { ids.add(n.id); changed = true; } });
+            }
+            return ids;
+        };
+
+        validIds.forEach(eid => {
+            const entity = getEntity(eid);
+            const oldParentId = entity.parentId || 'root';
+
+            if (mode === 'shallow') {
+                const directChildren = Object.values(srcNodes).filter(n => n && n.parentId === eid);
+                if (directChildren.length > 0) {
+                    const siblingRects = rectsIn(srcNodes, oldParentId);
+                    directChildren.forEach(child => {
+                        const pos = G.findFreePosition(child.size, child.position, siblingRects);
+                        siblingRects.push({ x: pos.x, y: pos.y, w: (child.size && child.size.w) || 200, h: (child.size && child.size.h) || 100 });
+                        srcNodes[child.id] = stripLegacy({ ...child, parentId: oldParentId, position: pos });
+                    });
+                }
+            }
+
+            let position;
+            if (p.positionsById && p.positionsById[eid]) {
+                position = p.positionsById[eid];
+            } else if (validIds.length === 1 && p.position) {
+                position = p.position;
+            } else {
+                position = G.findFreePosition(entity.size, entity.position, rectsIn(tgtNodes, targetParentId));
+            }
+
+            const branchIds = collectSubtree(eid);
+            branchIds.forEach(id => {
+                const e = srcNodes[id];
+                const moved = id === eid ? stripLegacy({ ...e, parentId: targetParentId, position }) : stripLegacy(e);
+                tgtNodes[id] = moved;
+                delete srcNodes[id];
+
+                Object.keys(srcPorts).forEach(portId => {
+                    const port = srcPorts[portId];
+                    if (port && port.nodeId === id) {
+                        tgtPorts[portId] = port;
+                        delete srcPorts[portId];
+                        movedPortIds.add(portId);
+                    }
+                });
+            });
+        });
+
+        Object.keys(srcLinks).forEach(linkId => {
+            const link = srcLinks[linkId];
+            if (!link) return;
+            const sMoved = movedPortIds.has(link.sourcePortId);
+            const tMoved = movedPortIds.has(link.targetPortId);
+            if (sMoved && tMoved) { tgtLinks[linkId] = link; delete srcLinks[linkId]; }
+            else if (sMoved || tMoved) { delete srcLinks[linkId]; }
+        });
+
+        // Дроп на карточку узла без открытой дорожки в целевом проекте —
+        // она открывается автоматически (§0.4.3 плана), как в однопроектном
+        // REPARENT_ENTITY.
+        let tgtWindows = targetView.windows || {};
+        if (targetParentId !== 'root') {
+            tgtWindows = applyOpenLaneV14(tgtWindows, tgtNodes, targetParentId);
+        }
+
+        let next = writeProjectView(m, sourceProjectId, { ...sourceView, nodes: srcNodes, ports: srcPorts, links: srcLinks });
+        next = writeProjectView(next, targetProjectId, { ...targetView, nodes: tgtNodes, ports: tgtPorts, links: tgtLinks, windows: tgtWindows });
+
+        next = relocateCrossProjectGateways(next, sourceProjectId, targetProjectId, movedPortIds);
+        return pruneContainerIsolation(next);
+    }
 
     const mode = p.mode === 'shallow' ? 'shallow' : 'deep';
     let targetParentId = p.targetParentId !== undefined ? p.targetParentId : p.newParentId;
@@ -3730,44 +3892,7 @@ const applyCrossProjectReparent = (m, p) => {
         levelWindows: targetNormalized.levelWindows, levelViews: targetNormalized.levelViews
     });
 
-    // Кросс-проектные связи/штекеры (Фаза 6.1/6.2), чей порт уехал вместе с
-    // веткой, переписываются на новый projectId — перенос не должен рвать ни
-    // живую связь, ни висящий штекер. Как и создание/удаление таких связей,
-    // этот шаг не входит в Undo ни одного из двух проектов (см. AGENTS.md).
-    if (movedPortIds.size > 0) {
-        const crossProjectLinks = { ...(next.crossProjectLinks || {}) };
-        Object.keys(crossProjectLinks).forEach(id => {
-            const link = crossProjectLinks[id];
-            if (!link) return;
-            let changed = false;
-            let updated = link;
-            if (link.sourceProjectId === sourceProjectId && movedPortIds.has(link.sourcePortId)) { updated = { ...updated, sourceProjectId: targetProjectId }; changed = true; }
-            if (link.targetProjectId === sourceProjectId && movedPortIds.has(link.targetPortId)) { updated = { ...updated, targetProjectId: targetProjectId }; changed = true; }
-            if (changed) crossProjectLinks[id] = updated;
-        });
-        next = { ...next, crossProjectLinks };
-
-        const remainingSourcePending = { ...(next.projects[sourceProjectId].pendingGateways || {}) };
-        const movingPending = {};
-        Object.keys(remainingSourcePending).forEach(linkId => {
-            const gw = remainingSourcePending[linkId];
-            if (gw && movedPortIds.has(gw.portId)) {
-                movingPending[linkId] = gw;
-                delete remainingSourcePending[linkId];
-            }
-        });
-        if (Object.keys(movingPending).length > 0) {
-            next = {
-                ...next,
-                projects: {
-                    ...next.projects,
-                    [sourceProjectId]: { ...next.projects[sourceProjectId], pendingGateways: remainingSourcePending },
-                    [targetProjectId]: { ...next.projects[targetProjectId], pendingGateways: { ...(next.projects[targetProjectId].pendingGateways || {}), ...movingPending } }
-                }
-            };
-        }
-    }
-
+    next = relocateCrossProjectGateways(next, sourceProjectId, targetProjectId, movedPortIds);
     return pruneContainerIsolation(next);
 };
 

@@ -688,6 +688,107 @@ test('REPARENT_ENTITY (кросс-проектный): нет проекта-и�
     assert.equal(m, before, 'no-op: целевого проекта не существует');
 });
 
+// === Фаза 5 (§5 плана): applyCrossProjectReparent переписан на v14 ===
+// Барьер formatVersion >= 14 (§7.14) снят — фикстуры здесь ЯВНО помечены
+// formatVersion: 14 (в отличие от тестов выше, которые намеренно работают с
+// НЕ мигрированным v13-состоянием wrapFlatToMulti), так что реально проходят
+// именно НОВУЮ v14-ветку (nodes-only, isDescendantOfV14/canReparentToV14).
+
+const makeFlatV14 = (overrides) => ({ ...defaultState, formatVersion: 14, projectName: 'Старый проект', ...overrides });
+
+test('REPARENT_ENTITY (кросс-проектный, v14, Deep): узел с портом переезжает целиком между v14-проектами', () => {
+    let m = wrapFlatToMulti(makeFlatV14({
+        nodes: { nodeA: { id: 'nodeA', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } }
+    }));
+    m = { ...m, formatVersion: 14 };
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_PORT', payload: { id: 'portA', nodeId: 'nodeA', name: 'PortA' } } } });
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'root', mode: 'deep' }
+    });
+
+    assert.equal(m.projects[pidA].nodes.nodeA, undefined, 'узел ушёл из A');
+    assert.equal(m.projects[pidA].ports.portA, undefined, 'порт ушёл вместе с узлом');
+    assert.ok(m.projects[pidB].nodes.nodeA, 'узел появился в B');
+    assert.equal(m.projects[pidB].nodes.nodeA.parentId, 'root');
+    assert.ok(m.projects[pidB].ports.portA, 'порт появился в B');
+});
+
+test('REPARENT_ENTITY (кросс-проектный, v14, Shallow): прямые дети остаются в источнике, усыновляются дедом', () => {
+    let m = wrapFlatToMulti(makeFlatV14({
+        nodes: {
+            nodeA: { id: 'nodeA', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' },
+            child: { id: 'child', name: 'Child', position: { x: 10, y: 10 }, size: { w: 100, h: 60 }, parentId: 'nodeA' }
+        }
+    }));
+    m = { ...m, formatVersion: 14 };
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'root', mode: 'shallow' }
+    });
+
+    assert.equal(m.projects[pidA].nodes.nodeA, undefined, 'сама сущность уехала');
+    assert.ok(m.projects[pidA].nodes.child, 'ребёнок остался в A');
+    assert.equal(m.projects[pidA].nodes.child.parentId, 'root', 'усыновлён дедом (root)');
+    assert.ok(m.projects[pidB].nodes.nodeA, 'сущность появилась в B без детей');
+    assert.equal(m.projects[pidB].nodes.child, undefined);
+});
+
+test('REPARENT_ENTITY (кросс-проектный, v14): цель — узел цели без открытой дорожки, дорожка открывается автоматически (§0.4.3)', () => {
+    let m = wrapFlatToMulti(makeFlatV14({
+        nodes: { nodeA: { id: 'nodeA', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } }
+    }));
+    m = { ...m, formatVersion: 14 };
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } } });
+
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'nodeB', mode: 'deep' }
+    });
+
+    assert.equal(m.projects[pidA].nodes.nodeA, undefined);
+    assert.equal(m.projects[pidB].nodes.nodeA.parentId, 'nodeB');
+    const winsB = Object.values(m.projects[pidB].windows);
+    assert.ok(winsB.some(w => (w.lanes || []).includes('nodeB')), 'дорожка nodeB открылась автоматически в целевом окне B');
+});
+
+test('REPARENT_ENTITY (кросс-проектный, v14): переносит crossProjectLinks и pendingGateways вместе с портом', () => {
+    let m = wrapFlatToMulti(makeFlatV14({
+        nodes: { nodeA: { id: 'nodeA', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } }
+    }));
+    m = { ...m, formatVersion: 14 };
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_PORT', payload: { id: 'portA1', nodeId: 'nodeA', name: 'PortA1' } } } });
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } } });
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_PORT', payload: { id: 'portB1', nodeId: 'nodeB', name: 'PortB1' } } } });
+    m = multiReducer(m, { type: 'ADD_CROSS_PROJECT_LINK', payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' } });
+    const linkId = Object.keys(m.crossProjectLinks)[0];
+
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidC = m.activeProjectId;
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidC, targetParentId: 'root', mode: 'deep' }
+    });
+
+    const link = m.crossProjectLinks[linkId];
+    assert.equal(link.sourceProjectId, pidC, 'живая связь переехала на новый projectId вместе с портом');
+    assert.equal(link.sourcePortId, 'portA1');
+});
+
 test('HierarchyUtils.getDropTargetAcrossProjects: находит цель в ЧУЖОМ проекте, помечает projectId', () => {
     let m = wrapFlatToMulti(makeFlat()); // nodeA в 'root' Главного холста, pos (0,0) size 200x100
     const pidA = m.activeProjectId;

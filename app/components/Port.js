@@ -8,9 +8,16 @@
 //
 // Кросс-окно́е «полукольцо» и поиск прокси-порта на грани окна (было в v13 —
 // getCrossLevelPortInfo/getProxyPortsForWindow) сюда сознательно НЕ перенесены:
-// геометрия прокси-портов между окнами — задача Фазы 5 («Порты, связи,
-// мульти-проект», §5 плана). Остаётся только кольцо внутренней вложенности
-// (maxInternalDepth) — оно чисто локальное и не зависит от прокси.
+// v14 рисует межоконные связи одной прямой линией в мировых координатах
+// (CrossWindowLinkLayer в Canvas.js, см. HierarchyUtils.getPortWorldPositionV14)
+// — отдельная прокси-геометрия на грани окна не нужна. Остаётся только кольцо
+// внутренней вложенности (maxInternalDepth) — оно чисто локальное.
+//
+// Кросс-проектный поиск порта (Фаза 5, §5 плана; было в v13 — Фаза 6.1,
+// getPortWorldCoordinates) восстановлен ниже как шаг 1.2 — тот же приём: окна
+// ДРУГИХ проектов рисуются на том же общем холсте в единой мировой системе
+// координат (Canvas.js), так что getProjectFlatView(pid) + getPortWorldPositionV14
+// достаточно, чтобы искать порт-цель по абсолютному расстоянию до курсора.
 const resolveHostGeometry = (hostId, state) => {
     const H = window.HierarchyUtils;
     const nodes = state.nodes || {};
@@ -207,13 +214,13 @@ function Port(props) {
 
             const H = window.HierarchyUtils;
             let targetPortId = null;
+            let targetProjectId = projectId;
             let minDist = 40 / zoom;
 
             const { ports, nodes, frames, windows } = state;
 
             // 1. Ближайший существующий порт своего проекта (узел или рамка,
-            // в любом открытом окне). Кросс-проектный поиск и прокси на грани
-            // окна — Фаза 5 (см. комментарий вверху файла).
+            // в любом открытом окне).
             Object.values(ports || {}).forEach(port => {
                 if (port.id === data.id) return;
                 const host = (nodes && nodes[port.nodeId]) || (frames && frames[port.nodeId]);
@@ -221,8 +228,36 @@ function Port(props) {
                 const absPos = H ? H.getPortWorldPositionV14(port.id, state) : null;
                 if (!absPos) return;
                 const dist = Math.hypot(p2x - absPos.x, p2y - absPos.y);
-                if (dist < minDist) { minDist = dist; targetPortId = port.id; }
+                if (dist < minDist) { minDist = dist; targetPortId = port.id; targetProjectId = projectId; }
             });
+
+            // 1.2 Кросс-проектный порт (Фаза 6.1, восстановлено в Фазе 5):
+            // те же критерии, что шаг 1, но на портах ДРУГИХ проектов — их
+            // окна уже рисуются на этом же общем холсте в единой мировой
+            // системе координат.
+            if (!targetPortId && H && H.getPortWorldPositionV14 && projectId) {
+                (state.projectOrder || []).forEach(pid => {
+                    if (pid === projectId) return;
+                    const otherView = getProjectFlatView(pid);
+                    if (!otherView || !otherView.ports) return;
+                    Object.values(otherView.ports).forEach(port => {
+                        const host = (otherView.nodes && otherView.nodes[port.nodeId]) || (otherView.frames && otherView.frames[port.nodeId]);
+                        if (!host) return;
+                        const absPos = H.getPortWorldPositionV14(port.id, otherView);
+                        if (!absPos) return;
+                        const dist = Math.hypot(p2x - absPos.x, p2y - absPos.y);
+                        if (dist < minDist) { minDist = dist; targetPortId = port.id; targetProjectId = pid; }
+                    });
+                });
+            }
+
+            if (targetPortId && targetProjectId !== projectId) {
+                dispatch({
+                    type: 'ADD_CROSS_PROJECT_LINK',
+                    payload: { sourceProjectId: projectId, sourcePortId: data.id, targetProjectId, targetPortId }
+                });
+                return;
+            }
 
             if (targetPortId && ports && ports[targetPortId]) {
                 dispatch({ type: 'ADD_LINK', payload: { sourcePortId: data.id, targetPortId } });
