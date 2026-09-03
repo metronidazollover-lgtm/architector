@@ -11,7 +11,8 @@ const {
     reducer,
     defaultState,
     getInitialMultiState,
-    STORAGE_KEY_V12
+    STORAGE_KEY_V12,
+    migrateToV14
 } = require('../store/reducer.js');
 
 // Mock localStorage для сред node:test
@@ -397,6 +398,40 @@ test('getInitialMultiState: активированная migrateToV13 санит
     assert.equal(proj.nodes.child1.parentId, 'root1', 'v11 ownerId-цепочка превратилась в прямой v13 parentId');
     assert.equal(proj.nodes.child1.ownerId, undefined, 'ownerId убран');
     assert.equal(HierarchyUtils.getEntityLevel('child1', proj.nodes, proj.layers, proj.levelWindows), 1, 'уровень сохранён');
+});
+
+// ---------------------------------------------------------------------------
+// v14: windows — обзорное состояние, заменяющее levelWindows+levelViews
+// (docs/LANES_MODEL.md §2.3/§9.1). migrateToV14 ЕЩЁ НЕ подключена к
+// getInitialMultiState (см. §7.11 плана) — здесь проверяется только форма
+// поля, которую производит сама миграция при прямом вызове на фикстуре, а
+// не поведение живой загрузки/сохранения (это не PROJECT_FIELDS-поле до
+// Фазы 3 — окна физически появляются в проекте только после активации).
+// Фактическое исключение past/future-снимков `windows` из истории Undo —
+// задача Фазы 3 (реестр действий редьюсера), этот тест лишь фиксирует
+// структурный контракт, который Фаза 3 обязана сохранить.
+// ---------------------------------------------------------------------------
+
+test('migrateToV14: windows — плоское поле проекта (как levelViews сегодня), не вложено в past/future', () => {
+    const before = {
+        levelWindows: { 'lvlwin-root': { id: 'lvlwin-root', levelIndex: 0, position: { x: 0, y: 0 }, size: { w: 1000, h: 700 } } },
+        levelViews: { 'lvlwin-root': { innerOffset: { x: 5, y: 6 }, innerZoom: 1.2, isCollapsed: false } },
+        layers: {},
+        nodes: { root1: { id: 'root1', name: 'Root1', parentId: 'root', position: { x: 0, y: 0 }, size: { w: 200, h: 100 } } },
+        ports: {}, links: {},
+        past: [{ nodes: {} }], future: [],
+        historyLogs: []
+    };
+    const after = migrateToV14({
+        projects: { p1: before }, projectOrder: ['p1'], activeProjectId: 'p1', projectCounter: 1, formatVersion: 13
+    }).projects.p1;
+
+    assert.ok(after.windows && typeof after.windows === 'object', 'windows — плоское поле проекта, а не часть какого-то снимка');
+    assert.equal(after.windows['lvlwin-root'].camera.offset.x, 5, 'камера перенесена из levelViews.innerOffset');
+    assert.equal(after.windows['lvlwin-root'].camera.zoom, 1.2, 'камера перенесена из levelViews.innerZoom');
+    // past/future не разбираются миграцией (см. комментарий над migrateProjectEntitiesToV14) —
+    // они остаются ответственностью вызывающей стороны (санитизация ДО миграции, как и для v13).
+    assert.deepEqual(after.past, before.past, 'past не тронут этой миграцией — санитизация вызывающей стороны');
 });
 
 

@@ -109,6 +109,67 @@
  */
 
 /**
+ * v14 (docs/LANES_MODEL.md §4.1): parentId — единственная структура родства,
+ * ровно два значения. НАПИСАНО в Фазе 1, ЕЩЁ НЕ ЖИВОЕ (см. AGENTS.md/
+ * comment над migrateProjectEntitiesToV14 в reducer.js — миграция подключается
+ * только в конце Фазы 4). До этого момента живые узлы по-прежнему описывает
+ * NodeEntity выше (parentId: 'root' | id слоя | id узла | id окна).
+ * @typedef {Object} NodeEntityV14
+ * @property {string} id
+ * @property {string} name
+ * @property {string} [content]
+ * @property {string} [color]
+ * @property {Point} position: от дорожки родителя (= от родителя)
+ * @property {Size} size
+ * @property {'root'|string} parentId: 'root' или id узла — единственные значения
+ * @property {boolean} [snapToGrid]
+ * @property {boolean} [userResized]
+ * @property {NodeShape} [shape]
+ * @property {'default'|'ai-agent'} [type]
+ * @property {string} [mediaUrl]
+ * @property {number} [mediaHeight]
+ * @property {string} [icon]
+ * @property {string} [fontFamily]
+ * @property {number} [fontSize]
+ */
+
+/**
+ * v14 (docs/LANES_MODEL.md §4.2): рамка — множество узлов из любых дорожек,
+ * заменяет LayerEntity. Не имеет parentId/position/size — кусок в дорожке
+ * считается как bbox её членов + отступ.
+ * @typedef {Object} FrameEntity
+ * @property {string} id
+ * @property {string} name
+ * @property {string} [content]
+ * @property {string} [color]
+ * @property {string} [fontFamily]
+ * @property {number} [fontSize]
+ * @property {boolean} [snapToGrid]
+ * @property {string[]} members: id узлов-членов, порядок = порядок добавления
+ * @property {'root'|string} homeLaneId: дорожка «первого куска» — имя, счётчик, ⧉ и порты
+ */
+
+/**
+ * v14 (docs/LANES_MODEL.md §4.3): набор дорожек, положенных рядом на холсте.
+ * Заменяет LevelWindowEntity (levelWindows + levelViews). position/size/camera/
+ * collapsed — вне истории Undo (визуальный обзор); открытие/закрытие/стыковка
+ * дорожек — структурные действия, идут через историю (см. §9 LANES_MODEL.md).
+ * @typedef {Object} WindowEntity
+ * @property {string} id
+ * @property {Array<'root'|string>} lanes: id узлов (или 'root'), чьи дорожки открыты в этом окне, по порядку
+ * @property {Array<'root'|string>} [hidden]: дорожки из lanes, схлопнутые «глазом»
+ * @property {?string} [frameId]: если задан — окно рамки, показаны только её члены
+ * @property {Point} position
+ * @property {Size} size
+ * @property {Camera} camera
+ * @property {boolean} [collapsed]
+ * @property {string} [name]
+ * @property {string} [color]
+ * @property {string} [fontFamily]
+ * @property {number} [fontSize]
+ */
+
+/**
  * @typedef {Object} AppState
  * @property {Object<string, LayerEntity>} layers
  * @property {Object<string, NodeEntity>} nodes

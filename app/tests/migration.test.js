@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 global.HierarchyUtils = require('../utils/hierarchy.js');
 global.GeometryUtils = require('../utils/geometry.js');
-const { migrateToV10, migrateToV13, reducer, defaultState, FORMAT_VERSION } = require('../store/reducer.js');
+const { migrateToV10, migrateToV13, migrateToV14, normalizeWindows, reducer, defaultState, FORMAT_VERSION } = require('../store/reducer.js');
 const H = global.HierarchyUtils;
 
 // Эталонная реализация уровня v13 (docs/IDEAL_INTERACTIONS.md §1.1), НЕЗАВИСИМАЯ
@@ -674,4 +674,182 @@ test('CLEAR_LEVEL_WINDOW: v13-узел с растянутой (>1) дистан
     assert.notEqual(s.nodes.C.parentId, 'root1', 'НЕ прямая ссылка — дала бы уровень 1 вместо корректного 3');
     assert.equal(s.nodes.C.homeLevel, 3, 'CLEAR не сдвигает уровни — якорь на исходном уровне 3');
     assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 3);
+});
+
+// ---------------------------------------------------------------------------
+// migrateToV14 (v13 -> v14): дорожки/окна-наборы/рамки-множества вместо
+// уровней и слоёв. См. docs/LANES_MODEL.md и «Отчеты, аудиты, планы/Lanes_v14/
+// PLAN_V14_LANES.md» §2.6, §7.11 (ВАЖНО: migrateToV14 в этой фазе написана,
+// но НЕ подключена к getInitialMultiState — живая загрузка остаётся на
+// migrateToV13, см. комментарий над migrateProjectEntitiesToV14 в reducer.js).
+// Тесты вызывают migrateToV14 напрямую на собранных фикстурах.
+// ---------------------------------------------------------------------------
+
+// Эталонная реализация структурного родителя v14 (§2.6 плана), НЕЗАВИСИМАЯ от
+// migrateProjectEntitiesToV14: до Фазы 2 нет живого HierarchyUtils.dumpNotation,
+// поэтому раздел ДЕРЕВО нотации (§1 плана) сверяется этой отдельной реализацией
+// целевого алгоритма (сирота-якорь -> 'root', слой — проходной), а не повторным
+// вызовом самой миграции.
+const refStructuralParentV14 = (id, nodes, layers, levelWindows, seen = new Set()) => {
+    if (seen.has(id)) return 'root';
+    seen.add(id);
+    const e = nodes[id] || layers[id];
+    if (!e) return 'root';
+    const pid = e.parentId;
+    if (!pid || pid === 'root') return 'root';
+    if (levelWindows && levelWindows[pid]) return 'root'; // сирота-якорь -> root (решение §0.4.7)
+    if (layers[pid]) return refStructuralParentV14(pid, nodes, layers, levelWindows, seen);
+    if (nodes[pid]) return pid;
+    return 'root';
+};
+
+test('migrateToV14: v11-файл с ownerGap (через полную цепочку migrateToV13) — сирота-якорь становится root, ветка не теряется, узлы/порты/связи не теряются', () => {
+    const before = {
+        levelWindows: { w0: win('w0', 0), w1: win('w1', 1), w2: win('w2', 2) },
+        layers: {},
+        nodes: {
+            root1: { id: 'root1', name: 'Root1', parentId: 'root', ownerId: null, position: { x: 0, y: 0 }, size: { w: 200, h: 100 } },
+            grandchildGap: { id: 'grandchildGap', name: 'GrandchildGap', parentId: 'root', ownerId: 'root1', ownerGap: 2, position: { x: 15, y: 15 }, size: { w: 200, h: 100 } }
+        },
+        ports: { p1: { id: 'p1', nodeId: 'root1', type: 'output', edge: 'right', position: 0.5, name: 'Out' } },
+        links: {}, past: [], future: [], historyLogs: []
+    };
+
+    const v13 = migrateToV13(multiState(before));
+    const v13proj = v13.projects.p1;
+    assert.equal(v13proj.nodes.grandchildGap.parentId, 'w2', 'предусловие: v13 якорит через окно уровня 2');
+
+    const v14 = migrateToV14(v13);
+    const after = v14.projects.p1;
+
+    assert.equal(v14.formatVersion, 14);
+    assert.equal(after.nodes.root1.parentId, 'root');
+    assert.equal(after.nodes.grandchildGap.parentId, 'root', 'сирота-якорь упрощается до root (решение §0.4.7) — ветка сохраняется, домашняя глубина нет');
+    assert.equal(Object.keys(after.nodes).length, Object.keys(before.nodes).length, 'ни один узел не потерян');
+    assert.deepEqual(after.ports, before.ports, 'порты не тронуты миграцией');
+    assert.deepEqual(after.links, before.links, 'связи не тронуты миграцией');
+
+    // Ни root1, ни grandchildGap не имеют детей — окна уровня 1 и 2 остаются без дорожек и не создаются.
+    assert.ok(Object.values(after.windows).some(w => w.lanes.includes('root')), 'окно с корневой дорожкой есть');
+    assert.equal(Object.values(after.windows).some(w => w.lanes.length && !w.lanes.includes('root')), false, 'окна без дорожек (уровни 1 и 2) не созданы');
+});
+
+test('migrateToV14: v13-сирота-якорь напрямую на окно (без прохода через v11) тоже упрощается до root', () => {
+    const before = {
+        levelWindows: { w0: win('w0', 0), w2: win('w2', 2) },
+        layers: {},
+        nodes: {
+            anchor2: { id: 'anchor2', name: 'Anchor2', parentId: 'w2', position: { x: 1, y: 1 }, size: { w: 200, h: 100 } }
+        },
+        ports: {}, links: {}, past: [], future: [], historyLogs: [],
+        formatVersion: 13
+    };
+    const after = migrateToV14(multiState(before)).projects.p1;
+    assert.equal(after.nodes.anchor2.parentId, 'root');
+});
+
+test('migrateToV14: слой-в-слое — узел вложенного слоя становится членом ОБЕИХ рамок, позиция копит оба смещения', () => {
+    const before = {
+        levelWindows: { w0: win('w0', 0) },
+        layers: {
+            L: { id: 'L', name: 'L', parentId: 'root', position: { x: 100, y: 50 }, size: { w: 600, h: 400 } },
+            L2: { id: 'L2', name: 'L2', parentId: 'L', position: { x: 20, y: 30 }, size: { w: 300, h: 200 } }
+        },
+        nodes: {
+            deepNode: { id: 'deepNode', name: 'Deep', parentId: 'L2', position: { x: 5, y: 5 }, size: { w: 100, h: 50 } }
+        },
+        ports: {}, links: {}, past: [], future: [], historyLogs: [],
+        formatVersion: 13
+    };
+    const after = migrateToV14(multiState(before)).projects.p1;
+
+    assert.equal(after.nodes.deepNode.parentId, 'root', 'структурный родитель — первый узел или root, слои — проходные');
+    assert.deepEqual(after.nodes.deepNode.position, { x: 125, y: 85 }, 'позиция копит смещения L и L2 (100+20+5, 50+30+5)');
+    assert.ok(after.frames.L2.members.includes('deepNode'), 'прямой член L2');
+    assert.ok(after.frames.L.members.includes('deepNode'), 'вложенный слой: узел L2 становится членом и внешней рамки L тоже');
+    assert.equal(after.frames.L.homeLaneId, 'root');
+    assert.equal(after.frames.L2.homeLaneId, 'root', 'L2 структурно тоже на root (L сам лежит на root)');
+});
+
+test('migrateToV14: порты слоя остаются на id рамки (не теряются, не переезжают)', () => {
+    const before = {
+        levelWindows: { w0: win('w0', 0) },
+        layers: { L: { id: 'L', name: 'L', parentId: 'root', position: { x: 0, y: 0 }, size: { w: 400, h: 300 } } },
+        nodes: {},
+        ports: { pL: { id: 'pL', nodeId: 'L', type: 'output', edge: 'right', position: 0.5, name: 'Out' } },
+        links: {}, past: [], future: [], historyLogs: [],
+        formatVersion: 13
+    };
+    const after = migrateToV14(multiState(before)).projects.p1;
+
+    assert.ok(after.frames.L, 'слой L стал рамкой');
+    assert.equal(after.ports.pL.nodeId, 'L', 'порт остался на id рамки (id слоя не меняется)');
+    assert.deepEqual(after.frames.L.members, [], 'рамка без узлов-членов, только порт');
+});
+
+test('migrateToV14: полное дерево (сложная v11-фикстура) — раздел ДЕРЕВО нотации совпадает с независимой эталонной реализацией, узлы/порты/связи не теряются', () => {
+    const before11 = complexTreeProject();
+    const v13 = migrateToV13(multiState(before11));
+    const before13 = v13.projects.p1;
+
+    const v14 = migrateToV14(v13);
+    const after = v14.projects.p1;
+
+    // ДЕРЕВО: для каждого узла и слоя v13-состояния структурный родитель после
+    // миграции должен совпасть с независимо посчитанным эталоном.
+    Object.keys(before13.nodes).forEach(id => {
+        const expected = refStructuralParentV14(id, before13.nodes, before13.layers, before13.levelWindows);
+        assert.equal(after.nodes[id].parentId, expected, `узел ${id}: ожидался структурный родитель ${expected}`);
+    });
+    Object.keys(before13.layers).forEach(id => {
+        const expected = refStructuralParentV14(id, before13.nodes, before13.layers, before13.levelWindows);
+        assert.equal(after.frames[id].homeLaneId, expected, `рамка ${id}: ожидался homeLaneId ${expected}`);
+    });
+
+    // СВЯЗИ: порты и связи миграция не трогает.
+    assert.deepEqual(after.ports, before13.ports);
+    assert.deepEqual(after.links, before13.links);
+
+    // Ничего не потеряно.
+    assert.equal(Object.keys(after.nodes).length, Object.keys(before13.nodes).length);
+    assert.equal(Object.keys(after.frames).length, Object.keys(before13.layers).length);
+});
+
+test('migrateToV14: несколько проектов мигрируют независимо, formatVersion становится 14', () => {
+    const projA = complexTreeProject();
+    const projB = {
+        levelWindows: { w0: win('w0', 0) },
+        layers: {},
+        nodes: { solo: { id: 'solo', name: 'Solo', parentId: 'root', position: { x: 9, y: 9 }, size: { w: 100, h: 50 } } },
+        ports: {}, links: {}, past: [], future: [], historyLogs: []
+    };
+    const v13 = migrateToV13({
+        projects: { a: projA, b: projB },
+        projectOrder: ['a', 'b'],
+        activeProjectId: 'a',
+        projectCounter: 2,
+        formatVersion: 12
+    });
+    const v14 = migrateToV14(v13);
+
+    assert.equal(v14.formatVersion, 14);
+    assert.equal(v14.projects.b.nodes.solo.parentId, 'root');
+    assert.ok(v14.projects.a.nodes && v14.projects.a.frames, 'проект a тоже сконвертирован');
+});
+
+test('migrateToV14: идемпотентность по formatVersion — состояние уже v14 возвращается той же ссылкой', () => {
+    const already = { projects: {}, projectOrder: [], activeProjectId: null, formatVersion: 14 };
+    assert.equal(migrateToV14(already), already);
+});
+
+test('normalizeWindows: ссылки на дорожки удалённых узлов вычищаются, опустевшее окно схлопывается', () => {
+    const nodes = { A: { id: 'A', name: 'A', parentId: 'root' } };
+    const raw = {
+        w1: { id: 'w1', lanes: ['root', 'A', 'ghost'], hidden: ['ghost'] },
+        w2: { id: 'w2', lanes: ['ghost'], hidden: [] }
+    };
+    const result = normalizeWindows(raw, nodes);
+    assert.deepEqual(result.w1.lanes, ['root', 'A'], 'мёртвая ссылка ghost вычищена из lanes');
+    assert.deepEqual(result.w1.hidden, [], 'мёртвая ссылка ghost вычищена из hidden');
+    assert.equal(result.w2, undefined, 'окно, опустевшее после чистки, схлопывается');
 });

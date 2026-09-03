@@ -3258,6 +3258,231 @@ const migrateToV13 = (state) => {
     return { ...state, projects, formatVersion: FORMAT_VERSION_V13 };
 };
 
+const FORMAT_VERSION_V14 = 14;
+
+/**
+ * v14: восстанавливает минимальный инвариант окон дорожек (см.
+ * docs/LANES_MODEL.md §10) — в отличие от normalizeLevelWindows, НЕ создаёт
+ * окна на каждую глубину: в v14 окно открывается только явным действием
+ * пользователя. Здесь только защитная чистка: ссылки на дорожки мёртвых узлов
+ * убираются из lanes/hidden, окно, опустевшее после этого, схлопывается
+ * (окно рамки, frameId задан, не схлопывается пустым списком лишённых узлов —
+ * у него своя видимость через членов рамки).
+ * @param {Object<string, Object>} rawWindows
+ * @param {Object<string, NodeEntity>} nodes
+ * @returns {Object<string, Object>}
+ */
+const normalizeWindows = (rawWindows, nodes) => {
+    const safeNodes = nodes || {};
+    const laneExists = (ownerId) => ownerId === 'root' || !!safeNodes[ownerId];
+    const windows = {};
+    Object.entries(rawWindows || {}).forEach(([key, win]) => {
+        if (!win) return;
+        const lanes = (win.lanes || []).filter(laneExists);
+        if (!lanes.length && !win.frameId) return;
+        const hidden = (win.hidden || []).filter(laneExists);
+        windows[key] = { ...win, id: win.id || key, lanes, hidden };
+    });
+    return windows;
+};
+
+/**
+ * Миграция v13 -> v14: дорожки/окна-наборы/рамки-множества вместо уровней и
+ * слоёв (docs/LANES_MODEL.md, план — «Отчеты, аудиты, планы/Lanes_v14/
+ * PLAN_V14_LANES.md» §2.6). НАПИСАНА, но НЕ подключена к живой загрузке в
+ * этой фазе (см. §7.11 плана) — getInitialMultiState продолжает работать
+ * через migrateToV13, пока hierarchy.js/reducer.js/UI не переписаны на v14
+ * (Фазы 2–4). Тестируется исключительно прямым вызовом на фикстурах.
+ *
+ * Предполагает вход УЖЕ в чистой v13-форме (без ownerId/ownerGap/homeLevel —
+ * их снимает migrateProjectEntitiesToV13, вызывается ДО этой функции вызывающей
+ * стороной, как и в реальной цепочке migrateToV10→…→migrateToV13→migrateToV14).
+ *
+ * Шаги (§2.6 плана):
+ *   1. Сироты-якоря (parentId = id окна уровня) -> parentId: 'root' — и у
+ *      узлов, и у слоёв (миграция v12->v13 расставляет такой якорь обоим
+ *      словарям одинаково). «Ветка сохраняется, домашняя глубина — нет»
+ *      (решение §0.4.7) — сирота НЕ пытается воспроизвести старый уровень.
+ *   2. Слои -> рамки: структурный родитель узла/рамки — первый узел или
+ *      'root' при подъёме по цепочке parentId ЧЕРЕЗ слои (та же семантика
+ *      обхода, что у HierarchyUtils.getLocalPosition). Позиция узла копит
+ *      смещения всех пройденных слоёв. Вложенный слой L2 внутри L: узлы L2
+ *      становятся членами ОБЕИХ рамок (frame(L2) и frame(L)) — так bbox
+ *      внешней рамки естественно охватывает внутреннюю, воспроизводя старую
+ *      картинку вложенных слоёв без вложенности самих рамок.
+ *   3. Порты слоёв не трогаются (nodeId уже равен id рамки — id слоя не
+ *      меняется), связи и порты вообще не участвуют в этой миграции.
+ *   4. Окна: старое окно уровня k -> lanes = все узлы НОВОЙ (после шагов 1–2)
+ *      глубины k-1, у которых есть дети; k=0 -> lanes: ['root']. Окно без
+ *      дорожек после этого не создаётся.
+ * @param {Object} proj одно-проектное v13-состояние
+ * @returns {Object} проект в форме v14 (nodes/frames/windows вместо nodes/layers/levelWindows/levelViews)
+ */
+const migrateProjectEntitiesToV14 = (proj) => {
+    const oldNodesRaw = proj.nodes || {};
+    const oldLayersRaw = proj.layers || {};
+    const oldWindows = proj.levelWindows || {};
+    const oldViews = proj.levelViews || {};
+
+    // 1. Сироты-якоря -> 'root' (решение §0.4.7): применяется и к узлам, и к слоям.
+    const deAnchor = (e) => {
+        if (!e) return e;
+        const pid = e.parentId;
+        if (pid && pid !== 'root' && oldWindows[pid]) return { ...e, parentId: 'root' };
+        return e;
+    };
+    const nodes0 = {};
+    Object.entries(oldNodesRaw).forEach(([k, n]) => { nodes0[k] = deAnchor(n); });
+    const layers0 = {};
+    Object.entries(oldLayersRaw).forEach(([k, l]) => { layers0[k] = deAnchor(l); });
+
+    // Подъём по цепочке parentId слоя ЧЕРЕЗ другие слои до первого узла/'root'.
+    // Возвращает пройденные id слоёв (для членства в рамках) и накопленное
+    // смещение позиции — тот же обход, что у HierarchyUtils.getLocalPosition,
+    // только здесь дополнительно нужен сам путь, а не только сумма координат.
+    const climbLayerChain = (startParentId) => {
+        const chain = [];
+        let pid = startParentId;
+        let dx = 0, dy = 0;
+        const visited = new Set();
+        while (pid && pid !== 'root' && layers0[pid] && !visited.has(pid)) {
+            visited.add(pid);
+            const L = layers0[pid];
+            chain.push(L.id);
+            dx += (L.position && L.position.x) || 0;
+            dy += (L.position && L.position.y) || 0;
+            pid = L.parentId;
+        }
+        const parentId = (pid && pid !== 'root' && nodes0[pid]) ? pid : 'root';
+        return { chain, dx, dy, parentId };
+    };
+
+    // 2. Слои -> рамки, узлы получают структурный parentId + пересчитанную позицию.
+    const frameMembers = {};
+    const addMember = (layerId, nodeId) => {
+        (frameMembers[layerId] || (frameMembers[layerId] = [])).push(nodeId);
+    };
+
+    const nodes = {};
+    Object.entries(nodes0).forEach(([id, n]) => {
+        if (!n) { nodes[id] = n; return; }
+        const pid = n.parentId;
+        if (!pid || pid === 'root') { nodes[id] = (pid === 'root') ? n : { ...n, parentId: 'root' }; return; }
+        if (nodes0[pid]) { nodes[id] = n; return; }
+        if (layers0[pid]) {
+            const { chain, dx, dy, parentId } = climbLayerChain(pid);
+            chain.forEach(layerId => addMember(layerId, id));
+            nodes[id] = {
+                ...n,
+                parentId,
+                position: { x: ((n.position && n.position.x) || 0) + dx, y: ((n.position && n.position.y) || 0) + dy }
+            };
+            return;
+        }
+        // Мёртвая ссылка (не 'root', не узел, не слой, не окно после шага 1) — защитный fallback.
+        nodes[id] = { ...n, parentId: 'root' };
+    });
+
+    const frames = {};
+    Object.entries(layers0).forEach(([id, L]) => {
+        if (!L) return;
+        const pid = L.parentId;
+        let homeLaneId = 'root';
+        if (pid && pid !== 'root') {
+            if (nodes0[pid]) homeLaneId = pid;
+            else if (layers0[pid]) homeLaneId = climbLayerChain(pid).parentId;
+        }
+        frames[id] = {
+            id: L.id,
+            name: L.name,
+            content: L.content,
+            color: L.color,
+            fontFamily: L.fontFamily,
+            fontSize: L.fontSize,
+            snapToGrid: L.snapToGrid,
+            members: frameMembers[id] || [],
+            homeLaneId
+        };
+    });
+
+    // 3. Порты слоёв — без изменений (nodeId по-прежнему равен id рамки), ports/links не трогаем.
+
+    // 4. Окна: старое окно уровня k -> lanes = узлы НОВОЙ глубины k-1 с детьми.
+    const hasChildren = {};
+    Object.values(nodes).forEach(n => {
+        if (n && n.parentId && n.parentId !== 'root') hasChildren[n.parentId] = true;
+    });
+    const depthCache = {};
+    const depthOf = (id) => {
+        if (!id || id === 'root') return 0;
+        if (depthCache[id] !== undefined) return depthCache[id];
+        const n = nodes[id];
+        if (!n) return 0;
+        const d = 1 + depthOf(n.parentId);
+        depthCache[id] = d;
+        return d;
+    };
+    const byDepth = {};
+    Object.keys(nodes).forEach(id => {
+        if (!hasChildren[id]) return;
+        const d = depthOf(id);
+        (byDepth[d] || (byDepth[d] = [])).push(id);
+    });
+
+    const windowsRaw = {};
+    Object.values(oldWindows).forEach(w => {
+        if (!w) return;
+        const k = w.levelIndex || 0;
+        const lanes = k === 0 ? ['root'] : (byDepth[k - 1] || []);
+        if (!lanes.length) return; // пустые окна не создаются
+        const view = oldViews[w.id] || {};
+        windowsRaw[w.id] = {
+            id: w.id,
+            lanes,
+            hidden: [],
+            frameId: null,
+            position: w.position,
+            size: w.size,
+            camera: {
+                offset: view.innerOffset || { x: 0, y: 0 },
+                zoom: (view.innerZoom !== undefined && view.innerZoom !== null) ? view.innerZoom : 1
+            },
+            collapsed: !!view.isCollapsed,
+            name: w.name,
+            color: w.color,
+            fontFamily: w.fontFamily,
+            fontSize: w.fontSize
+        };
+    });
+    const windows = normalizeWindows(windowsRaw, nodes);
+
+    const {
+        layers: _oldLayers, levelWindows: _oldLevelWindows, levelViews: _oldLevelViews,
+        activeLevelIndex: _oldActiveLevelIndex, levelFocusParentId: _oldLevelFocusParentId,
+        levelHideNeighbors: _oldLevelHideNeighbors,
+        ...restProj
+    } = proj;
+
+    return {
+        ...restProj,
+        nodes,
+        frames,
+        windows,
+        activeLaneId: null,
+        activeFrameId: null,
+        formatVersion: FORMAT_VERSION_V14
+    };
+};
+
+const migrateToV14 = (state) => {
+    if (!state || (state.formatVersion || 0) >= FORMAT_VERSION_V14) return state;
+    const projects = {};
+    Object.entries(state.projects || {}).forEach(([pid, proj]) => {
+        projects[pid] = proj ? migrateProjectEntitiesToV14(proj) : proj;
+    });
+    return { ...state, projects, formatVersion: FORMAT_VERSION_V14 };
+};
+
 // Плоский вид: глобальные поля + поля активного проекта (для компонентов и
 // внутреннего редьюсера). Без активного проекта — безопасные пустые значения.
 const mergeActiveView = (m) => {
@@ -4306,6 +4531,6 @@ const getInitialMultiState = () => {
     return migrateToV13(wrapFlatToMulti(getInitialState()));
 };
 
-const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, FORMAT_VERSION_V13, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, migrateToV13, normalizeLevelWindows, reconcilePendingGateways, applyRemoveProject };
+const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, FORMAT_VERSION_V13, FORMAT_VERSION_V14, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, migrateToV13, migrateToV14, migrateProjectEntitiesToV14, normalizeLevelWindows, normalizeWindows, reconcilePendingGateways, applyRemoveProject };
 if (typeof window !== 'undefined') window.ArchitectorStore = ArchitectorStore;
 if (typeof module !== 'undefined') module.exports = ArchitectorStore;
