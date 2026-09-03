@@ -94,7 +94,14 @@ const computePortDerived = (view, portId, nodeId) => {
     });
 
     const host = resolveHostGeometry(nodeId, view);
-    const hostForGeometry = host ? { ...host.entity, size: host.size } : null;
+    // Узел уже несёт свой актуальный size (host.size === host.entity.size,
+    // тот же объект) — переиспользуем ссылку на сам узел БЕЗ спреда, иначе
+    // здесь рождался бы новый объект на каждый вызов селектора, shallowEqual
+    // (engine.js) видел бы «изменилось» всегда и Port перерисовывался бы на
+    // любое несвязанное действие в сторе (замер: ~на каждый кадр Drag&Drop,
+    // а не только когда реально меняется сам хост). Для рамки (синтетический
+    // size из fragmentRect, отдельный от entity) спред пока неизбежен.
+    const hostForGeometry = !host ? null : (host.entity.size === host.size ? host.entity : { ...host.entity, size: host.size });
 
     return {
         port: ports[portId] || null,

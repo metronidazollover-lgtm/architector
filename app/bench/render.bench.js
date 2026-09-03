@@ -97,6 +97,10 @@ const sceneArg = (process.argv.find(a => a.startsWith('--scene=')) || '').split(
 
     let renderStats = null;
     if (sceneArg) {
+        // window.SceneFixtures не часть index.html (бенч-only инструмент,
+        // незачем грузить его в продакшене) — подмешиваем скриптом сюда же,
+        // тем же файлом, что использует core.bench.js/тесты через require.
+        await page.addScriptTag({ path: path.join(__dirname, '../tests/fixtures/generate.js') });
         // Загружаем синтетическую сцену и считаем перерисовки на серии MOVE_SELECTED
         renderStats = await page.evaluate((scene) => {
             const fx = window.SceneFixtures;
