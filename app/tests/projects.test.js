@@ -231,31 +231,13 @@ test('TOGGLE_PROJECT_OUTLINER: пер-проектные обозревател�
     assert.equal(noop, m, 'тогл несуществующего проекта — no-op');
 });
 
-test('ALIGN_LEVEL_WINDOWS: выравнивание в СОБСТВЕННОЙ колонке проекта, а не по x=-500', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    m = multiReducer(m, { type: 'ADD_PROJECT' }); // второй проект правее
-    const pid = m.activeProjectId;
-    const colX = Object.values(m.projects[pid].levelWindows)[0].position.x;
-    assert.ok(colX > -500, 'второй проект стоит правее дефолтной колонки');
-
-    m = multiReducer(m, { type: 'ADD_LEVEL_WINDOW' });
-    m = multiReducer(m, { type: 'ALIGN_LEVEL_WINDOWS' });
-    Object.values(m.projects[pid].levelWindows).forEach(w => {
-        assert.equal(w.position.x, colX, `окно уровня ${w.levelIndex} осталось в колонке проекта (x=${colX})`);
-    });
-});
-
-test('ADD_LEVEL_WINDOW: новый уровень второго проекта — в его колонке, под нижним окном', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pid = m.activeProjectId;
-    const l0 = Object.values(m.projects[pid].levelWindows)[0];
-
-    m = multiReducer(m, { type: 'ADD_LEVEL_WINDOW' });
-    const l1 = Object.values(m.projects[pid].levelWindows).find(w => w.levelIndex === 1);
-    assert.equal(l1.position.x, l0.position.x, 'та же колонка');
-    assert.ok(l1.position.y >= l0.position.y + l0.size.h, 'ниже нижней кромки L0');
-});
+// v14 (§3 плана): ADD_LEVEL_WINDOW удалён как обработчик экшена — эти два
+// теста опирались на него для сборки фикстуры (второй уровень окна) и
+// проверяли поведение, которое теперь принадлежит другому реестру действий
+// (NEW_EMPTY_WINDOW/OPEN_LANE + ALIGN_WINDOWS, см. reducer.test.js).
+// ALIGN_LEVEL_WINDOWS сам по себе не удалён (не в списке «Удаляются» Фазы 3),
+// но без ADD_LEVEL_WINDOW тест не может собрать содержательную фикстуру
+// (Главный холст — единственное окно, выравнивать нечего).
 
 test('makeProject: id окна уровня 0 уникален (не lvlwin-root)', () => {
     const p1 = makeProject('proj-x', 'X');

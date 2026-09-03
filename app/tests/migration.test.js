@@ -95,21 +95,12 @@ test('LOAD_STATE: конвертирует массив связей links в с
     assert.deepEqual(s1.links['link-2'].name, 'Link 2');
 });
 
-test('REPARENT_ENTITY: локальная позиция на уровне сохраняется при выносе из слоя', () => {
-    // Модель v11: контейнером может быть только слой или root, поэтому перевложение
-    // проверяется в пределах одного уровня — позиция в системе координат уровня не меняется.
-    const s0 = {
-        ...defaultState,
-        layers: { L: { id: 'L', name: 'L', parentId: 'root', ownerId: null, position: { x: 1000, y: 500 }, size: { w: 600, h: 400 } } },
-        nodes: { inLayer: { id: 'inLayer', name: 'IL', parentId: 'L', ownerId: null, position: { x: 40, y: 90 }, size: { w: 200, h: 100 } } }
-    };
-    const before = H.getLocalPosition('inLayer', s0.nodes, s0.layers);
-    assert.deepEqual(before, { x: 1040, y: 590 });
-
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'inLayer', newParentId: 'root' } });
-    assert.equal(s1.nodes.inLayer.parentId, 'root');
-    assert.deepEqual(H.getLocalPosition('inLayer', s1.nodes, s1.layers), before);
-});
+// v14 (§7.12/§3 плана): REPARENT_ENTITY переписан на месте — targetParentId
+// только 'root' или id узла, слой как цель и toRelativePosition-совмещение
+// «то же окно уровня» удалены. Тест «локальная позиция сохраняется при
+// выносе из слоя» проверял именно эту убранную семантику — удалён;
+// v14-покрытие REPARENT_ENTITY (deep/shallow/цикл/undo/historySnapshot,
+// с узлом целью вместо слоя) — в app/tests/reducer.test.js.
 
 test('REPARENT_ENTITY: цикл отклоняется', () => {
     const m = migrateToV10(v9project());
@@ -120,10 +111,15 @@ test('REPARENT_ENTITY: цикл отклоняется', () => {
 });
 
 // ---------------------------------------------------------------------------
-// REPARENT_ENTITY (Фаза 4, расширенный контракт): { ids, targetParentId,
-// targetLevelIndex?, mode?: 'deep'|'shallow', position? }. Фикстуры ниже —
-// чистые v13-сущности (parentId напрямую, без ownerId), в отличие от тестов
-// выше, которые проверяют обратную совместимость со старым { id, newParentId }.
+// REPARENT_ENTITY (Фаза 4 v13, расширенный контракт): { ids, targetParentId,
+// targetLevelIndex?, mode?: 'deep'|'shallow', position? }. Фикстура v13TreeState
+// (со слоем L) — используется только тестом ниже, который не целится в слой
+// вовсе (только узлы). Остальные тесты этого блока целились в слой L или в
+// targetLevelIndex — обе цели УДАЛЕНЫ в v14 (§3/§7.12 плана: targetParentId
+// только 'root' или id узла) и удалены отсюда; v14-покрытие REPARENT_ENTITY
+// (deep/shallow/цикл/undo/historySnapshot/массив ids/positionsById/авто-
+// открытие дорожки на узле-цели, все — с узлом, а не слоем, в качестве цели)
+// — в app/tests/reducer.test.js.
 // ---------------------------------------------------------------------------
 
 const win13 = (id, levelIndex) => ({ id, levelIndex, name: id, position: { x: 0, y: id === 'lvlwin-root' ? 0 : 800 * levelIndex }, size: { w: 1000, h: 700 } });
@@ -140,94 +136,6 @@ const v13TreeState = () => ({
         grandchild1: { id: 'grandchild1', name: 'Grandchild1', parentId: 'child1', position: { x: 5, y: 5 }, size: { w: 200, h: 100 } },
         lonely: { id: 'lonely', name: 'Lonely', parentId: 'root', position: { x: 700, y: 0 }, size: { w: 200, h: 100 } }
     }
-});
-
-test('REPARENT_ENTITY (shallow): прямой ребёнок усыновляется прежним родителем, поддерево ребёнка не трогается', () => {
-    const s0 = v13TreeState();
-    assert.equal(HierarchyUtils.getEntityLevel('child1', s0.nodes, s0.layers, s0.levelWindows), 1);
-    assert.equal(HierarchyUtils.getEntityLevel('grandchild1', s0.nodes, s0.layers, s0.levelWindows), 2);
-
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'child1', targetParentId: 'L', mode: 'shallow' } });
-
-    assert.equal(s1.nodes.child1.parentId, 'L', 'сам child1 переехал в целевой слой');
-    assert.equal(s1.nodes.grandchild1.parentId, 'root1', 'внук усыновлён ПРЕЖНИМ родителем child1 (root1), а не поехал следом');
-    assert.equal(HierarchyUtils.getEntityLevel('grandchild1', s1.nodes, s1.layers, s1.levelWindows), 1, 'внук поднялся на уровень бывшего родителя child1');
-    assert.ok(Number.isFinite(s1.nodes.grandchild1.position.x) && Number.isFinite(s1.nodes.grandchild1.position.y));
-});
-
-test('REPARENT_ENTITY (shallow): findFreePosition разводит всплывшего ребёнка с уже занятым местом в новом контейнере', () => {
-    const s0 = v13TreeState();
-    // «Засеваем» root1-контейнер сущностью ровно там, куда попытается встать grandchild1
-    // после всплытия (grandchild1.position совпадает с root1's own position — оба {0,0}/{5,5}
-    // не пересекаются напрямую, поэтому явно кладём конкурента на позицию грядущего всплытия)
-    s0.nodes.blocker = { id: 'blocker', name: 'Blocker', parentId: 'root1', position: { x: 5, y: 5 }, size: { w: 200, h: 100 } };
-
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'child1', targetParentId: 'L', mode: 'shallow' } });
-    const g = s1.nodes.grandchild1;
-    const b = s1.nodes.blocker;
-    const overlap = g.position.x < b.position.x + b.size.w + 20 && g.position.x + g.size.w + 20 > b.position.x
-        && g.position.y < b.position.y + b.size.h + 20 && g.position.y + g.size.h + 20 > b.position.y;
-    assert.equal(overlap, false, 'findFreePosition не даёт grandchild1 наложиться на blocker');
-});
-
-test('REPARENT_ENTITY: массив ids переносит несколько сущностей одним шагом истории', () => {
-    const s0 = v13TreeState();
-    const pastBefore = s0.past.length;
-
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { ids: ['root1', 'lonely'], targetParentId: 'L' } });
-
-    assert.equal(s1.nodes.root1.parentId, 'L');
-    assert.equal(s1.nodes.lonely.parentId, 'L');
-    assert.equal(s1.past.length, pastBefore + 1, 'весь батч — один шаг Undo');
-});
-
-test('REPARENT_ENTITY: targetLevelIndex резолвится в id окна уровня — сирота-якорь на своём уровне', () => {
-    const s0 = v13TreeState();
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'lonely', targetLevelIndex: 2 } });
-
-    assert.equal(s1.nodes.lonely.parentId, 'w2');
-    assert.equal(HierarchyUtils.getEntityLevel('lonely', s1.nodes, s1.layers, s1.levelWindows), 2);
-});
-
-test('REPARENT_ENTITY: явный position (одиночный drop) переопределяет авторасстановку', () => {
-    const s0 = v13TreeState();
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'lonely', targetParentId: 'L', position: { x: 42, y: 24 } } });
-    assert.deepEqual(s1.nodes.lonely.position, { x: 42, y: 24 });
-});
-
-test('REPARENT_ENTITY: positionsById задаёт позиции под курсором при переносе НЕСКОЛЬКИХ сущностей', () => {
-    const s0 = v13TreeState();
-    const s1 = reducer(s0, {
-        type: 'REPARENT_ENTITY',
-        payload: {
-            ids: ['root1', 'lonely'],
-            targetParentId: 'L',
-            positionsById: { root1: { x: 11, y: 22 }, lonely: { x: 33, y: 44 } }
-        }
-    });
-    assert.deepEqual(s1.nodes.root1.position, { x: 11, y: 22 });
-    assert.deepEqual(s1.nodes.lonely.position, { x: 33, y: 44 });
-});
-
-test('REPARENT_ENTITY: перенос НА УЗЕЛ достраивает окно новой глубины (регрессия — TRANSFER_NODE это делал, первая версия REPARENT_ENTITY молча забыла)', () => {
-    // Без этого дропнутая на узел сущность вычисляла бы корректный уровень
-    // (getLevel не зависит от levelWindows), но рендериться было бы негде —
-    // окна для её нового уровня физически нет до следующей полной перезагрузки.
-    const s0 = {
-        ...defaultState,
-        levelWindows: { 'lvlwin-root': { id: 'lvlwin-root', levelIndex: 0, position: { x: 0, y: 0 }, size: { w: 1000, h: 700 } } },
-        nodes: {
-            A: { id: 'A', name: 'A', parentId: 'root', position: { x: 0, y: 0 }, size: { w: 200, h: 100 } },
-            B: { id: 'B', name: 'B', parentId: 'root', position: { x: 300, y: 0 }, size: { w: 200, h: 100 } }
-        }
-    };
-    assert.equal(Object.values(s0.levelWindows).some(w => w.levelIndex === 1), false, 'изначально окна уровня 1 нет');
-
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'A', targetParentId: 'B' } });
-
-    assert.equal(s1.nodes.A.parentId, 'B');
-    const win1 = Object.values(s1.levelWindows).find(w => w.levelIndex === 1);
-    assert.ok(win1, 'REPARENT_ENTITY должна достроить окно уровня 1 для A, как это делал TRANSFER_NODE');
 });
 
 test('REPARENT_ENTITY: перенос НА УЗЕЛ (порождение подуровня) никогда не использует toRelativePosition — только findFreePosition', () => {
@@ -258,52 +166,6 @@ test('REPARENT_ENTITY: перенос НА УЗЕЛ (порождение под
         `findFreePosition не должен вычитать смещённую позицию узла-цели: получено ${JSON.stringify(s2.nodes.child1.position)}`);
 });
 
-test('REPARENT_ENTITY: вложение в любой слой валидно (нет проверки «слой чужого уровня») — цикл всё ещё отклоняется', () => {
-    const s0 = v13TreeState();
-    // lonely (уровень 0) в L (уровень 0, но проверка на РАВЕНСТВО уровней в v13 не нужна вовсе)
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'lonely', targetParentId: 'L' } });
-    assert.equal(s1.nodes.lonely.parentId, 'L');
-
-    // Цикл: L не может стать родителем root1, если бы root1 уже был предком L
-    const s2 = { ...s0, layers: { L: { ...s0.layers.L, parentId: 'root1' } } };
-    const s3 = reducer(s2, { type: 'REPARENT_ENTITY', payload: { id: 'root1', targetParentId: 'L' } });
-    assert.equal(s3, s2, 'root1 -> L образовало бы цикл (L уже внутри root1) — no-op');
-});
-
-test('REPARENT_ENTITY (shallow): Undo одним шагом возвращает И перенесённую сущность, И усыновлённых детей', () => {
-    const s0 = v13TreeState();
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'child1', targetParentId: 'L', mode: 'shallow' } });
-    assert.notEqual(s1.nodes.grandchild1.parentId, s0.nodes.grandchild1.parentId);
-
-    const s2 = reducer(s1, { type: 'UNDO' });
-    assert.equal(s2.nodes.child1.parentId, 'root1', 'child1 вернулся на место');
-    assert.deepEqual(s2.nodes.grandchild1, s0.nodes.grandchild1, 'внук вернулся к исходному parentId и позиции — тем же шагом Undo');
-
-    const s3 = reducer(s2, { type: 'REDO' });
-    assert.equal(s3.nodes.child1.parentId, 'L');
-    assert.equal(s3.nodes.grandchild1.parentId, 'root1');
-});
-
-test('REPARENT_ENTITY: historySnapshot делает Drag&Drop-жест (движение + перенос) одним шагом Undo', () => {
-    const s0 = { ...v13TreeState(), selectedIds: ['lonely'] };
-    // Жест: движение мышью (skipHistory) + сам перенос — как в живом драге
-    // (Node.js/Layer.js dispatch REPARENT_ENTITY с p.historySnapshot = срез mousedown)
-    const s1 = reducer(s0, { type: 'MOVE_SELECTED', payload: { dx: 100, dy: 0, skipHistory: true } });
-    const s2 = reducer(s1, {
-        type: 'REPARENT_ENTITY',
-        payload: {
-            id: 'lonely',
-            targetParentId: 'L',
-            historySnapshot: { nodes: s0.nodes, layers: s0.layers, ports: s0.ports, links: s0.links }
-        }
-    });
-    assert.equal(s2.nodes.lonely.parentId, 'L', 'перенос состоялся');
-    assert.equal(s2.past.length, s0.past.length + 1, 'ровно один шаг истории на весь жест');
-
-    const s3 = reducer(s2, { type: 'UNDO' });
-    assert.deepEqual(s3.nodes.lonely, s0.nodes.lonely, 'Undo вернул ИСХОДНОЕ состояние до mousedown, а не промежуточное движение');
-});
-
 test('MOVE_SELECTED: потомок выделенного предка не двигается дважды', () => {
     const m = migrateToV10(v9project());
     const s0 = { ...defaultState, nodes: m.nodes, layers: m.layers, selectedIds: ['inLayer', 'child'] };
@@ -312,16 +174,6 @@ test('MOVE_SELECTED: потомок выделенного предка не д�
     // child остался на месте относительно родителя, мир сдвинулся на 10/20 один раз
     assert.deepEqual(s1.nodes.child.position, { x: 60, y: 110 });
     assert.deepEqual(H.getRawChainSum('child', s1.nodes, s1.layers), { x: 1110, y: 720 });
-});
-
-test('REMOVE_LAYER: дети слоя сохраняют абсолютные позиции', () => {
-    const m = migrateToV10(v9project());
-    const s0 = { ...defaultState, nodes: m.nodes, layers: m.layers };
-    const absBefore = H.getRawChainSum('inLayer', s0.nodes, s0.layers);
-
-    const s1 = reducer(s0, { type: 'REMOVE_LAYER', payload: 'L' });
-    assert.equal(s1.nodes.inLayer.parentId, 'root');
-    assert.deepEqual(H.getRawChainSum('inLayer', s1.nodes, s1.layers), absBefore);
 });
 
 test('DELETE_SELECTED: удаление слоя не смещает его детей в мире', () => {
@@ -518,64 +370,10 @@ test('migrateToV13: несколько проектов мигрируют не�
     assert.equal(m.formatVersion, 13);
 });
 
-// ---------------------------------------------------------------------------
-// REMOVE_LEVEL_WINDOW: ре-якорение v13-цепочек (parentId напрямую на узел,
-// сегодня возможно только через REPARENT_ENTITY — TRANSFER_NODE/CREATE_NESTED_NODE
-// всё ещё пишут ownerId). Регрессия: до фикса «внук» v13-цепочки при удалении
-// уровня «деда» молча падал сиротой на уровень 0 вместо пере-якорения на
-// собственного деда — structuralParentOf унифицирует ownerId и parentId-на-узел.
-// ---------------------------------------------------------------------------
-
-test('REMOVE_LEVEL_WINDOW: v13-цепочка (parentId напрямую) пере-якорится «внук — деду», как и ownerId-цепочка', () => {
-    let s = { ...defaultState };
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'root1', name: 'Root1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'B', name: 'B', position: { x: 300, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'REPARENT_ENTITY', payload: { id: 'B', targetParentId: 'root1' } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'C', name: 'C', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'REPARENT_ENTITY', payload: { id: 'C', targetParentId: 'B' } });
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 2);
-
-    // Удаляем уровень 1 — тот, на котором живёт B (родитель C)
-    s = reducer(s, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 1 } });
-
-    assert.equal(s.nodes.B, undefined, 'B (сущность удалённого уровня) удалена');
-    assert.equal(s.nodes.C.parentId, 'root1', 'C пере-якорился напрямую на деда (root1), а не упал сиротой на root');
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 1, 'уровень C сдвинулся с 2 на 1 вместе с остальным хвостом');
-});
-
-test('REMOVE_LEVEL_WINDOW: v13-узел без деда становится сиротой-якорем (homeLevel), а не висит на удалённом parentId', () => {
-    let s = { ...defaultState };
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'B', name: 'B', position: { x: 300, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'C', name: 'C', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'REPARENT_ENTITY', payload: { id: 'C', targetParentId: 'B' } });
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 1);
-
-    // Удаляем Главный холст, где живёт B — у B самого нет деда
-    s = reducer(s, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 0 } });
-
-    assert.equal(s.nodes.C.parentId, 'root', 'мёртвая ссылка на B снята — C больше не висит на удалённом узле');
-    assert.equal(s.nodes.C.ownerId, null);
-    assert.equal(s.nodes.C.homeLevel, 0, 'C стал независимым сиротой-якорем на уровне 0 (был 1, минус сдвиг)');
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 0);
-});
-
-test('REMOVE_LEVEL_WINDOW: смешанная цепочка — v13-узел (parentId) остаётся живым владельцем для v11-внука (ownerId)', () => {
-    // root1 --(REPARENT_ENTITY, parentId)--> B --(ownerId, ЕЩЁ НЕ мигрированные
-    // старые данные — CREATE_NESTED_NODE теперь тоже пишет чистый v13, ownerId
-    // сюда попадает только из старого сохранения)--> C
-    let s = { ...defaultState };
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'root1', name: 'Root1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'B', name: 'B', position: { x: 300, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'REPARENT_ENTITY', payload: { id: 'B', targetParentId: 'root1' } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'C', name: 'C', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'B' } });
-    assert.equal(s.nodes.C.ownerId, 'B', 'C смоделирован как ещё не мигрированная v11-сущность — v11 ownerId-цепочка');
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 2);
-
-    s = reducer(s, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 1 } });
-
-    assert.equal(s.nodes.C.ownerId, 'root1', 'ownerId-внук пере-якорился на деда, даже когда мёртвый родитель сам был v13-узлом');
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 1);
-});
+// v14 (§7.13 плана): тесты, диспатчащие REMOVE_LEVEL_WINDOW/CLEAR_LEVEL_WINDOW
+// (ре-якорение при удалении/очистке уровня) удалены — Фаза 3 удаляет сами
+// обработчики этих типов экшенов вместе со всей логикой ре-якорения/сдвига
+// уровней; понятия, которые эти тесты проверяли, в v14 не существуют.
 
 test('CREATE_NESTED_NODE (v13): новый узел получает parentId напрямую на родителя, без ownerId', () => {
     let s = { ...defaultState };
@@ -587,14 +385,15 @@ test('CREATE_NESTED_NODE (v13): новый узел получает parentId н
     assert.equal(H.getEntityLevel('child1', s.nodes, s.layers, s.levelWindows), 1);
 });
 
-test('CREATE_NESTED_NODE (v13): создание глубокой цепочки автоматически достраивает окна всех уровней', () => {
+test('CREATE_NESTED_NODE (v14): создание глубокой цепочки автоматически открывает дорожку каждого нового родителя', () => {
     let s = { ...defaultState };
     s = reducer(s, { type: 'ADD_NODE', payload: { id: 'root1', name: 'Root1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
     s = reducer(s, { type: 'CREATE_NESTED_NODE', payload: { parentId: 'root1', id: 'l1', name: 'L1' } });
     s = reducer(s, { type: 'CREATE_NESTED_NODE', payload: { parentId: 'l1', id: 'l2', name: 'L2' } });
 
-    assert.equal(H.getEntityLevel('l2', s.nodes, s.layers, s.levelWindows), 2);
-    assert.ok(Object.values(s.levelWindows).some(w => w.levelIndex === 2), 'окно уровня 2 создано автоматически');
+    assert.equal(s.nodes.l2.parentId, 'l1');
+    assert.ok(HierarchyUtils.windowsOfLane('root1', s.windows).length > 0, 'дорожка root1 открылась под первый CREATE_NESTED_NODE');
+    assert.ok(HierarchyUtils.windowsOfLane('l1', s.windows).length > 0, 'дорожка l1 открылась под второй CREATE_NESTED_NODE');
 });
 
 test('DELETE_SELECTED (v13): удаление узла каскадно удаляет всю v13-ветку потомков', () => {
@@ -609,71 +408,6 @@ test('DELETE_SELECTED (v13): удаление узла каскадно удал
     assert.equal(s.nodes.root1, undefined);
     assert.equal(s.nodes.child1, undefined);
     assert.equal(s.nodes.grandchild1, undefined, 'v13-внук каскадно удалён вместе с веткой (Deep-семантика удаления по умолчанию)');
-});
-
-test('REMOVE_LEVEL_WINDOW: v13-узел с растянутой (>1) дистанцией до деда не может выразить это прямой ссылкой — явно якорится, а не съезжает на неверный уровень', () => {
-    // B сам сирота-якорь через ownerGap=2 от root1 (как после снесённого
-    // промежуточного уровня); C — прямой v13-ребёнок B. Реальная дистанция
-    // root1 -> C после удаления уровня B была бы 2 (не 1) — v13 parentId не
-    // умеет хранить gap, поэтому прямая ссылка root1 дала бы НЕВЕРНЫЙ уровень.
-    let s = { ...defaultState };
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'root1', name: 'Root1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'B', name: 'B', position: { x: 300, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'root1', ownerGap: 2 } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'C', name: 'C', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'REPARENT_ENTITY', payload: { id: 'C', targetParentId: 'B' } });
-    assert.equal(H.getEntityLevel('B', s.nodes, s.layers, s.levelWindows), 2);
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 3);
-
-    s = reducer(s, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 2 } });
-
-    assert.notEqual(s.nodes.C.parentId, 'root1', 'НЕ прямая ссылка на root1 — это дало бы уровень 1 вместо корректного 2');
-    assert.equal(s.nodes.C.parentId, 'root', 'мёртвая ссылка на B снята');
-    assert.equal(s.nodes.C.homeLevel, 2, 'явный якорь на правильном (сдвинутом) уровне вместо потери дистанции');
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 2, 'уровень сохранён корректно (был 3, минус один снятый уровень = 2)');
-});
-
-// ---------------------------------------------------------------------------
-// CLEAR_LEVEL_WINDOW: тот же класс ре-якорения, что и REMOVE_LEVEL_WINDOW,
-// но БЕЗ сдвига уровней (окно остаётся, чистится только содержимое).
-// ---------------------------------------------------------------------------
-
-test('CLEAR_LEVEL_WINDOW: v13-цепочка теряет прямого родителя — явно якорится (homeLevel), уровень НЕ меняется', () => {
-    // В отличие от REMOVE_LEVEL_WINDOW (уровни сдвигаются, «съеденный» уровень
-    // сокращает дистанцию до деда ровно на 1 — прямая v13-ссылка становится
-    // корректной), CLEAR ничего не сдвигает: дистанция root1->C остаётся 2
-    // (root1->B->C), а v13 умеет хранить только «ровно 1» — прямая ссылка
-    // здесь ВСЕГДА исказила бы уровень, поэтому единственный корректный путь —
-    // явный якорь.
-    let s = { ...defaultState };
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'root1', name: 'Root1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'B', name: 'B', position: { x: 300, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'REPARENT_ENTITY', payload: { id: 'B', targetParentId: 'root1' } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'C', name: 'C', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'REPARENT_ENTITY', payload: { id: 'C', targetParentId: 'B' } });
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 2);
-
-    s = reducer(s, { type: 'CLEAR_LEVEL_WINDOW', payload: { index: 1 } });
-
-    assert.equal(s.nodes.B, undefined);
-    assert.notEqual(s.nodes.C.parentId, 'root1', 'НЕ прямая ссылка на root1 — это дало бы неверный уровень 1');
-    assert.equal(s.nodes.C.parentId, 'root');
-    assert.equal(s.nodes.C.homeLevel, 2, 'явный якорь сохраняет исходный уровень 2');
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 2, 'CLEAR не сдвигает уровни — C остаётся на том же уровне 2');
-});
-
-test('CLEAR_LEVEL_WINDOW: v13-узел с растянутой (>1) дистанцией до деда явно якорится на СВОЁМ (неизменном) уровне, а не съезжает', () => {
-    let s = { ...defaultState };
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'root1', name: 'Root1', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'B', name: 'B', position: { x: 300, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'root1', ownerGap: 2 } });
-    s = reducer(s, { type: 'ADD_NODE', payload: { id: 'C', name: 'C', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } });
-    s = reducer(s, { type: 'REPARENT_ENTITY', payload: { id: 'C', targetParentId: 'B' } });
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 3);
-
-    s = reducer(s, { type: 'CLEAR_LEVEL_WINDOW', payload: { index: 2 } });
-
-    assert.notEqual(s.nodes.C.parentId, 'root1', 'НЕ прямая ссылка — дала бы уровень 1 вместо корректного 3');
-    assert.equal(s.nodes.C.homeLevel, 3, 'CLEAR не сдвигает уровни — якорь на исходном уровне 3');
-    assert.equal(H.getEntityLevel('C', s.nodes, s.layers, s.levelWindows), 3);
 });
 
 // ---------------------------------------------------------------------------

@@ -1274,6 +1274,103 @@ const applyRemoveLevelWindow = (state, win, allowRoot = true) => {
     };
 };
 
+// =============================================================================
+// v14 (Фаза 3, «Отчеты, аудиты, планы/Lanes_v14/PLAN_V14_LANES.md» §3/§7.12/§7.13).
+// Обработчики экшенов дорожек/окон/рамок. Добавлено АДДИТИВНО в тот же
+// switch — старые v13-обработчики (MOVE_LEVEL_WINDOW, UPDATE_LEVEL_PROPERTIES,
+// TOGGLE_LEVEL_COLLAPSE, PAN/ZOOM_LEVEL_WINDOW, ALIGN_LEVEL_WINDOWS,
+// CLEAR_PROJECT, DELETE_SELECTED и т.д.) НЕ входят в список «Удаляются» этой
+// фазы и остаются нетронутыми — их продолжают вызывать normalizeLevelWindows/
+// migrateProjectEntitiesToV13 (через getInitialMultiState -> migrateToV13) и
+// компоненты Layer.js/LevelWindow.js вплоть до конца Фазы 4. Экшены ниже
+// работают ИСКЛЮЧИТЕЛЬНО с v14-полями состояния (nodes/frames/windows) —
+// на живом v13-состоянии (без frames/windows) они безопасно no-op'ят на
+// пустых словарях, а не падают.
+// =============================================================================
+
+const WINDOW_SIZE_V14 = { w: 1000, h: 700 };
+const WINDOW_GAP_V14 = 80;
+const WINDOW_COLUMN_GAP_V14 = 60;
+const FRAME_PAD_V14 = 20;
+
+/** Колонка дорожки по глубине (§0.4.2 плана): root — колонка 0, дорожка узла — depth(узла)+1. */
+const laneColumnV14 = (ownerId, nodes) => {
+    if (!ownerId || ownerId === 'root') return 0;
+    const H = getHierarchy();
+    return (H ? H.getDepth(ownerId, nodes) : 0) + 1;
+};
+
+/**
+ * Место для НОВОГО окна данной колонки: под нижней кромкой самого нижнего
+ * окна той же колонки, иначе — правее самой правой существующей колонки.
+ * «Переполнение колонки» не подгоняется под экран (решение §7.1.2 плана) —
+ * пользователь скроллит и двигает окна сам.
+ */
+const windowColumnAnchorV14 = (windows, nodes, column) => {
+    const list = Object.values(windows || {}).filter(Boolean);
+    const columnOf = (w) => {
+        const first = (w.lanes || [])[0];
+        return first === undefined ? 0 : laneColumnV14(first, nodes);
+    };
+    const sameColumn = list.filter(w => columnOf(w) === column);
+    if (sameColumn.length) {
+        let bottomY = -Infinity, x = 0;
+        sameColumn.forEach(w => {
+            const wy = (w.position && w.position.y) || 0;
+            const wh = (w.size && w.size.h) || WINDOW_SIZE_V14.h;
+            if (wy + wh > bottomY) { bottomY = wy + wh; x = (w.position && w.position.x) || 0; }
+        });
+        return { x, y: bottomY + WINDOW_GAP_V14 };
+    }
+    let maxRight = -Infinity;
+    list.forEach(w => {
+        const wx = (w.position && w.position.x) || 0;
+        const ww = (w.size && w.size.w) || WINDOW_SIZE_V14.w;
+        if (wx + ww > maxRight) maxRight = wx + ww;
+    });
+    if (maxRight === -Infinity) return { x: 0, y: 0 };
+    return { x: maxRight + WINDOW_COLUMN_GAP_V14, y: 0 };
+};
+
+/** Новый v14-объект окна с одной дорожкой lanes:[ownerId]. */
+const makeWindowV14 = (id, ownerId, position) => ({
+    id, lanes: [ownerId], hidden: [], frameId: null,
+    position, size: { ...WINDOW_SIZE_V14 },
+    camera: { offset: { x: 0, y: 0 }, zoom: 1 }, collapsed: false,
+    name: '', color: '', fontFamily: 'Inter, sans-serif', fontSize: 14
+});
+
+/**
+ * OPEN_LANE, разделяемая с CREATE_NESTED_NODE (там дорожка родителя должна
+ * открыться автоматически, если её ещё нигде нет — §0.4.3 плана). Если
+ * `windowId` задан — дорожка добавляется в ЕГО lanes (составное окно);
+ * иначе — открывается в НОВОМ окне, только если дорожка нигде не открыта.
+ * @returns {Object<string, WindowEntity>} обновлённый state.windows
+ */
+const applyOpenLaneV14 = (windows, nodes, ownerId, windowId) => {
+    const H = getHierarchy();
+    if (windowId && windows[windowId]) {
+        const win = windows[windowId];
+        if ((win.lanes || []).includes(ownerId)) return windows;
+        return { ...windows, [windowId]: { ...win, lanes: [...(win.lanes || []), ownerId] } };
+    }
+    if (H && H.windowsOfLane(ownerId, windows).length > 0) return windows;
+    const column = laneColumnV14(ownerId, nodes);
+    const anchor = windowColumnAnchorV14(windows, nodes, column);
+    const id = newWindowId();
+    return { ...windows, [id]: makeWindowV14(id, ownerId, anchor) };
+};
+
+/** Убирает окно, если после операции у него не осталось дорожек и это не окно рамки. */
+const dropIfEmptyWindowV14 = (windows, windowId) => {
+    const win = windows[windowId];
+    if (!win) return windows;
+    if ((win.lanes || []).length > 0 || win.frameId) return windows;
+    const next = { ...windows };
+    delete next[windowId];
+    return next;
+};
+
 const reducer = (state, action) => {
     switch (action.type) {
         case 'LOAD_STATE': {
@@ -1353,131 +1450,319 @@ const reducer = (state, action) => {
                 dragGesture: null
             };
         }
-        case 'ADD_LAYER': {
-            const id = action.payload.id || 'layer-' + Date.now() + Math.floor(Math.random() * 1000);
-            const historyState = saveHistory(state, `Добавлен слой: ${action.payload.name}`);
-            const parentId = action.payload.parentId !== undefined ? action.payload.parentId : 'root';
-            const newLayers = { ...state.layers, [id]: normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true }) };
-            // Вложение подслоя (parentId — другой слой, из FAB «Добавить слой
-            // внутрь этого слоя»): цепочка родителей подрастает под содержимое.
-            const H = getHierarchy();
-            if (parentId !== 'root' && newLayers[parentId] && H && H.bubbleUpLayerResize) {
-                const sizeUpdates = H.bubbleUpLayerResize(id, { nodes: state.nodes, layers: newLayers });
-                Object.entries(sizeUpdates).forEach(([lid, size]) => {
-                    if (newLayers[lid]) newLayers[lid] = { ...newLayers[lid], size };
-                });
-            }
-            // parentId на узел (v13) мог создать новую глубину — окна достраиваются
-            const normalizedAddLayer = normalizeLevelWindows(state.levelWindows, state.nodes, newLayers, state.levelViews);
-            return {
-                ...state,
-                ...historyState,
-                layers: newLayers,
-                levelWindows: normalizedAddLayer.levelWindows,
-                levelViews: normalizedAddLayer.levelViews,
-                selectedIds: [id]
-            };
-        }
-        case 'UPDATE_LAYER': {
-            const { id, updates, skipHistory } = action.payload || {};
-            if (!id || !state.layers || !state.layers[id]) return state;
-            const historyState = skipHistory ? {} : saveHistory(state, `Изменен слой: ${state.layers[id].name || id}`);
-            return {
-                ...state,
-                ...historyState,
-                layers: {
-                    ...state.layers,
-                    [id]: { ...state.layers[id], ...updates }
-                }
-            };
-        }
-        case 'REMOVE_LAYER': {
-            const idToRemove = action.payload;
-            const historyState = saveHistory(state, `Удален слой`);
-            const newLayers = { ...state.layers };
-            const parentContext = state.layers[idToRemove]?.parentId || 'root';
-            delete newLayers[idToRemove];
-            
-            const removedLayerPos = state.layers[idToRemove]?.position || { x: 0, y: 0 };
-            const newNodes = { ...state.nodes };
-            Object.keys(newNodes).forEach(nodeId => {
-                if (newNodes[nodeId].parentId === idToRemove) {
-                    const n = newNodes[nodeId];
-                    newNodes[nodeId] = {
-                        ...n,
-                        parentId: parentContext,
-                        position: { x: (n.position?.x || 0) + removedLayerPos.x, y: (n.position?.y || 0) + removedLayerPos.y }
-                    };
-                }
-            });
-
-            return {
-                ...state,
-                ...historyState,
-                layers: newLayers,
-                nodes: newNodes,
-                selectedIds: state.selectedIds.filter(id => id !== idToRemove)
-            };
-        }
-        case 'ALIGN_LAYERS': {
-            const { contextId = 'root' } = action.payload || {};
-            const geom = getGeometry();
-            if (!geom || !geom.alignLayers) return state;
-
-            const historyState = saveHistory(state, 'Выравнивание слоев');
-            const alignedLayers = geom.alignLayers(state.layers, state.nodes, contextId, 90);
-
-            return {
-                ...state,
-                ...historyState,
-                layers: {
-                    ...state.layers,
-                    ...alignedLayers
-                }
-            };
-        }
+        // v14: ADD_NODE переписан на месте (§7.12 — тот же action.type, новое
+        // тело) — parentId только 'root' или id узла (слоя как цели больше нет),
+        // авторасстановка внутри слоя и normalizeLevelWindows убраны: дорожка
+        // не создаётся неявно при ADD_NODE (§0.4.3 плана — только явным
+        // действием или дропом на карточку через REPARENT_ENTITY/CREATE_NESTED_NODE).
         case 'ADD_NODE': {
             const id = action.payload.id || 'node-' + Date.now() + Math.floor(Math.random() * 1000);
             const historyState = saveHistory(state, `Добавлен узел: ${action.payload.name}`);
-            const parentId = action.payload.parentId !== undefined ? action.payload.parentId : 'root';
-            
+            const rawParentId = action.payload.parentId;
+            const parentId = (rawParentId && rawParentId !== 'root' && state.nodes && state.nodes[rawParentId]) ? rawParentId : 'root';
+
             const nodeData = normalizeContainer({ ...action.payload, id, parentId, snapToGrid: true });
             if (nodeData.type !== 'ai-agent') {
                 nodeData.size = calculateNodeSize(nodeData.name, nodeData.content, nodeData.mediaUrl, nodeData.mediaHeight, nodeData.fontSize, nodeData.fontFamily);
             } else if (!nodeData.size) {
                 nodeData.size = { w: 380, h: 480 };
             }
-            
-            let updatedNodes = { ...state.nodes, [id]: nodeData };
-            let updatedLayers = { ...state.layers };
 
-            if (parentId && parentId !== 'root' && state.layers && state.layers[parentId]) {
-                const geom = getGeometry();
-                const layer = state.layers[parentId];
-                const layerNodes = Object.values(updatedNodes).filter(n => n && n.parentId === parentId);
-                if (layerNodes.length > 0 && geom && geom.getSmartPlacement) {
-                    const { updatesById, newLayerSize } = geom.getSmartPlacement(layerNodes, layer, updatedNodes, updatedLayers);
-                    updatedLayers[parentId] = { ...layer, size: newLayerSize };
-                    Object.keys(updatesById).forEach(nId => {
-                        if (updatedNodes[nId]) {
-                            updatedNodes[nId] = { ...updatedNodes[nId], position: updatesById[nId] };
-                        }
-                    });
-                }
-            }
-
-            // parentId на узел (v13) мог создать новую глубину — окна достраиваются
-            const normalizedAddNode = normalizeLevelWindows(state.levelWindows, updatedNodes, updatedLayers, state.levelViews);
+            const nodes = { ...state.nodes, [id]: nodeData };
             return {
                 ...state,
                 ...historyState,
-                nodes: updatedNodes,
-                layers: updatedLayers,
-                levelWindows: normalizedAddNode.levelWindows,
-                levelViews: normalizedAddNode.levelViews,
+                nodes,
                 selectedIds: [id]
             };
         }
+
+        // --- v14: окна и дорожки (§3/§7.6/§7.8 плана) --------------------------
+
+        case 'OPEN_LANE': {
+            const { ownerId, windowId } = action.payload || {};
+            if (!ownerId || (ownerId !== 'root' && !(state.nodes && state.nodes[ownerId]))) return state;
+            const windows = applyOpenLaneV14(state.windows || {}, state.nodes, ownerId, windowId);
+            if (windows === (state.windows || {})) return state;
+            const label = ownerId === 'root' ? 'Проект' : ((state.nodes[ownerId] && state.nodes[ownerId].name) || ownerId);
+            return { ...state, ...saveHistory(state, `Открыта дорожка «${label}»`), windows };
+        }
+        case 'CLOSE_LANE': {
+            const { windowId, ownerId } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win || !(win.lanes || []).includes(ownerId)) return state;
+            const historyState = saveHistory(state, 'Дорожка закрыта');
+            const lanes = win.lanes.filter(l => l !== ownerId);
+            const hidden = (win.hidden || []).filter(l => l !== ownerId);
+            let windows = { ...state.windows, [windowId]: { ...win, lanes, hidden } };
+            windows = dropIfEmptyWindowV14(windows, windowId);
+            return { ...state, ...historyState, windows };
+        }
+        case 'DOCK_LANE': {
+            const { ownerId, fromWindowId, toWindowId, index } = action.payload || {};
+            const fromWin = state.windows && state.windows[fromWindowId];
+            const toWin = state.windows && state.windows[toWindowId];
+            if (!ownerId || !fromWin || !toWin || fromWindowId === toWindowId) return state;
+            if (!(fromWin.lanes || []).includes(ownerId)) return state;
+            const historyState = saveHistory(state, 'Дорожка пристыкована к другому окну');
+            let windows = { ...state.windows };
+            windows[fromWindowId] = { ...fromWin, lanes: fromWin.lanes.filter(l => l !== ownerId), hidden: (fromWin.hidden || []).filter(l => l !== ownerId) };
+            if ((toWin.lanes || []).includes(ownerId)) {
+                windows[toWindowId] = toWin;
+            } else {
+                const arr = [...(toWin.lanes || [])];
+                const at = (typeof index === 'number') ? Math.max(0, Math.min(index, arr.length)) : arr.length;
+                arr.splice(at, 0, ownerId);
+                windows[toWindowId] = { ...toWin, lanes: arr };
+            }
+            windows = dropIfEmptyWindowV14(windows, fromWindowId);
+            return { ...state, ...historyState, windows };
+        }
+        case 'DETACH_LANE': {
+            const { windowId, ownerId } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win || !(win.lanes || []).includes(ownerId)) return state;
+            const historyState = saveHistory(state, 'Дорожка отстыкована в своё окно');
+            let windows = { ...state.windows, [windowId]: { ...win, lanes: win.lanes.filter(l => l !== ownerId), hidden: (win.hidden || []).filter(l => l !== ownerId) } };
+            windows = dropIfEmptyWindowV14(windows, windowId);
+            const column = laneColumnV14(ownerId, state.nodes);
+            const anchor = windowColumnAnchorV14(windows, state.nodes, column);
+            const newId = newWindowId();
+            windows[newId] = makeWindowV14(newId, ownerId, anchor);
+            return { ...state, ...historyState, windows };
+        }
+        case 'REORDER_LANE': {
+            const { windowId, ownerId, toIndex } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win || !(win.lanes || []).includes(ownerId) || typeof toIndex !== 'number') return state;
+            const lanes = win.lanes.filter(l => l !== ownerId);
+            const at = Math.max(0, Math.min(toIndex, lanes.length));
+            lanes.splice(at, 0, ownerId);
+            return { ...state, windows: { ...state.windows, [windowId]: { ...win, lanes } } };
+        }
+        case 'TOGGLE_LANE_HIDDEN': {
+            const { windowId, ownerId } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win || !(win.lanes || []).includes(ownerId)) return state;
+            const hidden = (win.hidden || []).includes(ownerId)
+                ? win.hidden.filter(l => l !== ownerId)
+                : [...(win.hidden || []), ownerId];
+            return { ...state, windows: { ...state.windows, [windowId]: { ...win, hidden } } };
+        }
+        case 'OPEN_FRAME_WINDOW': {
+            const { frameId } = action.payload || {};
+            const frame = state.frames && state.frames[frameId];
+            if (!frame) return state;
+            if (Object.values(state.windows || {}).some(w => w && w.frameId === frameId)) return state;
+            const historyState = saveHistory(state, `Открыта рамка «${frame.name || frameId}» как окно`);
+            const memberLanes = Array.from(new Set((frame.members || [])
+                .map(mid => state.nodes[mid] && (state.nodes[mid].parentId || 'root'))
+                .filter(Boolean)));
+            const primaryLane = memberLanes[0] || 'root';
+            const anchor = windowColumnAnchorV14(state.windows, state.nodes, laneColumnV14(primaryLane, state.nodes));
+            const id = newWindowId();
+            const win = { ...makeWindowV14(id, primaryLane, anchor), lanes: memberLanes.length ? memberLanes : [primaryLane], frameId, name: frame.name || '' };
+            return { ...state, ...historyState, windows: { ...(state.windows || {}), [id]: win } };
+        }
+        case 'CLOSE_WINDOW': {
+            const { windowId } = action.payload || {};
+            if (!state.windows || !state.windows[windowId]) return state;
+            const historyState = saveHistory(state, 'Окно закрыто');
+            const windows = { ...state.windows };
+            delete windows[windowId];
+            return { ...state, ...historyState, windows };
+        }
+        case 'MOVE_WINDOW': {
+            const { windowId, dx = 0, dy = 0, position } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win) return state;
+            const pos = position || { x: (win.position.x || 0) + dx, y: (win.position.y || 0) + dy };
+            return { ...state, windows: { ...state.windows, [windowId]: { ...win, position: pos } } };
+        }
+        case 'RESIZE_WINDOW': {
+            const { windowId, size } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win || !size) return state;
+            const MIN_W = 260, MIN_H = 180; // не меньше одной карточки (§7.1.5)
+            return { ...state, windows: { ...state.windows, [windowId]: { ...win, size: { w: Math.max(MIN_W, size.w), h: Math.max(MIN_H, size.h) } } } };
+        }
+        case 'PAN_WINDOW': {
+            const { windowId, offset } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win || !offset) return state;
+            return { ...state, windows: { ...state.windows, [windowId]: { ...win, camera: { ...win.camera, offset } } } };
+        }
+        case 'ZOOM_WINDOW': {
+            const { windowId, zoom, offset } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win) return state;
+            const camera = { ...win.camera };
+            if (typeof zoom === 'number') camera.zoom = zoom;
+            if (offset) camera.offset = offset;
+            return { ...state, windows: { ...state.windows, [windowId]: { ...win, camera } } };
+        }
+        case 'TOGGLE_WINDOW_COLLAPSE': {
+            const { windowId } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win) return state;
+            return { ...state, windows: { ...state.windows, [windowId]: { ...win, collapsed: !win.collapsed } } };
+        }
+        case 'TOGGLE_WINDOW_MAXIMIZE': {
+            // viewport — мировой прямоугольник вьюпорта на момент разворота
+            // (пересчитывается компонентом из камеры мирового холста, Фаза 4);
+            // редьюсер сам пиксельной геометрией не занимается.
+            const { windowId, viewport } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win) return state;
+            const historyState = saveHistory(state, win.preMaximize ? 'Окно возвращено из полноэкранного режима' : 'Окно развёрнуто на весь экран');
+            let nextWin;
+            if (win.preMaximize) {
+                nextWin = { ...win, position: win.preMaximize.position, size: win.preMaximize.size, preMaximize: null };
+            } else {
+                const vp = viewport || { x: win.position.x, y: win.position.y, w: win.size.w, h: win.size.h };
+                nextWin = { ...win, preMaximize: { position: win.position, size: win.size }, position: { x: vp.x, y: vp.y }, size: { w: vp.w, h: vp.h } };
+            }
+            return { ...state, ...historyState, windows: { ...state.windows, [windowId]: nextWin } };
+        }
+        case 'NEW_EMPTY_WINDOW': {
+            // Переделка кнопки «Уровень» (§7.1.4): пустое окно про запас, не
+            // привязанное ни к одной дорожке — НЕ закрывается автоматически.
+            const historyState = saveHistory(state, 'Создано новое пустое окно');
+            const id = newWindowId();
+            const anchor = windowColumnAnchorV14(state.windows, state.nodes, 0);
+            const win = { id, lanes: [], hidden: [], frameId: null, position: anchor, size: { ...WINDOW_SIZE_V14 }, camera: { offset: { x: 0, y: 0 }, zoom: 1 }, collapsed: false, name: 'Новое окно', color: '', fontFamily: 'Inter, sans-serif', fontSize: 14 };
+            return { ...state, ...historyState, windows: { ...(state.windows || {}), [id]: win } };
+        }
+        case 'ALIGN_WINDOWS': {
+            const windows = state.windows || {};
+            if (!Object.keys(windows).length) return state;
+            const historyState = saveHistory(state, 'Окна разложены по колонкам');
+            const columnOf = (w) => { const first = (w.lanes || [])[0]; return first === undefined ? 0 : laneColumnV14(first, state.nodes); };
+            const byColumn = {};
+            Object.values(windows).forEach(w => { if (!w) return; const c = columnOf(w); (byColumn[c] = byColumn[c] || []).push(w); });
+            const columns = Object.keys(byColumn).map(Number).sort((a, b) => a - b);
+            const next = { ...windows };
+            let x = 0;
+            columns.forEach(c => {
+                const list = byColumn[c].slice().sort((a, b) => (a.position.y || 0) - (b.position.y || 0));
+                let y = 0, maxW = 0;
+                list.forEach(w => { maxW = Math.max(maxW, (w.size && w.size.w) || WINDOW_SIZE_V14.w); });
+                list.forEach(w => {
+                    next[w.id] = { ...w, position: { x, y } };
+                    y += ((w.size && w.size.h) || WINDOW_SIZE_V14.h) + WINDOW_GAP_V14;
+                });
+                x += maxW + WINDOW_COLUMN_GAP_V14;
+            });
+            return { ...state, ...historyState, windows: next };
+        }
+        case 'UPDATE_WINDOW_PROPERTIES': {
+            const { windowId, updates, skipHistory } = action.payload || {};
+            const win = state.windows && state.windows[windowId];
+            if (!win || !updates) return state;
+            const { offset, zoom, collapsed, ...frameUpdates } = updates;
+            let nextWin = win;
+            if (offset !== undefined || zoom !== undefined || collapsed !== undefined) {
+                nextWin = {
+                    ...nextWin,
+                    camera: { ...nextWin.camera, ...(offset !== undefined ? { offset } : {}), ...(zoom !== undefined ? { zoom } : {}) },
+                    ...(collapsed !== undefined ? { collapsed } : {})
+                };
+            }
+            const hasFrameChange = Object.keys(frameUpdates).length > 0;
+            if (hasFrameChange) nextWin = { ...nextWin, ...frameUpdates };
+            const windows = { ...state.windows, [windowId]: nextWin };
+            // Камера — вне истории всегда; свойства окна (имя/цвет/шрифт) — в
+            // истории (аналог старого UPDATE_LEVEL_PROPERTIES).
+            const historyState = (hasFrameChange && !skipHistory) ? saveHistory(state, 'Изменены свойства окна') : {};
+            return { ...state, ...historyState, windows };
+        }
+        case 'SET_ACTIVE_LANE': {
+            const p = action.payload;
+            return { ...state, activeLaneId: (typeof p === 'string' ? p : (p && p.ownerId)) || null };
+        }
+        case 'SET_ACTIVE_FRAME': {
+            const p = action.payload;
+            return { ...state, activeFrameId: (typeof p === 'string' ? p : (p && p.frameId)) || null };
+        }
+
+        // --- v14: рамки (§3/§7.3/§7.9/§7.10 плана) -----------------------------
+
+        case 'ADD_FRAME': {
+            const p = action.payload || {};
+            const members = Array.isArray(p.members) ? p.members.filter(mid => state.nodes && state.nodes[mid]) : [];
+            const id = p.id || 'frame-' + Date.now() + Math.floor(Math.random() * 1000);
+            const homeLaneId = p.homeLaneId || (members.length ? (state.nodes[members[0]].parentId || 'root') : null);
+            const name = p.name || 'Новая рамка';
+            const historyState = saveHistory(state, `Добавлена рамка «${name}»`);
+            const frame = {
+                id, name, content: p.content || '', color: p.color || '#0284c7',
+                fontFamily: p.fontFamily, fontSize: p.fontSize, snapToGrid: true,
+                members, homeLaneId
+            };
+            return { ...state, ...historyState, frames: { ...(state.frames || {}), [id]: frame }, selectedIds: [id] };
+        }
+        case 'UPDATE_FRAME': {
+            const { id, updates, skipHistory } = action.payload || {};
+            const frame = state.frames && state.frames[id];
+            if (!frame || !updates) return state;
+            const historyState = skipHistory ? {} : saveHistory(state, `Изменена рамка «${frame.name || id}»`);
+            return { ...state, ...historyState, frames: { ...state.frames, [id]: { ...frame, ...updates } } };
+        }
+        case 'REMOVE_FRAME': {
+            const id = (typeof action.payload === 'string') ? action.payload : (action.payload && action.payload.id);
+            const frame = state.frames && state.frames[id];
+            if (!frame) return state;
+            const historyState = saveHistory(state, `Удалена рамка «${frame.name || id}»`);
+            const frames = { ...state.frames };
+            delete frames[id];
+            const portsToRemove = Object.values(state.ports || {}).filter(p => p && p.nodeId === id).map(p => p.id);
+            const ports = { ...state.ports };
+            portsToRemove.forEach(pid => delete ports[pid]);
+            const links = { ...state.links };
+            Object.keys(links).forEach(lid => {
+                const l = links[lid];
+                if (l && (portsToRemove.includes(l.sourcePortId) || portsToRemove.includes(l.targetPortId))) delete links[lid];
+            });
+            const windows = { ...(state.windows || {}) };
+            Object.keys(windows).forEach(wid => { if (windows[wid] && windows[wid].frameId === id) delete windows[wid]; });
+            return { ...state, ...historyState, frames, ports, links, windows, selectedIds: state.selectedIds.filter(sid => sid !== id) };
+        }
+        case 'FRAME_ADD_MEMBERS': {
+            const { frameId, ids } = action.payload || {};
+            const frame = state.frames && state.frames[frameId];
+            if (!frame || !Array.isArray(ids)) return state;
+            const toAdd = ids.filter(mid => state.nodes[mid] && !frame.members.includes(mid));
+            if (!toAdd.length) return state;
+            const historyState = saveHistory(state, `Добавлено в рамку «${frame.name || frameId}»: ${toAdd.length}`);
+            const members = [...frame.members, ...toAdd];
+            const homeLaneId = frame.homeLaneId || (state.nodes[toAdd[0]].parentId || 'root');
+            return { ...state, ...historyState, frames: { ...state.frames, [frameId]: { ...frame, members, homeLaneId } } };
+        }
+        case 'FRAME_REMOVE_MEMBERS': {
+            const { frameId, ids } = action.payload || {};
+            const frame = state.frames && state.frames[frameId];
+            if (!frame || !Array.isArray(ids)) return state;
+            const removeSet = new Set(ids);
+            if (!frame.members.some(mid => removeSet.has(mid))) return state;
+            const historyState = saveHistory(state, `Убрано из рамки «${frame.name || frameId}»`);
+            // Опустевшая рамка не удаляется автоматически (§7.3.4) — остаётся заготовкой.
+            return { ...state, ...historyState, frames: { ...state.frames, [frameId]: { ...frame, members: frame.members.filter(mid => !removeSet.has(mid)) } } };
+        }
+        case 'MOVE_FRAGMENT': {
+            const { frameId, ownerId, dx = 0, dy = 0, skipHistory } = action.payload || {};
+            const frame = state.frames && state.frames[frameId];
+            if (!frame) return state;
+            const members = frame.members.filter(mid => state.nodes[mid] && (state.nodes[mid].parentId || 'root') === ownerId);
+            if (!members.length) return state;
+            const historyState = skipHistory ? {} : saveHistory(state, `Перемещён кусок рамки «${frame.name || frameId}»`);
+            const nodes = { ...state.nodes };
+            members.forEach(mid => {
+                const n = nodes[mid];
+                nodes[mid] = { ...n, position: { x: Math.max(0, (n.position.x || 0) + dx), y: Math.max(0, (n.position.y || 0) + dy) } };
+            });
+            return { ...state, ...historyState, nodes };
+        }
+
         case 'TOGGLE_CONTAINER_ISOLATION': {
             // Кнопка изоляции живёт на самом контейнере (шапка окна, плашка
             // проекта): изолированное остаётся видимым, значит кнопка выхода
@@ -1733,32 +2018,71 @@ const reducer = (state, action) => {
                 links: newLinks
             };
         }
+        // v14: REMOVE_NODE переписан на месте (§7.12) — по умолчанию каскад
+        // всей ветки (было: «плоское» удаление без потомков); keepChildren:true —
+        // прямые дети усыновляются дедом с findFreePosition, как Shallow у
+        // REPARENT_ENTITY (§3 плана, операция Delete/Clear).
         case 'REMOVE_NODE': {
-            const nodeId = action.payload;
-            const historyState = saveHistory(state, `Удален узел`);
-            
-            const newNodes = { ...state.nodes };
-            delete newNodes[nodeId];
-            
-            const portsToRemove = Object.values(state.ports).filter(p => p.nodeId === nodeId).map(p => p.id);
-            const newPorts = { ...state.ports };
-            portsToRemove.forEach(pid => delete newPorts[pid]);
-            
-            const newLinks = { ...state.links };
-            Object.keys(newLinks).forEach(lid => {
-                const l = newLinks[lid];
-                if (l && (portsToRemove.includes(l.sourcePortId) || portsToRemove.includes(l.targetPortId))) {
-                    delete newLinks[lid];
+            const p = (typeof action.payload === 'string') ? { id: action.payload } : (action.payload || {});
+            const nodeId = p.id;
+            const node = state.nodes && state.nodes[nodeId];
+            if (!node) return state;
+            const historyState = saveHistory(state, `Удалён узел «${node.name || nodeId}»`);
+            const G = getGeometry();
+            const byParent = getHierarchy().getChildrenByParent(state.nodes);
+
+            const nodes = { ...state.nodes };
+            const idsToDelete = new Set([nodeId]);
+
+            if (p.keepChildren) {
+                const oldParentId = node.parentId || 'root';
+                const directChildren = byParent[nodeId] || [];
+                const siblingRects = (byParent[oldParentId] || [])
+                    .filter(n => n.id !== nodeId)
+                    .map(n => ({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }));
+                directChildren.forEach(child => {
+                    const pos = G.findFreePosition(child.size, child.position, siblingRects);
+                    siblingRects.push({ x: pos.x, y: pos.y, w: (child.size && child.size.w) || 200, h: (child.size && child.size.h) || 100 });
+                    nodes[child.id] = { ...child, parentId: oldParentId, position: pos };
+                });
+            } else {
+                // Каскад: вся ветка потомков по цепочке parentId.
+                let frontier = [nodeId];
+                while (frontier.length) {
+                    const next = [];
+                    frontier.forEach(pid => (byParent[pid] || []).forEach(child => { idsToDelete.add(child.id); next.push(child.id); }));
+                    frontier = next;
+                }
+            }
+            idsToDelete.forEach(id => delete nodes[id]);
+
+            const ports = { ...state.ports };
+            const portsToRemove = [];
+            Object.values(state.ports || {}).forEach(port => { if (port && idsToDelete.has(port.nodeId)) { portsToRemove.push(port.id); delete ports[port.id]; } });
+
+            const links = { ...state.links };
+            Object.keys(links).forEach(lid => {
+                const l = links[lid];
+                if (l && (portsToRemove.includes(l.sourcePortId) || portsToRemove.includes(l.targetPortId))) delete links[lid];
+            });
+
+            // Узел (и вся удалённая ветка) выходит из членства во всех рамках.
+            const frames = { ...(state.frames || {}) };
+            Object.keys(frames).forEach(fid => {
+                const f = frames[fid];
+                if (f && f.members.some(mid => idsToDelete.has(mid))) {
+                    frames[fid] = { ...f, members: f.members.filter(mid => !idsToDelete.has(mid)) };
                 }
             });
 
             return {
                 ...state,
                 ...historyState,
-                nodes: newNodes,
-                ports: newPorts,
-                links: newLinks,
-                selectedIds: state.selectedIds.filter(sid => sid !== nodeId)
+                nodes,
+                ports,
+                links,
+                frames,
+                selectedIds: state.selectedIds.filter(sid => !idsToDelete.has(sid))
             };
         }
         case 'REMOVE_PORT': {
@@ -2192,157 +2516,103 @@ const reducer = (state, action) => {
                 dragGesture: null
             };
         }
+        // v14: REPARENT_ENTITY переписан на месте (§7.12) — контракт сохраняется
+        // (ids/id, targetParentId/newParentId, mode, position/positionsById,
+        // historySnapshot), но targetLevelIndex и id слоя как цель УДАЛЕНЫ:
+        // targetParentId — только 'root' или id узла (§3 плана).
         case 'REPARENT_ENTITY': {
-            // v13 (PLAN_V12_CLEAN_HIERARCHY_AND_INTERACTIONS.md): единственный
-            // атомарный экшен переноса. Заменил TRANSFER_NODE (физически удалён
-            // из редьюсера — все 5 мест диспатча в UI переведены на этот экшен).
-            //
-            // Обратная совместимость: одиночный { id, newParentId } нормализуется
-            // в { ids: [id], targetParentId: newParentId } — старый контракт первых
-            // тестов (см. app/tests/migration.test.js) продолжает работать как есть.
-            //
-            // payload: { ids | id, targetParentId | newParentId, targetLevelIndex?,
-            //            mode?: 'deep' | 'shallow', position?, positionsById?, historySnapshot? }
-            // positionsById — целевые позиции по id (Drag&Drop с курсором под
-            // элементами при переносе НЕСКОЛЬКИХ сущностей); при одиночном переносе
-            // проще передать один `position`. historySnapshot — срез на mousedown,
-            // чтобы весь жест (движение + перенос) был одним шагом Undo.
             const p = action.payload || {};
             const H = getHierarchy();
             const G = getGeometry();
             if (!H || !G) return state;
 
-            const mode = p.mode === 'shallow' ? 'shallow' : 'deep';
-            let targetParentId = p.targetParentId !== undefined ? p.targetParentId : p.newParentId;
-            if (targetParentId === undefined && typeof p.targetLevelIndex === 'number') {
-                const win = resolveWindow(state, p.targetLevelIndex);
-                targetParentId = win ? win.id : (p.targetLevelIndex === 0 ? 'root' : undefined);
-            }
+            const targetParentId = p.targetParentId !== undefined ? p.targetParentId : p.newParentId;
             if (!targetParentId) return state;
 
-            const isNodeId = (eid) => !!(state.nodes && state.nodes[eid]);
-            const getEntity = (eid) => (state.nodes && state.nodes[eid]) || (state.layers && state.layers[eid]);
+            const getEntity = (eid) => state.nodes && state.nodes[eid];
 
             const rawIds = Array.isArray(p.ids) ? p.ids : (p.id ? [p.id] : []);
             const requestedIds = rawIds.filter(eid => getEntity(eid));
             if (requestedIds.length === 0) return state;
 
-            // «Только верхние»: у кого в этом же наборе есть предок по parentId-
-            // цепочке (единственная цепочка в v13 — координата и родство слиты) —
-            // тот переедет вместе со своим предком, отдельно его не трогаем.
+            // «Только верхние»: потомок в этом же наборе переезжает вместе со своим предком.
             const topIds = requestedIds.filter(eid => !requestedIds.some(other =>
-                other !== eid && H.isDescendantOf(eid, other, state.nodes, state.layers)));
+                other !== eid && H.isDescendantOfV14(eid, other, state.nodes)));
 
-            // Валидация каждого id независимо (canReparentTo: существование цели,
-            // self, цикл) — невалидные молча пропускаются, один плохой id не
-            // блокирует остальной батч.
+            // Валидация каждого id независимо — невалидные молча пропускаются,
+            // один плохой id не блокирует остальной батч.
             const validIds = topIds.filter(eid => {
                 const entity = getEntity(eid);
                 if (!entity || entity.parentId === targetParentId) return false;
-                return H.canReparentTo(eid, targetParentId, state.nodes, state.layers, state.levelWindows).ok;
+                return H.canReparentToV14(eid, targetParentId, state.nodes).ok;
             });
             if (validIds.length === 0) return state;
 
             const firstEntity = getEntity(validIds[0]);
-            // p.historySnapshot — срез на начало Drag&Drop-жеста (mousedown), как у
-            // TRANSFER_NODE: движение мышью пишется с skipHistory, поэтому без среза
-            // «до» в past попало бы промежуточное положение вместо исходного, и один
-            // Ctrl+Z не откатывал бы весь жест целиком.
+            // p.historySnapshot — срез на начало Drag&Drop-жеста (mousedown):
+            // движение мышью пишется с skipHistory, поэтому без среза «до» в
+            // past попало бы промежуточное положение, и один Ctrl+Z не
+            // откатывал бы весь жест целиком.
             const historyState = saveHistory(state, validIds.length === 1
                 ? `Элемент перевложен: ${firstEntity.name}`
                 : `Перевложено элементов: ${validIds.length}`, p.historySnapshot || null);
 
             const newNodes = { ...state.nodes };
-            const newLayers = { ...state.layers };
-            const getNew = (eid) => (isNodeId(eid) ? newNodes[eid] : newLayers[eid]);
-            const setNew = (eid, val) => { if (isNodeId(eid)) newNodes[eid] = val; else newLayers[eid] = val; };
-            // Сущность, прошедшая через REPARENT_ENTITY, живёт по чистой v13-схеме —
-            // унаследованные ownerId/ownerGap/homeLevel (если это ещё не мигрированная
-            // v11-сущность) сбрасываются, а не остаются мёртвым грузом.
+            // Унаследованные ownerId/ownerGap/homeLevel (ещё не мигрированная
+            // v11-сущность) сбрасываются — REPARENT_ENTITY — точка полного
+            // перехода на чистый v14 parentId.
             const stripLegacy = (e) => { const { ownerId, ownerGap, homeLevel, ...rest } = e; return rest; };
 
-            // Прямоугольники прямых детей контейнера — база для findFreePosition
-            // (Shallow-всплытие детей и/или перенос через границу окна).
-            const rectsIn = (containerId) => {
-                const rects = [];
-                Object.values(state.nodes || {}).forEach(n => { if (n && n.parentId === containerId) rects.push({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }); });
-                Object.values(state.layers || {}).forEach(l => { if (l && l.parentId === containerId) rects.push({ x: l.position.x, y: l.position.y, w: (l.size && l.size.w) || 600, h: (l.size && l.size.h) || 400 }); });
-                return rects;
-            };
+            const rectsIn = (parentId) => (H.getChildrenByParent(state.nodes)[parentId] || [])
+                .map(n => ({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }));
 
             validIds.forEach(eid => {
                 const entity = getEntity(eid);
-                const oldParentId = entity.parentId;
+                const oldParentId = entity.parentId || 'root';
 
-                if (mode === 'shallow') {
-                    // Прямые дети переносимой сущности усыновляются её ПРЕЖНИМ
-                    // родителем («дедушкой») вместо того, чтобы следовать за ней —
-                    // findFreePosition предотвращает наложение всплывающих детей
-                    // на то, что уже стоит в новом для них контейнере.
-                    const directChildren = [
-                        ...Object.values(state.nodes || {}).filter(n => n && n.parentId === eid),
-                        ...Object.values(state.layers || {}).filter(l => l && l.parentId === eid)
-                    ];
+                if (p.mode === 'shallow') {
+                    // Прямые дети усыновляются ПРЕЖНИМ родителем («дедушкой»):
+                    // findFreePosition предотвращает наложение на то, что уже
+                    // стоит в дорожке деда.
+                    const directChildren = H.getChildrenByParent(state.nodes)[eid] || [];
                     if (directChildren.length > 0) {
                         const siblingRects = rectsIn(oldParentId);
                         directChildren.forEach(child => {
                             const pos = G.findFreePosition(child.size, child.position, siblingRects);
                             siblingRects.push({ x: pos.x, y: pos.y, w: (child.size && child.size.w) || 200, h: (child.size && child.size.h) || 100 });
-                            setNew(child.id, stripLegacy({ ...getNew(child.id), parentId: oldParentId, position: pos }));
+                            newNodes[child.id] = stripLegacy({ ...newNodes[child.id], parentId: oldParentId, position: pos });
                         });
                     }
                 }
 
-                // Позиция самой переносимой сущности:
-                //  - явная (drop под курсором, только при одиночном переносе);
-                //  - целевой контейнер — УЗЕЛ: его СОБСТВЕННАЯ position живёт в системе
-                //    координат ЕГО родительского окна, а не имеет никакого отношения к
-                //    происхождению координат его подуровня (общее окно всех сущностей
-                //    этого levelIndex) — вычитать одно из другого бессмысленно ВСЕГДА,
-                //    даже если numeric-уровни совпали. Только findFreePosition;
-                //  - иначе (слой или 'root'): если целевой контейнер лежит на ТОМ ЖЕ
-                //    уровне (одно окно на levelIndex, инвариант normalizeLevelWindows —
-                //    слой на любом уровне, 'root' по определению = корень СВОЕГО
-                //    текущего окна) — мировая позиция сохраняется точно
-                //    (toRelativePosition); иначе граница окна пересекается (другая
-                //    камера, другое пространство) — ищем свободное место рядом
-                //    с исходными локальными координатами.
-                const entityLevel = H.getEntityLevel(eid, state.nodes, state.layers, state.levelWindows);
-                const targetIsNode = isNodeId(targetParentId);
-                const targetLevel = targetIsNode
-                    ? -1 // недостижимо: узел-цель ниже никогда не сравнивается с entityLevel
-                    : targetParentId === 'root'
-                        ? entityLevel
-                        : (state.levelWindows && state.levelWindows[targetParentId])
-                            ? state.levelWindows[targetParentId].levelIndex
-                            : H.getEntityLevel(targetParentId, state.nodes, state.layers, state.levelWindows); // слой
-
+                // v14: каждая дорожка — своя система координат, нет случая «то
+                // же окно, позиция сохраняется точно» (артефакт общего холста
+                // уровня из v13). Явная позиция от курсора, иначе
+                // findFreePosition рядом с исходным местом в целевой дорожке.
                 let position;
                 if (p.positionsById && p.positionsById[eid]) {
                     position = p.positionsById[eid];
                 } else if (validIds.length === 1 && p.position) {
                     position = p.position;
-                } else if (!targetIsNode && targetLevel === entityLevel) {
-                    const abs = H.getLocalPosition(eid, state.nodes, state.layers);
-                    position = H.toRelativePosition(abs, targetParentId, state.nodes, state.layers);
                 } else {
                     position = G.findFreePosition(entity.size, entity.position, rectsIn(targetParentId));
                 }
 
-                setNew(eid, stripLegacy({ ...getNew(eid), parentId: targetParentId, position }));
+                newNodes[eid] = stripLegacy({ ...newNodes[eid], parentId: targetParentId, position });
             });
 
-            // Перенос НА УЗЕЛ мог создать новую глубину (уровень, которого раньше
-            // не было) — окна достраиваются, как и в TRANSFER_NODE.
-            const normalized = normalizeLevelWindows(state.levelWindows, newNodes, newLayers, state.levelViews);
+            // Дроп на карточку узла, у которого нет открытой дорожки — она
+            // открывается автоматически, чтобы результат был виден (§0.4.3).
+            let windows = state.windows || {};
+            if (targetParentId !== 'root') {
+                windows = applyOpenLaneV14(windows, newNodes, targetParentId);
+            }
 
             return {
                 ...state,
                 ...historyState,
                 nodes: newNodes,
-                layers: newLayers,
-                levelWindows: normalized.levelWindows,
-                levelViews: normalized.levelViews
+                windows
             };
         }
         case 'DELETE_SELECTED': {
@@ -2487,73 +2757,38 @@ const reducer = (state, action) => {
                 isolatedIds: state.isolatedIds.filter(id => !state.selectedIds.includes(id))
             };
         }
+        // v14: CREATE_NESTED_NODE переписан на месте (§7.12) — parentId
+        // указывает прямо на родителя (без изменений от v13), но окно уровня
+        // заменено на: дорожка родителя открывается автоматически, если она
+        // ещё нигде не открыта (§0.4.3 плана — единственное исключение из
+        // «окно открывается только явным действием»).
         case 'CREATE_NESTED_NODE': {
             const { parentId, name = 'Новый узел', color = '#0f172a', shape = 'rectangle', type = 'default' } = action.payload || {};
-            if (!parentId) return state;
+            if (!parentId || !(state.nodes && state.nodes[parentId])) return state;
 
             const H = getHierarchy();
-            const parentLevel = H ? H.getEntityLevel(parentId, state.nodes, state.layers, state.levelWindows) : 0;
-            const targetLevel = parentLevel + 1;
+            const historyState = saveHistory(state, `Создан вложенный узел «${name}»`);
 
-            const historyState = saveHistory(state, `Создан вложенный узел на уровне ${targetLevel}`);
+            const siblings = {};
+            (H.getChildrenByParent(state.nodes)[parentId] || []).forEach(n => { siblings[n.id] = n; });
+            const pos = H.getSmartLevelPlacement(parentId, siblings);
 
-            // 1. Проверяем / создаем окно целевого уровня
-            const updatedWindows = { ...state.levelWindows };
-            const existingTargetWin = H ? H.getWindowOfLevel(targetLevel, updatedWindows) : null;
-            let updatedViews = state.levelViews;
-            if (!existingTargetWin) {
-                const newWinId = newWindowId();
-                // Новое окно — в колонке СВОЕГО проекта, под самым нижним окном
-                const anchor = projectWindowAnchor(state.levelWindows);
-                updatedWindows[newWinId] = makeLevelWindow(newWinId, targetLevel, {
-                    position: { x: anchor.x, y: anchor.bottomY + LEVEL_WINDOW_GAP }
-                });
-                updatedViews = { ...state.levelViews, [newWinId]: makeLevelView() };
-            }
-
-            // 2. Рассчитываем координаты на целевом уровне
-            const targetLevelNodes = {};
-            Object.values(state.nodes || {}).forEach(n => {
-                if (n && H && H.getEntityLevel(n.id, state.nodes, state.layers) === targetLevel) {
-                    targetLevelNodes[n.id] = n;
-                }
-            });
-
-            const pos = H ? H.getSmartLevelPlacement(parentId, targetLevelNodes) : { x: 80, y: 100 };
-            // getSmartLevelPlacement ищет соседей по владельцу (ownerId), см. hierarchy.js
             const newNodeId = action.payload.id || 'node-' + Date.now() + Math.floor(Math.random() * 1000);
             const newNodeSize = calculateNodeSize(name, '', null, null, 14, 'Inter, sans-serif');
-
             const newNode = {
-                id: newNodeId,
-                name,
-                content: '',
-                color,
-                shape,
-                type,
-                // v13: parentId указывает прямо на узел-родителя — единственное
-                // поле родства, ownerId не заводится (docs/IDEAL_INTERACTIONS.md §1)
-                parentId,
-                position: pos,
-                size: newNodeSize,
-                snapToGrid: true,
-                fontFamily: 'Inter, sans-serif',
-                fontSize: 14
+                id: newNodeId, name, content: '', color, shape, type,
+                parentId, position: pos, size: newNodeSize, snapToGrid: true,
+                fontFamily: 'Inter, sans-serif', fontSize: 14
             };
-
-            const updatedNodes = {
-                ...state.nodes,
-                [newNodeId]: newNode
-            };
+            const nodes = { ...state.nodes, [newNodeId]: newNode };
+            const windows = applyOpenLaneV14(state.windows || {}, nodes, parentId);
 
             return {
                 ...state,
                 ...historyState,
-                // ВАЖНО: после ...state, иначе spread затирает камеру нового окна
-                levelViews: updatedViews,
-                nodes: updatedNodes,
-                levelWindows: updatedWindows,
-                activeLevelIndex: targetLevel,
+                nodes,
+                windows,
+                activeLaneId: parentId,
                 selectedIds: [newNodeId]
             };
         }
@@ -2685,119 +2920,19 @@ const reducer = (state, action) => {
             const view = (state.levelViews && state.levelViews[win.id]) || {};
             return withLevelView(state, win.id, { isCollapsed: !view.isCollapsed });
         }
-        case 'TOGGLE_LEVEL_NEIGHBORS': {
-            const { levelIndex } = action.payload || {};
-            if (levelIndex === undefined) return state;
-
-            return {
-                ...state,
-                levelHideNeighbors: {
-                    ...state.levelHideNeighbors,
-                    [levelIndex]: !state.levelHideNeighbors[levelIndex]
-                }
-            };
-        }
-        case 'SET_LEVEL_FOCUS': {
-            const { levelIndex, focusParentId } = action.payload || {};
-            if (levelIndex === undefined) return state;
-
-            const next = {
-                ...state,
-                // Клик внутрь окна уровня делает его активным: новые узлы и слои
-                // из панели инструментов создаются на этом уровне (см.
-                // getActiveContext в Toolbar.js, ветка activeLevelIndex).
-                activeLevelIndex: levelIndex
-            };
-            // Фокус ветки меняем только когда он передан явно (null — явный
-            // сброс). Простой клик по пустому месту окна не должен молча
-            // сбрасывать изоляцию ветки («глаз»).
-            if (focusParentId !== undefined) {
-                next.levelFocusParentId = {
-                    ...state.levelFocusParentId,
-                    [levelIndex]: focusParentId ? [focusParentId] : []
-                };
-            }
-            return next;
-        }
         case 'FOCUS_CONNECTED_ELEMENTS': {
             return applyFocusConnectedElements(state, action.payload || {});
         }
-        // Отдельная от двойного клика по узлу навигация: кнопка-бейдж
-        // «N детей» в шапке узла (Node.js) — переходит на уровень детей и
-        // центрирует его. Раньше этим же экшеном был занят и двойной клик
-        // по узлу, но тот теперь отдан под FOCUS_CONNECTED_ELEMENTS.
-        case 'FOCUS_CHILDREN_OF_NODE': {
-            const { parentId } = action.payload || {};
-            if (!parentId || !state.nodes[parentId]) return state;
-
-            const H = getHierarchy();
-            const parentLevel = H ? H.getEntityLevel(parentId, state.nodes, state.layers, state.levelWindows) : 0;
-            const targetLevel = parentLevel + 1;
-
-            const targetWin = (H && H.getWindowOfLevel(targetLevel, state.levelWindows)) || {
-                position: { x: -500, y: -400 + targetLevel * (LEVEL_WINDOW_DEFAULT_SIZE.h + LEVEL_WINDOW_GAP) },
-                size: { w: LEVEL_WINDOW_DEFAULT_SIZE.w, h: LEVEL_WINDOW_DEFAULT_SIZE.h }
-            };
-
-            // Дети живут в другом окне и в другом масштабе, поэтому габарит
-            // считается в МИРОВЫХ координатах, а не в системе координат родителя.
-            // Прямой ребёнок — ownerId (v11, ещё не мигрированные сущности) ИЛИ
-            // parentId напрямую на узел (v13, через REPARENT_ENTITY).
-            let bbox = null;
-            Object.values(state.nodes || {}).forEach(n => {
-                const isChild = n && (n.ownerId ? n.ownerId === parentId : n.parentId === parentId);
-                if (!isChild) return;
-                const b = H ? H.getNodeWorldBounds(n.id, state) : null;
-                if (!b) return;
-                if (!bbox) bbox = { minX: b.x, minY: b.y, maxX: b.x + b.w, maxY: b.y + b.h };
-                else {
-                    bbox.minX = Math.min(bbox.minX, b.x);
-                    bbox.minY = Math.min(bbox.minY, b.y);
-                    bbox.maxX = Math.max(bbox.maxX, b.x + b.w);
-                    bbox.maxY = Math.max(bbox.maxY, b.y + b.h);
-                }
-            });
-
-            const { w: screenW, h: screenH } = getScreenSize();
-
-            let targetX = targetWin.position.x + targetWin.size.w / 2;
-            let targetY = targetWin.position.y + targetWin.size.h / 2;
-
-            if (bbox) {
-                targetX = (bbox.minX + bbox.maxX) / 2;
-                targetY = (bbox.minY + bbox.maxY) / 2;
-            }
-
-            const zoom = 0.8;
-            const offsetX = screenW / 2 - targetX * zoom;
-            const offsetY = screenH / 2 - targetY * zoom;
-
-            return {
-                ...state,
-                activeLevelIndex: targetLevel,
-                levelFocusParentId: {
-                    ...state.levelFocusParentId,
-                    [targetLevel]: [parentId]
-                },
-                canvas: {
-                    ...state.canvas,
-                    offset: { x: offsetX, y: offsetY },
-                    zoom
-                }
-            };
-        }
-        case 'REMOVE_LEVEL_WINDOW': {
-            // Удаление уровня N: сущности уровня удаляются, их потомки
-            // пере-якорятся на владельца удалённого владельца («внук — деду»),
-            // поэтому весь хвост уровней поднимается ровно на один
-            // («следующий уровень становится предыдущим»). Окна нижних уровней
-            // сохраняют id, рамку (имя/цвет/позицию/размер) и камеру — меняется
-            // только их levelIndex. Главный холст этим экшеном удалить нельзя
-            // (только REMOVE_ROOT_CANVAS). Реализация — в applyRemoveLevelWindow.
-            const { id, index } = action.payload || {};
-            const win = resolveWindow(state, id !== undefined ? id : index);
-            return applyRemoveLevelWindow(state, win);
-        }
+        // v14: TOGGLE_LEVEL_NEIGHBORS/SET_LEVEL_FOCUS/FOCUS_CHILDREN_OF_NODE
+        // удалены (§3 плана) — «глаз» уровня, активная глубина и фокус ветки
+        // как отдельные понятия больше не существуют (см. docs/LANES_MODEL.md).
+        // FOCUS_CHILDREN_OF_NODE заменяется связкой OPEN_LANE + CENTER_ON_ENTITY
+        // на стороне UI (Фаза 4).
+        // v14: REMOVE_LEVEL_WINDOW удалён как обработчик экшена (§3 плана) —
+        // «удалить уровень» больше не существует, окна закрываются (CLOSE_WINDOW)
+        // без затрагивания данных. applyRemoveLevelWindow (helper) НЕ удаляется —
+        // его по-прежнему вызывает DELETE_SELECTED (не переписан в этой фазе,
+        // см. §7.12) для своей ветки удаления выделенного окна уровня.
         case 'CLEAR_PROJECT': {
             // Удаление проекта: сброс к начальному состоянию. Стираются ВСЕ
             // сущности (узлы, слои, порты — включая мастер-порты окон, связи)
@@ -2831,173 +2966,13 @@ const reducer = (state, action) => {
                 isolatedIds: []
             };
         }
-        case 'ADD_LEVEL_WINDOW': {
-            // Явное создание нового ПУСТОГО уровня (кнопка «Добавить уровень»
-            // в радиальном меню «+»). Раньше окно нового уровня появлялось
-            // только как побочный эффект CREATE_NESTED_NODE — вместе с узлом.
-            // Новый уровень встаёт следующим за самым глубоким существующим.
-            const existing = Object.values(state.levelWindows || {}).filter(Boolean);
-            const maxLevel = existing.length ? Math.max(...existing.map(w => w.levelIndex || 0)) : -1;
-            const targetLevel = maxLevel + 1;
-            const historyState = saveHistory(state, `Добавлен Уровень ${targetLevel}`);
-            const newWinId = targetLevel === 0 ? LEVEL0_WINDOW_ID : newWindowId();
-            // Новый уровень — в колонке своего проекта, под нижним окном
-            const anchor = projectWindowAnchor(state.levelWindows);
-            return {
-                ...state,
-                ...historyState,
-                levelWindows: {
-                    ...state.levelWindows,
-                    [newWinId]: makeLevelWindow(newWinId, targetLevel, {
-                        position: { x: anchor.x, y: anchor.bottomY + LEVEL_WINDOW_GAP }
-                    })
-                },
-                levelViews: {
-                    ...state.levelViews,
-                    [newWinId]: makeLevelView()
-                }
-            };
-        }
-        case 'REMOVE_ROOT_CANVAS': {
-            // Удаление Главного холста кнопкой «Удалить холст»: его сущности
-            // удаляются, окно уровня 1 становится Главным холстом, НЕ меняя
-            // имя и цвет, а потомки «ползут» на уровень вверх (та же механика,
-            // что и удаление промежуточного уровня). Без других уровней — no-op:
-            // кнопка в UI в этом случае неактивна.
-            return applyRemoveLevelWindow(state, resolveWindow(state, 0), true);
-        }
-        case 'CLEAR_LEVEL_WINDOW': {
-            // Очистка уровня N: удаляются ТОЛЬКО сущности этого уровня —
-            // потомки на нижних уровнях выживают и сохраняют свои ветки.
-            // Осиротевшие дети пере-якорятся на ближайшего живого предка
-            // («внук — деду») со связью через поколение (ownerGap растёт),
-            // а без живых предков становятся сиротами-якорями на СВОЁМ уровне
-            // (homeLevel). Уровни не сдвигаются, окна, рамки и камеры не
-            // трогаются — очищенный уровень можно наполнять заново.
-            // Очистка Главного холста — тот же механизм: живых предков выше
-            // нет, все дети уровня 1 становятся сиротами со своими ветками.
-            const { id, index } = action.payload || {};
-            const win = resolveWindow(state, id !== undefined ? id : index);
-            if (!win) return state;
-
-            const clearedLevel = win.levelIndex;
-            const historyState = saveHistory(state, clearedLevel === 0 ? 'Очистка Главного холста' : `Очистка Уровня ${clearedLevel}`);
-            const H = getHierarchy();
-            const levelOf = (eid) => (H ? H.getEntityLevel(eid, state.nodes, state.layers) : 0);
-            const gapOf = (e) => (H && H.getOwnerGap) ? H.getOwnerGap(e) : 1;
-            // v11 несёт дистанцию в ownerGap; v13 (нет ownerId) её не хранит —
-            // расстояние всегда ровно 1 по определению модели.
-            const gapOf2 = (ent) => (ent && ent.ownerId ? gapOf(ent) : 1);
-            const withGap = (e, gap) => {
-                if (gap > 1) return { ...e, ownerGap: gap };
-                if (e.ownerGap !== undefined) { const { ownerGap, ...rest } = e; return rest; }
-                return e;
-            };
-
-            // 1. Под удаление — только сущности очищаемого уровня
-            const removedIds = new Set();
-            Object.keys(state.nodes || {}).forEach(eid => { if (levelOf(eid) === clearedLevel) removedIds.add(eid); });
-            Object.keys(state.layers || {}).forEach(eid => { if (levelOf(eid) === clearedLevel) removedIds.add(eid); });
-
-            // 2. Пере-якорение выживших: ближайший живой предок вверх по структурной
-            //    цепочке (дистанции складываются для ownerId-хопов) либо сирота на
-            //    своём уровне. structuralParentOf унифицирует ownerId (v11) и
-            //    parentId-на-узел (v13, сегодня возможно только через
-            //    REPARENT_ENTITY) — см. комментарий над applyRemoveLevelWindow.
-            const reanchor = (entity) => {
-                let e = entity;
-                const myParent = structuralParentOf(e, state.nodes);
-                if (myParent && removedIds.has(myParent)) {
-                    let gap = gapOf2(e);
-                    let cursor = (state.nodes && state.nodes[myParent]) || (state.layers && state.layers[myParent]);
-                    let cursorParent = cursor ? structuralParentOf(cursor, state.nodes) : null;
-                    while (cursor && cursorParent && removedIds.has(cursorParent)) {
-                        gap += gapOf2(cursor);
-                        cursor = (state.nodes && state.nodes[cursorParent]) || (state.layers && state.layers[cursorParent]);
-                        cursorParent = cursor ? structuralParentOf(cursor, state.nodes) : null;
-                    }
-                    const ancestorId = cursorParent;
-                    const ancestor = ancestorId
-                        ? ((state.nodes && state.nodes[ancestorId]) || (state.layers && state.layers[ancestorId]))
-                        : null;
-                    const totalGap = gap + (cursor ? gapOf2(cursor) : 1);
-                    // v13 (нет ownerId у e): прямая ссылка безопасна ТОЛЬКО если
-                    // накопленная дистанция ровно 1 — иначе v13 не может выразить
-                    // растянутую дистанцию (см. комментарий в applyRemoveLevelWindow).
-                    const canDirectLink = !!e.ownerId || totalGap === 1;
-                    if (ancestor && !removedIds.has(ancestorId) && canDirectLink) {
-                        if (e.ownerId) {
-                            // «Внук — деду» (v11): уровень сущности не меняется,
-                            // дистанция впитывает дистанцию удалённого владельца
-                            e = withGap({ ...e, ownerId: ancestorId }, totalGap);
-                        } else {
-                            // v13: связь всегда прямая, gap не существует
-                            e = { ...e, parentId: ancestorId };
-                        }
-                    } else {
-                        // Живых предков не осталось — сирота-якорь на своём уровне,
-                        // ветка потомков остаётся при нём. Мёртвую parentId-ссылку
-                        // (если структурная связь была через parentId, не ownerId)
-                        // тоже нужно снять.
-                        e = withGap({
-                            ...e,
-                            ownerId: null,
-                            homeLevel: levelOf(e.id),
-                            ...(e.ownerId ? {} : { parentId: 'root' })
-                        }, 1);
-                    }
-                }
-                // Координатный контейнер (СЛОЙ) удалён — сущность встаёт на холст
-                // уровня. Узел уже обработан выше — здесь остаются только слои.
-                if (e.parentId && e.parentId !== 'root' && removedIds.has(e.parentId) && !(state.nodes && state.nodes[e.parentId])) {
-                    e = { ...e, parentId: 'root' };
-                }
-                return e;
-            };
-
-            const newNodes = {};
-            Object.entries(state.nodes || {}).forEach(([eid, n]) => { if (n && !removedIds.has(eid)) newNodes[eid] = reanchor(n); });
-            const newLayers = {};
-            Object.entries(state.layers || {}).forEach(([eid, l]) => { if (l && !removedIds.has(eid)) newLayers[eid] = reanchor(l); });
-
-            // Мастер-порты окон живут при живых окнах; обычные — при живых узлах
-            const newPorts = {};
-            Object.entries(state.ports || {}).forEach(([pid, p]) => {
-                if (!p) return;
-                if (p.isMaster || p.windowIndex != null) { newPorts[pid] = p; return; }
-                if (newNodes[p.nodeId]) newPorts[pid] = p;
-            });
-            const newLinks = {};
-            Object.entries(state.links || {}).forEach(([lid, l]) => {
-                if (l && newPorts[l.sourcePortId] && newPorts[l.targetPortId]) newLinks[lid] = l;
-            });
-
-            // Фокус-родители: удалённый владелец ветки заменяется его живым
-            // предком (как и сами сущности), иначе вычищается
-            const newFocus = {};
-            Object.entries(state.levelFocusParentId || {}).forEach(([k, v]) => {
-                const list = (Array.isArray(v) ? v : (v ? [v] : []))
-                    .map(fid => {
-                        if (newNodes[fid] || newLayers[fid]) return fid;
-                        const dead = (state.nodes && state.nodes[fid]) || (state.layers && state.layers[fid]);
-                        return (dead && dead.ownerId) || null;
-                    })
-                    .filter(fid => fid && (newNodes[fid] || newLayers[fid]));
-                if (list.length > 0) newFocus[k] = Array.from(new Set(list));
-            });
-
-            return {
-                ...state,
-                ...historyState,
-                nodes: newNodes,
-                layers: newLayers,
-                ports: newPorts,
-                links: newLinks,
-                levelFocusParentId: newFocus,
-                selectedIds: [],
-                isolatedIds: (state.isolatedIds || []).filter(eid => newNodes[eid] || newLayers[eid])
-            };
-        }
+        // v14: ADD_LEVEL_WINDOW/REMOVE_ROOT_CANVAS/CLEAR_LEVEL_WINDOW удалены
+        // как обработчики экшенов (§3 плана — «вся логика ре-якорения и сдвига
+        // уровней» уходит вместе с ними). ADD_LEVEL_WINDOW заменяется NEW_EMPTY_WINDOW
+        // (переделка кнопки «Уровень», §7.1.4); закрытие/очистка окна в v14 —
+        // это CLOSE_WINDOW (обзор, данные не трогаются) — «очистить дорожку»
+        // как отдельная операция не нужна: REMOVE_NODE каскадом на всех прямых
+        // детях дорожки даёт тот же результат, если он вообще кому-то нужен.
         case 'CENTER_ON_ENTITY': {
             const id = action.payload;
             if (!id) return state;

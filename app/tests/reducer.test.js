@@ -33,12 +33,8 @@ const makeState = () => ({
 
 
 
-test('REMOVE_LAYER: дети переезжают в родительский контекст слоя', () => {
-    const s0 = makeState();
-    const s1 = reducer(s0, { type: 'REMOVE_LAYER', payload: 'layerL' });
-    assert.equal(s1.layers.layerL, undefined);
-    assert.equal(s1.nodes.nodeD.parentId, 'root');
-});
+// v14 (§3 плана): REMOVE_LAYER удалён как обработчик экшена — слоёв нет,
+// см. REMOVE_FRAME в новом v14-разделе (рамка удаляется, узлы остаются).
 
 test('DELETE_SELECTED: удаление узла удаляет его порты и связи', () => {
     const s0 = makeState();
@@ -385,22 +381,8 @@ test('GeometryUtils.alignLayers: во вложенных контекстах в
     assert.equal(aligned.L_child.position.x, 500);
 });
 
-test('ALIGN_LAYERS: экшен правильно изменяет состояние слоев', () => {
-    const s0 = {
-        ...defaultState,
-        layers: {
-            L2: { id: 'L2', name: 'Слой 2', position: { x: 10, y: 300 }, size: { w: 200, h: 100 }, parentId: 'root' },
-            L1: { id: 'L1', name: 'Слой 1', position: { x: 50, y: 100 }, size: { w: 200, h: 100 }, parentId: 'root' }
-        }
-    };
-
-    const s1 = reducer(s0, { type: 'ALIGN_LAYERS', payload: { contextId: 'root' } });
-
-    assert.equal(s1.layers.L1.position.x, 10);
-    assert.equal(s1.layers.L1.position.y, 100);
-    assert.equal(s1.layers.L2.position.x, 10);
-    assert.equal(s1.layers.L2.position.y, 290); // 100 + 100 + 90 = 290
-});
+// v14 (§3 плана): ALIGN_LAYERS удалён как обработчик экшена — слоёв нет,
+// см. ALIGN_WINDOWS в новом v14-разделе (раскладка окон по колонкам глубины).
 
 test('LOAD_STATE: перекрывающиеся слои автоматически расталкиваются на 30px', () => {
     const loadedPayload = {
@@ -438,16 +420,8 @@ test('ADD_NODE: принудительно устанавливает snapToGrid
     assert.ok(s1.nodes[nodeId].snapToGrid, 'при создании ноды snapToGrid должен быть true');
 });
 
-test('ADD_LAYER: принудительно устанавливает snapToGrid в true', () => {
-    const s0 = makeState();
-    const s1 = reducer(s0, {
-        type: 'ADD_LAYER',
-        payload: { name: 'Layer 1', position: { x: 10, y: 10 }, size: { w: 100, h: 100 } }
-    });
-
-    const layerId = s1.selectedIds[0];
-    assert.ok(s1.layers[layerId].snapToGrid, 'при создании слоя snapToGrid должен быть true');
-});
+// v14 (§3 плана): ADD_LAYER удалён как обработчик экшена — слоёв в v14 не
+// существует (см. ADD_FRAME в новом v14-разделе этого файла).
 
 test('LOAD_STATE: принудительно включает snapToGrid во всех импортируемых нодах и слоях', () => {
     const loadedPayload = {
@@ -594,10 +568,7 @@ test('Typography: индивидуальная установка fontFamily и 
     assert.equal(s.nodes.nodeA.fontFamily, 'Montserrat, sans-serif');
     assert.equal(s.nodes.nodeA.fontSize, 18);
 
-    // 2. Слой
-    s = reducer(s, { type: 'UPDATE_LAYER', payload: { id: 'layerL', updates: { fontFamily: 'Fira Code, monospace', fontSize: 16 } } });
-    assert.equal(s.layers.layerL.fontFamily, 'Fira Code, monospace');
-    assert.equal(s.layers.layerL.fontSize, 16);
+    // (Слой убран из этого теста — UPDATE_LAYER удалён в v14, слоёв больше нет)
 
     // 3. Порт
     s = reducer(s, { type: 'UPDATE_PORT', payload: { id: 'portB', updates: { fontFamily: 'Roboto, sans-serif', fontSize: 12 } } });
@@ -739,139 +710,10 @@ const makeLeveledState = () => ({
     levelFocusParentId: { 1: 'nodeA', 2: 'nodeB' }
 });
 
-test('REMOVE_LEVEL_WINDOW: словарь окон ключуется id — резолв по index работает (регрессия no-op)', () => {
-    const s0 = makeLeveledState();
-    const s1 = reducer(s0, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 1 } });
-    assert.notEqual(s1, s0, 'экшен не должен быть no-op');
-    assert.equal(s1.levelWindows['win1'], undefined, 'окно уровня 1 удалено');
-});
-
-test('REMOVE_LEVEL_WINDOW: уровень 0 (Главный холст) удаляется, уровень 1 становится Главным холстом', () => {
-    const s0 = makeLeveledState();
-    const s1 = reducer(s0, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 0 } });
-    assert.equal(s1.levelWindows['lvlwin-root'], undefined, 'Главный холст удалён');
-    assert.equal(s1.levelWindows['win1'].levelIndex, 0, 'уровень 1 стал Главным холстом');
-});
-
-test('REMOVE_LEVEL_WINDOW: следующий уровень становится предыдущим с сохранением рамки и камеры', () => {
-    const s0 = makeLeveledState();
-    const s1 = reducer(s0, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 1 } });
-
-    // Сущности уровня 1 удалены (узел и слой)
-    assert.equal(s1.nodes.nodeB, undefined);
-    assert.equal(s1.layers.layerL1, undefined);
-
-    // Потомок пере-якорен «внук — деду»: C теперь принадлежит A и живёт на уровне 1
-    assert.ok(s1.nodes.nodeC, 'nodeC выжил');
-    assert.equal(s1.nodes.nodeC.ownerId, 'nodeA');
-    assert.equal(HierarchyUtils.getEntityLevel('nodeC', s1.nodes, s1.layers), 1);
-
-    // Окно бывшего уровня 2 стало уровнем 1, сохранив id, рамку и камеру
-    assert.ok(s1.levelWindows['win2'], 'окно win2 сохранило id');
-    assert.equal(s1.levelWindows['win2'].levelIndex, 1);
-    assert.equal(s1.levelWindows['win2'].name, 'Мой уровень 2');
-    assert.equal(s1.levelWindows['win2'].color, '#333333');
-    assert.deepEqual(s1.levelViews['win2'].innerOffset, { x: 30, y: 40 }, 'камера окна пережила сдвиг');
-    assert.equal(s1.levelViews['win2'].innerZoom, 2.0);
-
-    // Камера удалённого окна вычищена
-    assert.equal(s1.levelViews['win1'], undefined);
-
-    // Порты/связи: порт B и его связи умерли, мастер-порт уровня 2 переехал на уровень 1
-    assert.equal(s1.ports.portB, undefined);
-    assert.equal(s1.links.linkAB, undefined);
-    assert.equal(s1.links.linkBC, undefined);
-    assert.equal(s1.ports['port-master-level-2'], undefined);
-    assert.ok(s1.ports['port-master-level-1'], 'мастер-порт сдвинулся вместе с уровнем');
-    assert.equal(s1.ports['port-master-level-1'].windowIndex, 1);
-    assert.equal(s1.links.linkMaster.sourcePortId, 'port-master-level-1', 'связь переписана на новый id мастер-порта');
-
-    // Пер-уровневые словари UI сдвинулись
-    assert.equal(s1.levelHideNeighbors[1], true, 'флаг бывшего уровня 2 переехал на уровень 1');
-    assert.equal(s1.levelHideNeighbors[2], undefined);
-    // Фокус-владелец nodeB удалён вместе с уровнем — ветку наследует его
-    // владелец nodeA («внук — деду»), формат — набор (массив)
-    assert.deepEqual(s1.levelFocusParentId[1], ['nodeA'], 'фокус бывшего уровня 2 переехал и пере-якорился');
-});
-
-test('REMOVE_LEVEL_WINDOW: резолв окна по id тоже работает', () => {
-    const s0 = makeLeveledState();
-    const s1 = reducer(s0, { type: 'REMOVE_LEVEL_WINDOW', payload: { id: 'win1' } });
-    assert.equal(s1.levelWindows['win1'], undefined);
-    assert.equal(s1.levelWindows['win2'].levelIndex, 1);
-});
-
-test('CLEAR_LEVEL_WINDOW: очистка уровня щадит потомков — «внук — деду» через поколение (ownerGap)', () => {
-    const s0 = makeLeveledState();
-    const s1 = reducer(s0, { type: 'CLEAR_LEVEL_WINDOW', payload: { index: 1 } });
-
-    assert.ok(s1.nodes.nodeA, 'уровень 0 не тронут');
-    assert.equal(s1.nodes.nodeB, undefined, 'узел уровня 1 удалён');
-    assert.equal(s1.layers.layerL1, undefined, 'слой уровня 1 удалён');
-
-    // Потомок ВЫЖИЛ: пере-якорен на деда со связью через поколение
-    assert.ok(s1.nodes.nodeC, 'потомок на уровне 2 выжил');
-    assert.equal(s1.nodes.nodeC.ownerId, 'nodeA', 'внук привязан к деду');
-    assert.equal(s1.nodes.nodeC.ownerGap, 2, 'дистанция поколений запомнена');
-    assert.equal(HierarchyUtils.getEntityLevel('nodeC', s1.nodes, s1.layers), 2, 'внук остался на СВОЁМ уровне');
-
-    // Все окна и камеры на месте
-    assert.ok(s1.levelWindows['win1'], 'окно очищенного уровня осталось');
-    assert.equal(s1.levelWindows['win1'].levelIndex, 1);
-    assert.ok(s1.levelWindows['win2']);
-    assert.equal(s1.levelWindows['win2'].levelIndex, 2, 'уровни НЕ сдвигаются при очистке');
-    assert.deepEqual(s1.levelViews['win1'].innerOffset, { x: 10, y: 20 });
-
-    // Связи с умершими узлами вычищены, порты выживших живы
-    assert.ok(s1.ports.portA);
-    assert.ok(s1.ports.portC, 'порт выжившего внука жив');
-    assert.equal(s1.ports.portB, undefined);
-    assert.equal(s1.links.linkAB, undefined);
-    assert.equal(s1.links.linkBC, undefined);
-
-    // Фокус-владелец nodeB заменён его живым предком
-    assert.deepEqual(s1.levelFocusParentId[2], ['nodeA'], 'фокус пере-якорен «внук — деду»');
-});
-
-test('CLEAR_LEVEL_WINDOW: очистка Главного холста делает детей сиротами, их ветки сохраняются', () => {
-    const s0 = makeLeveledState();
-    s0.projectName = 'Мой проект';
-    const s1 = reducer(s0, { type: 'CLEAR_LEVEL_WINDOW', payload: { index: 0 } });
-
-    assert.equal(s1.nodes.nodeA, undefined, 'узел Главного холста удалён');
-
-    // Дети уровня 1 — сироты со своими ветками
-    assert.ok(s1.nodes.nodeB, 'ребёнок на уровне 1 выжил');
-    assert.equal(s1.nodes.nodeB.ownerId, null, 'ребёнок стал сиротой');
-    assert.equal(s1.nodes.nodeB.homeLevel, 1, 'сирота якорится на своём уровне');
-    assert.ok(s1.nodes.nodeC, 'внук выжил');
-    assert.equal(s1.nodes.nodeC.ownerId, 'nodeB', 'ветка сироты не тронута');
-    assert.equal(HierarchyUtils.getEntityLevel('nodeB', s1.nodes, s1.layers), 1);
-    assert.equal(HierarchyUtils.getEntityLevel('nodeC', s1.nodes, s1.layers), 2);
-
-    // Слой уровня 1 тоже выжил сиротой на своём уровне
-    assert.ok(s1.layers.layerL1, 'слой уровня 1 выжил');
-    assert.equal(s1.layers.layerL1.ownerId, null);
-    assert.equal(s1.layers.layerL1.homeLevel, 1);
-
-    assert.ok(s1.levelWindows['lvlwin-root'], 'Главный холст как окно остался');
-    assert.ok(s1.levelWindows['win1'], 'окна нижних уровней остались');
-    assert.ok(s1.levelWindows['win2']);
-    assert.equal(s1.projectName, 'Мой проект', 'настройки проекта не тронуты');
-});
-
-test('CLEAR_LEVEL_WINDOW: очистка уровня 1, затем Главного холста — «внуки» без предков становятся сиротами', () => {
-    const s0 = makeLeveledState();
-    const s1 = reducer(s0, { type: 'CLEAR_LEVEL_WINDOW', payload: { index: 1 } });
-    const s2 = reducer(s1, { type: 'CLEAR_LEVEL_WINDOW', payload: { index: 0 } });
-
-    assert.equal(s2.nodes.nodeA, undefined);
-    assert.ok(s2.nodes.nodeC, 'внук выжил после обеих очисток');
-    assert.equal(s2.nodes.nodeC.ownerId, null, 'живых предков не осталось — сирота');
-    assert.equal(s2.nodes.nodeC.homeLevel, 2, 'сирота остался на своём уровне');
-    assert.equal(s2.nodes.nodeC.ownerGap, undefined, 'дистанция сироте не нужна');
-    assert.equal(HierarchyUtils.getEntityLevel('nodeC', s2.nodes, s2.layers), 2);
-});
+// v14 (§3 плана): REMOVE_LEVEL_WINDOW/CLEAR_LEVEL_WINDOW удалены как
+// обработчики экшенов — «удалить/очистить уровень» с ре-якорением потомков
+// как отдельная операция в v14 не существует (окна — только обзор, см.
+// CLOSE_WINDOW в новом v14-разделе этого файла).
 
 test('CLEAR_PROJECT: сброс к начальному состоянию — остаётся только пустой Главный холст', () => {
     const s0 = makeLeveledState();
@@ -903,119 +745,15 @@ test('CLEAR_PROJECT: сброс к начальному состоянию — �
     assert.ok(s2.levelWindows['win2']);
 });
 
-test('ADD_LEVEL_WINDOW: создаёт пустое окно следующего уровня без узлов', () => {
-    const s0 = makeLeveledState(); // уровни 0, 1, 2
-    const nodesBefore = Object.keys(s0.nodes).length;
-    const s1 = reducer(s0, { type: 'ADD_LEVEL_WINDOW' });
+// v14 (§3 плана): ADD_LEVEL_WINDOW/REMOVE_ROOT_CANVAS удалены как обработчики
+// экшенов — см. NEW_EMPTY_WINDOW/CLOSE_WINDOW в новом v14-разделе.
 
-    const levels = Object.values(s1.levelWindows).map(w => w.levelIndex).sort();
-    assert.deepEqual(levels, [0, 1, 2, 3], 'появился уровень 3 — следующий за самым глубоким');
-    assert.equal(Object.keys(s1.nodes).length, nodesBefore, 'узлы не создавались');
-
-    const newWin = Object.values(s1.levelWindows).find(w => w.levelIndex === 3);
-    assert.ok(newWin.id, 'у нового окна есть стабильный id');
-    assert.ok(s1.levelViews[newWin.id], 'у нового окна есть камера');
-    assert.equal(s1.levelViews[newWin.id].innerZoom, 1, 'камера дефолтная');
-
-    // Повторный вызов — уровень 4, id не конфликтуют
-    const s2 = reducer(s1, { type: 'ADD_LEVEL_WINDOW' });
-    const levels2 = Object.values(s2.levelWindows).map(w => w.levelIndex).sort();
-    assert.deepEqual(levels2, [0, 1, 2, 3, 4]);
-
-    // Откатывается Undo
-    const s3 = reducer(s1, { type: 'UNDO' });
-    assert.equal(Object.values(s3.levelWindows).find(w => w.levelIndex === 3), undefined, 'Undo убирает пустой уровень');
-});
-
-test('REMOVE_ROOT_CANVAS: Уровень 1 становится Главным холстом, не меняя имя и цвет', () => {
-    const s0 = makeLeveledState();
-    const s1 = reducer(s0, { type: 'REMOVE_ROOT_CANVAS' });
-
-    // Сущности бывшего Главного холста удалены
-    assert.equal(s1.nodes.nodeA, undefined, 'узел Главного холста удалён');
-
-    // Дети уровня 1 поднялись на Главный холст сиротами, ветки при них
-    assert.ok(s1.nodes.nodeB, 'ребёнок выжил');
-    assert.equal(s1.nodes.nodeB.ownerId, null, 'владельца больше нет');
-    assert.equal(HierarchyUtils.getEntityLevel('nodeB', s1.nodes, s1.layers), 0, 'ребёнок теперь на Главном холсте');
-    assert.ok(s1.nodes.nodeC, 'внук выжил');
-    assert.equal(s1.nodes.nodeC.ownerId, 'nodeB', 'ветка сохранена');
-    assert.equal(HierarchyUtils.getEntityLevel('nodeC', s1.nodes, s1.layers), 1, 'внук поднялся на уровень 1');
-    assert.ok(s1.layers.layerL1, 'слой уровня 1 выжил');
-    assert.equal(HierarchyUtils.getEntityLevel('layerL1', s1.nodes, s1.layers), 0);
-
-    // Окно уровня 1 заняло место Главного холста, сохранив id, имя, цвет и камеру
-    assert.equal(s1.levelWindows['lvlwin-root'], undefined, 'старое окно Главного холста удалено');
-    assert.ok(s1.levelWindows['win1'], 'окно уровня 1 сохранило id');
-    assert.equal(s1.levelWindows['win1'].levelIndex, 0, 'окно уровня 1 стало Главным холстом');
-    assert.equal(s1.levelWindows['win1'].name, 'Мой уровень 1', 'имя не изменилось');
-    assert.equal(s1.levelWindows['win1'].color, '#222222', 'цвет не изменился');
-    assert.deepEqual(s1.levelViews['win1'].innerOffset, { x: 10, y: 20 }, 'камера пережила повышение');
-    assert.equal(s1.levelWindows['win2'].levelIndex, 1, 'нижние окна поднялись на один');
-
-    // Мастер-порт уровня 2 переехал на уровень 1
-    assert.equal(s1.ports['port-master-level-2'], undefined);
-    assert.ok(s1.ports['port-master-level-1']);
-
-    const s2 = reducer(s1, { type: 'UNDO' });
-    assert.ok(s2.nodes.nodeA, 'удаление холста откатывается Undo');
-    assert.equal(s2.levelWindows['lvlwin-root'].levelIndex, 0, 'окно Главного холста восстановлено');
-});
-
-test('REMOVE_ROOT_CANVAS: без других уровней — no-op (кнопка в UI неактивна)', () => {
-    const s0 = {
-        ...defaultState,
-        nodes: { nodeA: { id: 'nodeA', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } },
-        levelWindows: {
-            'lvlwin-root': { id: 'lvlwin-root', levelIndex: 0, name: 'Главный холст', position: { x: 0, y: 0 }, size: { w: 1000, h: 700 } }
-        }
-    };
-    const s1 = reducer(s0, { type: 'REMOVE_ROOT_CANVAS' });
-    assert.equal(s1, s0, 'удаление единственного холста — no-op');
-});
-
-test('REMOVE_ROOT_CANVAS: сирота с дистанцией не получает двойной сдвиг homeLevel (регрессия)', () => {
-    // A (ур.0) --gap:2--> C (ур.2, после очистки ур.1). Удаление холста:
-    // C становится сиротой на уровне 1 (2 минус один снятый уровень), не на 0
-    const s0 = makeLeveledState();
-    const s1 = reducer(s0, { type: 'CLEAR_LEVEL_WINDOW', payload: { index: 1 } });
-    const s2 = reducer(s1, { type: 'REMOVE_ROOT_CANVAS' });
-
-    assert.ok(s2.nodes.nodeC, 'внук выжил');
-    assert.equal(s2.nodes.nodeC.ownerId, null, 'живых предков не осталось — сирота');
-    assert.equal(s2.nodes.nodeC.homeLevel, 1, 'уровень сместился ровно на один, а не на два');
-    assert.equal(HierarchyUtils.getEntityLevel('nodeC', s2.nodes, s2.layers), 1);
-});
-
-test('REMOVE_LEVEL_WINDOW: связь через поколение, перепрыгивающая удаляемый уровень, сокращает дистанцию', () => {
-    // A (ур.0) --ownerGap:2--> C (ур.2); уровень 1 пуст после очистки
-    const s0 = makeLeveledState();
-    const s1 = reducer(s0, { type: 'CLEAR_LEVEL_WINDOW', payload: { index: 1 } });
-    assert.equal(s1.nodes.nodeC.ownerGap, 2);
-
-    // Удаляем опустевший уровень 1 — внук подтягивается к деду вплотную
-    const s2 = reducer(s1, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 1 } });
-    assert.ok(s2.nodes.nodeC, 'внук выжил');
-    assert.equal(s2.nodes.nodeC.ownerId, 'nodeA');
-    assert.equal(s2.nodes.nodeC.ownerGap, undefined, 'дистанция сократилась до обычной (поле снято)');
-    assert.equal(HierarchyUtils.getEntityLevel('nodeC', s2.nodes, s2.layers), 1, 'внук стал обычным ребёнком');
-});
-
-test('REMOVE_LEVEL_WINDOW: UNDO возвращает удалённый уровень', () => {
-    const s0 = makeLeveledState();
-    const s1 = reducer(s0, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 1 } });
-    const s2 = reducer(s1, { type: 'UNDO' });
-    assert.ok(s2.nodes.nodeB, 'узел уровня 1 восстановлен');
-    assert.ok(s2.levelWindows['win1'], 'окно уровня 1 восстановлено');
-    assert.equal(s2.levelWindows['win2'].levelIndex, 2, 'сдвиг уровней откатился');
-});
-
-test('CREATE_NESTED_NODE: новое окно уровня получает запись камеры (регрессия spread-порядка)', () => {
+test('CREATE_NESTED_NODE (v14): новое окно (дорожка родителя) открывается автоматически, если её нигде не было', () => {
     let s = { ...defaultState, nodes: { nodeA: { id: 'nodeA', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } };
     s = reducer(s, { type: 'CREATE_NESTED_NODE', payload: { parentId: 'nodeA', id: 'child1', name: 'Child' } });
-    const win1 = Object.values(s.levelWindows).find(w => w.levelIndex === 1);
-    assert.ok(win1, 'окно уровня 1 создано');
-    assert.ok(s.levelViews[win1.id], 'камера нового окна сохранена в levelViews');
+    assert.equal(s.nodes.child1.parentId, 'nodeA');
+    assert.ok(HierarchyUtils.windowsOfLane('nodeA', s.windows).length > 0, 'дорожка nodeA открылась автоматически');
+    assert.equal(s.activeLaneId, 'nodeA');
 });
 
 test('DELETE_SELECTED: клавиша Delete удаляет выделенное окно уровня (включая Главный холст)', () => {
@@ -1033,25 +771,9 @@ test('DELETE_SELECTED: клавиша Delete удаляет выделенное
     assert.equal(s3.levelWindows['win1'].levelIndex, 0, 'уровень 1 стал Главным холстом');
 });
 
-test('SET_LEVEL_FOCUS: клик в окно уровня делает его активным для создания элементов', () => {
-    const s0 = makeLeveledState();
-    assert.equal(s0.activeLevelIndex, 0);
-
-    // Простой клик по пустому месту окна уровня 2 (как в LevelWindow.handleMouseDownViewport)
-    const s1 = reducer(s0, { type: 'SET_LEVEL_FOCUS', payload: { levelIndex: 2 } });
-    assert.equal(s1.activeLevelIndex, 2, 'уровень стал активным');
-    assert.deepEqual(HierarchyUtils.toFocusList(s1.levelFocusParentId[2]), ['nodeB'], 'фокус ветки НЕ сброшен простым кликом');
-
-    // Явная передача фокуса работает как раньше
-    const s2 = reducer(s1, { type: 'SET_LEVEL_FOCUS', payload: { levelIndex: 2, focusParentId: null } });
-    assert.deepEqual(s2.levelFocusParentId[2], [], 'явный сброс фокуса ветки (пустой набор)');
-    const s3 = reducer(s2, { type: 'SET_LEVEL_FOCUS', payload: { levelIndex: 2, focusParentId: 'nodeA' } });
-    assert.deepEqual(s3.levelFocusParentId[2], ['nodeA'], 'явная установка фокуса ветки (набор из одного)');
-
-    // Клик в Главный холст возвращает активность уровню 0
-    const s4 = reducer(s3, { type: 'SET_LEVEL_FOCUS', payload: { levelIndex: 0 } });
-    assert.equal(s4.activeLevelIndex, 0);
-});
+// v14 (§3 плана): SET_LEVEL_FOCUS удалён как обработчик экшена — активная
+// глубина и фокус ветки как понятия не существуют (см. SET_ACTIVE_LANE в
+// новом v14-разделе — дорожка однозначна, «неоднозначный фокус» пропадает).
 
 // ============================================================
 // Изоляция веток («глаз»): глобальный на уровне 0, локальные на уровнях >= 1
@@ -1101,52 +823,10 @@ test('Выделение обновляет фокус-наборы: урове�
     assert.deepEqual([...s.levelFocusParentId[1]].sort(), ['R1', 'R2']);
 });
 
-test('isEntityVisible: локальный глаз уровня режет по владельцу, уровень 0 не трогает', () => {
-    let s = makeTwoTreesState();
-    s = reducer(s, { type: 'SET_SELECTED', payload: 'c1a' });          // фокус L1 = [R1]
-    s = reducer(s, { type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { levelIndex: 1 } });
-
-    assert.equal(HierarchyUtils.isEntityVisible('c1a', s), true, 'выделенный виден');
-    assert.equal(HierarchyUtils.isEntityVisible('c1b', s), true, 'брат той же ветки виден');
-    assert.equal(HierarchyUtils.isEntityVisible('c2a', s), false, 'ребёнок чужого родителя скрыт');
-    assert.equal(HierarchyUtils.isEntityVisible('R2', s), true, 'уровень 0 локальным глазом не фильтруется');
-    assert.equal(HierarchyUtils.isEntityVisible('g2', s), true, 'глаз уровня 1 не влияет на уровень 2');
-});
-
-test('isEntityVisible: глобальный глаз уровня 0 просвечивает ветки на всех уровнях и игнорирует локальные', () => {
-    let s = makeTwoTreesState();
-    // Локальный глаз уровня 1 настроен на ветку R2
-    s = reducer(s, { type: 'SET_SELECTED', payload: 'c2a' });          // фокус L1 = [R2]
-    s = reducer(s, { type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { levelIndex: 1 } });
-    // Глобальный глаз: выделен корень R1
-    s = reducer(s, { type: 'SET_SELECTED', payload: 'R1' });           // фокус L0 = [R1]
-    s = reducer(s, { type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { levelIndex: 0 } });
-
-    // Глобальный приоритет: видна ВСЯ ветка R1 на всех уровнях, чужое скрыто,
-    // локальный глаз уровня 1 (настроенный на R2!) игнорируется
-    assert.equal(HierarchyUtils.isEntityVisible('R1', s), true);
-    assert.equal(HierarchyUtils.isEntityVisible('c1a', s), true, 'ребёнок R1 виден вопреки локальному глазу L1=R2');
-    assert.equal(HierarchyUtils.isEntityVisible('c1b', s), true);
-    assert.equal(HierarchyUtils.isEntityVisible('g1', s), true, 'внук R1 виден на уровне 2');
-    assert.equal(HierarchyUtils.isEntityVisible('R2', s), false, 'чужой корень скрыт');
-    assert.equal(HierarchyUtils.isEntityVisible('c2a', s), false);
-    assert.equal(HierarchyUtils.isEntityVisible('g2', s), false);
-
-    // Выключили глобальный глаз — уровни вернулись к локальным настройкам
-    s = reducer(s, { type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { levelIndex: 0 } });
-    assert.equal(HierarchyUtils.isEntityVisible('R2', s), true, 'уровень 0 снова показывает всех');
-    assert.equal(HierarchyUtils.isEntityVisible('c2a', s), true, 'локальный глаз L1 (ветка R2) снова действует');
-    assert.equal(HierarchyUtils.isEntityVisible('c1a', s), false, 'чужая для локального фокуса ветка снова скрыта');
-});
-
-test('isEntityVisible: глобальный глаз с двумя выделенными корнями показывает оба поддерева', () => {
-    let s = makeTwoTreesState();
-    s = reducer(s, { type: 'SET_MULTI_SELECTED', payload: ['R1', 'R2'] });
-    s = reducer(s, { type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { levelIndex: 0 } });
-    ['R1', 'R2', 'c1a', 'c1b', 'c2a', 'g1', 'g2'].forEach(id => {
-        assert.equal(HierarchyUtils.isEntityVisible(id, s), true, id + ' виден');
-    });
-});
+// v14 (§3 плана): TOGGLE_LEVEL_NEIGHBORS удалён как обработчик экшена —
+// «глаз» ветки/уровня как отдельное понятие не существует (см.
+// TOGGLE_LANE_HIDDEN в новом v14-разделе — глаз прячет одну дорожку в
+// одном окне, без глобального/локального разделения).
 
 test('Легаси-формат: строковый levelFocusParentId читается как набор из одного', () => {
     let s = makeTwoTreesState();
@@ -1159,33 +839,6 @@ test('Легаси-формат: строковый levelFocusParentId чита�
 // ============================================================
 // Subset-правило фокуса и контекст создания (getAddContext)
 // ============================================================
-
-test('Subset-правило: при включённом глазе выделение видимой ветки не сужает набор', () => {
-    let s = makeTwoTreesState();
-    s = reducer(s, { type: 'SET_MULTI_SELECTED', payload: ['c1a', 'c2a'] }); // фокус L1 = [R1, R2]
-    s = reducer(s, { type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { levelIndex: 1 } });
-
-    // Клик по конкретному узлу видимой ветки — обзор стабилен
-    s = reducer(s, { type: 'SET_SELECTED', payload: 'c1a' });
-    assert.deepEqual([...HierarchyUtils.toFocusList(s.levelFocusParentId[1])].sort(), ['R1', 'R2'],
-        'обе ветки остались видимыми');
-
-    // Глаз выключен — выделение снова переписывает набор
-    s = reducer(s, { type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { levelIndex: 1 } });
-    s = reducer(s, { type: 'SET_SELECTED', payload: 'c1a' });
-    assert.deepEqual(HierarchyUtils.toFocusList(s.levelFocusParentId[1]), ['R1'],
-        'без глаза набор следует за выделением');
-});
-
-test('Subset-правило: выделение вне видимых веток переписывает набор', () => {
-    let s = makeTwoTreesState();
-    s = reducer(s, { type: 'SET_SELECTED', payload: 'c1a' });            // фокус L1 = [R1]
-    s = reducer(s, { type: 'TOGGLE_LEVEL_NEIGHBORS', payload: { levelIndex: 1 } });
-    // Выделяем ребёнка скрытой ветки (например, через аутлайнер)
-    s = reducer(s, { type: 'SET_SELECTED', payload: 'c2a' });
-    assert.deepEqual(HierarchyUtils.toFocusList(s.levelFocusParentId[1]), ['R2'],
-        'набор переключился на новую ветку');
-});
 
 test('getAddContext: массовое выделение — кнопки добавления недоступны', () => {
     let s = makeTwoTreesState();
@@ -1270,93 +923,365 @@ test('UPDATE_PROXY_PORT + getProxyPortsForWindow: прокси скользит 
     assert.equal(sSame, s);
 });
 
-test('REMOVE_LEVEL_WINDOW: ручные позиции прокси удалённого окна вычищаются из связей', () => {
-    let s = makeTwoTreesState();
-    s.ports = {
-        pR1: { id: 'pR1', nodeId: 'R1', type: 'output', edge: 'right', position: 0.5 },
-        pg1: { id: 'pg1', nodeId: 'g1', type: 'input', edge: 'left', position: 0.5 }
-    };
-    // Связь уровня 0 с уровнем 2: переживает удаление уровня 1
-    s.links = { lx: { id: 'lx', sourcePortId: 'pR1', targetPortId: 'pg1' } };
-    s = reducer(s, { type: 'UPDATE_PROXY_PORT', payload: { linkId: 'lx', windowId: 'w1', edge: 'left', fraction: 0.4 } });
-    s = reducer(s, { type: 'UPDATE_PROXY_PORT', payload: { linkId: 'lx', windowId: 'w2', edge: 'right', fraction: 0.6 } });
+// v14 (§3/§7.12 плана): REPARENT_ENTITY переписан на месте — targetParentId
+// только 'root' или id узла, слой как цель удалён вовсе. Тест «вложение в
+// слой ЧУЖОГО уровня» и «ручные позиции прокси удалённого окна» (зависел от
+// REMOVE_LEVEL_WINDOW, тоже удалён) сняты — v14-покрытие REPARENT_ENTITY
+// (deep/shallow/цикл/undo/historySnapshot/массив ids/positionsById/авто-
+// открытие дорожки) — в новом v14-разделе этого файла.
 
-    s = reducer(s, { type: 'REMOVE_LEVEL_WINDOW', payload: { index: 1 } });
-    assert.ok(s.links.lx, 'связь 0<->2 пережила удаление уровня 1');
-    assert.equal(s.links.lx.proxyOverrides['w1'], undefined, 'оверрайд удалённого окна вычищен');
-    assert.deepEqual(s.links.lx.proxyOverrides['w2'], { edge: 'right', fraction: 0.6 }, 'оверрайд выжившего окна сохранён');
+// v14 (§3 плана): тест «откат Drag&Drop переноса СЛОЯ» диспатчил UPDATE_LAYER
+// (удалён) — RESTORE_ENTITIES сама по себе не рассматривается: она снимает
+// точный срез словарей на mousedown, семантика не зависит от того, что
+// именно двигалось (узел или, ранее, слой). Фикстура makeTransferState,
+// использовавшаяся только этим тестом, удалена вместе с ним.
+
+// =============================================================================
+// v14 (Фаза 3, §3/§7.6/§7.8/§7.12/§7.13 плана): дорожки/окна/рамки — новые
+// обработчики экшенов и переписанные на месте ADD_NODE/CREATE_NESTED_NODE/
+// REPARENT_ENTITY/REMOVE_NODE. Фикстуры — через HierarchyUtils.parseNotation
+// (§1 плана / §3 LANES_MODEL.md), а не JSON руками.
+// =============================================================================
+
+const v14Text = () => [
+    'ДЕРЕВО',
+    '/A',
+    '/A/A1',
+    '/A/A1/A2',
+    '/Б',
+    '',
+    'ОКНА',
+    'W1 = [Проект]',
+    'W2 = [A]',
+    '',
+    'РАМКИ',
+    'Датчики = {A1, Б}'
+].join('\n');
+
+const v14State = () => ({ ...defaultState, ...HierarchyUtils.parseNotation(v14Text()) });
+
+// --- Окна и дорожки ---------------------------------------------------------
+
+test('v14 OPEN_LANE: открывает новую дорожку в новом окне; повторно — no-op', () => {
+    const s0 = v14State();
+    assert.equal(HierarchyUtils.windowsOfLane('A1', s0.windows).length, 0, 'дорожка A1 изначально нигде не открыта');
+
+    const s1 = reducer(s0, { type: 'OPEN_LANE', payload: { ownerId: 'A1' } });
+    assert.equal(HierarchyUtils.windowsOfLane('A1', s1.windows).length, 1, 'дорожка открылась в новом окне');
+    assert.equal(s1.past.length, 1, 'структурное действие — в истории (§7.6)');
+
+    const s2 = reducer(s1, { type: 'OPEN_LANE', payload: { ownerId: 'A1' } });
+    assert.equal(s2, s1, 'дорожка уже открыта где-то — no-op');
 });
 
-test('REPARENT_ENTITY (v13): вложение в слой ЧУЖОГО уровня теперь РАЗРЕШЕНО — уровень наследуется от слоя', () => {
-    // v11 отклонял кросс-уровневое вложение в слой (родство ownerId и координата
-    // parentId были двумя независимыми системами, которые могли разойтись).
-    // В v13 это единственный источник родства — уровень сущности определяется
-    // ИСКЛЮЧИТЕЛЬНО тем, где лежит её parentId, поэтому запрета больше нет:
-    // Nest «узел -> слой» валиден для любого слоя, уровень просто становится
-    // уровнем этого слоя (docs/IDEAL_INTERACTIONS.md §2).
-    const s0 = makeTwoTreesState();
-    s0.layers = { LayL0: { id: 'LayL0', name: 'Слой L0', position: { x: 500, y: 300 }, size: { w: 400, h: 300 }, parentId: 'root' } };
-
-    // Узел уровня 1 (c1a, ownerId:'R1') в слой уровня 0 — теперь работает
-    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'c1a', newParentId: 'LayL0' } });
-    assert.equal(s1.nodes.c1a.parentId, 'LayL0', 'вложение в слой чужого уровня применяется');
-    assert.equal(HierarchyUtils.getEntityLevel('c1a', s1.nodes, s1.layers), 0, 'уровень c1a стал уровнем слоя (0), а не остался 1');
-    assert.equal(s1.nodes.c1a.ownerId, undefined, 'унаследованный ownerId сброшен — координата теперь единственный источник родства');
-    // Собственные дети c1a (g1, по ownerId) остались на месте — REPARENT_ENTITY
-    // переносит только САМ узел (Deep по умолчанию не трогает parentId детей).
-    assert.equal(s1.nodes.g1.parentId, 'root', 'дети c1a не переехали структурно');
-
-    // Узел уровня 0 в слой уровня 0 — тоже работает, как и раньше
-    const s2 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'R1', newParentId: 'LayL0' } });
-    assert.equal(s2.nodes.R1.parentId, 'LayL0', 'вложение в слой своего уровня работает');
-    assert.equal(HierarchyUtils.getEntityLevel('R1', s2.nodes, s2.layers), 0, 'уровень узла не изменился');
-    assert.equal(HierarchyUtils.getEntityLevel('c1a', s2.nodes, s2.layers), 1, 'дети не затронуты');
+test('v14 OPEN_LANE: с windowId добавляет дорожку в СУЩЕСТВУЮЩЕЕ окно (составное окно)', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'OPEN_LANE', payload: { ownerId: 'Б', windowId: 'W2' } });
+    assert.deepEqual(s1.windows.W2.lanes, ['A', 'Б']);
 });
 
-// ============================================================
-// TRANSFER_NODE: перенос узлов между уровнями и группировка в слои
-// ============================================================
-
-// Сетап из обсуждения: А, Б, слой Х0 (уровень 0); А1, Б1 (уровень 1);
-// А2, Б2, слой Х2 в ветке Б1 (уровень 2)
-const makeTransferState = () => ({
-    ...defaultState,
-    nodes: {
-        A:  { id: 'A',  name: 'А',  position: { x: 0, y: 0 },     size: { w: 200, h: 100 }, parentId: 'root' },
-        B:  { id: 'B',  name: 'Б',  position: { x: 300, y: 0 },   size: { w: 200, h: 100 }, parentId: 'root' },
-        A1: { id: 'A1', name: 'А1', position: { x: 0, y: 0 },     size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'A' },
-        B1: { id: 'B1', name: 'Б1', position: { x: 300, y: 0 },   size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'B' },
-        A2: { id: 'A2', name: 'А2', position: { x: 0, y: 0 },     size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'A1' },
-        B2: { id: 'B2', name: 'Б2', position: { x: 300, y: 0 },   size: { w: 200, h: 100 }, parentId: 'root', ownerId: 'B1' }
-    },
-    layers: {
-        X0: { id: 'X0', name: 'Х0', position: { x: 600, y: 200 }, size: { w: 500, h: 400 }, parentId: 'root' },
-        X2: { id: 'X2', name: 'Х2', position: { x: 600, y: 200 }, size: { w: 500, h: 400 }, parentId: 'root', ownerId: 'B1' }
-    },
-    levelWindows: {
-        'lvlwin-root': { id: 'lvlwin-root', levelIndex: 0, name: 'Главный холст', position: { x: 0, y: 0 }, size: { w: 1000, h: 700 } },
-        'tw1': { id: 'tw1', levelIndex: 1, name: 'Уровень 1', position: { x: 0, y: 780 }, size: { w: 1000, h: 700 } },
-        'tw2': { id: 'tw2', levelIndex: 2, name: 'Уровень 2', position: { x: 0, y: 1560 }, size: { w: 1000, h: 700 } }
-    },
-    levelViews: {
-        'lvlwin-root': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false },
-        'tw1': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false },
-        'tw2': { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false }
-    }
+test('v14 CLOSE_LANE: убирает дорожку из окна; окно без дорожек и без frameId закрывается само', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'CLOSE_LANE', payload: { windowId: 'W2', ownerId: 'A' } });
+    assert.equal(s1.windows.W2, undefined, 'W2 показывал только A — опустело и закрылось');
+    assert.ok(s1.windows.W1, 'W1 не тронуто');
+    assert.equal(s1.past.length, 1);
 });
 
-test('RESTORE_ENTITIES: откат Drag&Drop переноса СЛОЯ — позиция и родство возвращаются к срезу mousedown', () => {
-    let s = makeTransferState();
-    s = { ...s, selectedIds: ['X0'], ui: { ...s.ui, dragDropMode: true } };
-    const snapshotLayers = s.layers;
-    const beforePast = s.past ? s.past.length : 0;
+test('v14 DOCK_LANE: переносит дорожку из одного окна в другое, с опциональным index', () => {
+    const s0 = reducer(v14State(), { type: 'OPEN_LANE', payload: { ownerId: 'Б' } }); // отдельное окно для Б
+    const wB = Object.keys(s0.windows).find(wid => s0.windows[wid].lanes.includes('Б') && wid !== 'W1');
+    const s1 = reducer(s0, { type: 'DOCK_LANE', payload: { ownerId: 'Б', fromWindowId: wB, toWindowId: 'W2', index: 0 } });
+    assert.deepEqual(s1.windows.W2.lanes, ['Б', 'A'], 'Б встал на позицию 0');
+    assert.equal(s1.windows[wB], undefined, 'окно-источник опустело и закрылось');
+});
 
-    const gestured = reducer(s, { type: 'SET_DRAG_GESTURE', payload: { ids: ['X0'], target: { kind: 'layer', id: 'X2', valid: true } } });
-    const moved = reducer(gestured, { type: 'UPDATE_LAYER', payload: { id: 'X0', updates: { position: { x: 999, y: 999 } }, skipHistory: true } });
-    const restored = reducer(moved, { type: 'RESTORE_ENTITIES', payload: { nodes: s.nodes, layers: snapshotLayers } });
+test('v14 DETACH_LANE: отстыковывает дорожку в собственное новое окно', () => {
+    const s0 = reducer(v14State(), { type: 'OPEN_LANE', payload: { ownerId: 'Б', windowId: 'W2' } }); // W2 = [A, Б]
+    const s1 = reducer(s0, { type: 'DETACH_LANE', payload: { windowId: 'W2', ownerId: 'Б' } });
+    assert.deepEqual(s1.windows.W2.lanes, ['A']);
+    const newWin = Object.values(s1.windows).find(w => w.id !== 'W1' && w.id !== 'W2');
+    assert.ok(newWin, 'новое окно создано');
+    assert.deepEqual(newWin.lanes, ['Б']);
+});
 
-    assert.equal(restored.layers.X0.position.x, 600, 'X0 вернулся на исходную позицию');
-    assert.equal(restored.layers.X0.parentId, 'root', 'родство/контейнер не изменились');
-    assert.equal(restored.dragGesture, null, 'жест очищен');
-    assert.equal((restored.past || []).length, beforePast, 'отмена жеста не создаёт запись в истории');
+test('v14 REORDER_LANE: меняет порядок дорожек внутри окна, вне истории', () => {
+    const s0 = reducer(v14State(), { type: 'OPEN_LANE', payload: { ownerId: 'Б', windowId: 'W2' } });
+    const pastBefore = s0.past.length;
+    const s1 = reducer(s0, { type: 'REORDER_LANE', payload: { windowId: 'W2', ownerId: 'A', toIndex: 1 } });
+    assert.deepEqual(s1.windows.W2.lanes, ['Б', 'A']);
+    assert.equal(s1.past.length, pastBefore, 'визуальная перестановка — вне истории');
+});
+
+test('v14 TOGGLE_LANE_HIDDEN: прячет/показывает дорожку, вне истории', () => {
+    const s0 = v14State();
+    const pastBefore = s0.past.length;
+    const s1 = reducer(s0, { type: 'TOGGLE_LANE_HIDDEN', payload: { windowId: 'W2', ownerId: 'A' } });
+    assert.deepEqual(s1.windows.W2.hidden, ['A']);
+    const s2 = reducer(s1, { type: 'TOGGLE_LANE_HIDDEN', payload: { windowId: 'W2', ownerId: 'A' } });
+    assert.deepEqual(s2.windows.W2.hidden, []);
+    assert.equal(s2.past.length, pastBefore, '«глаз» — вне истории (как старый TOGGLE_LEVEL_NEIGHBORS)');
+});
+
+test('v14 OPEN_FRAME_WINDOW / CLOSE_WINDOW: окно рамки показывает дорожки её членов; REMOVE_FRAME закрывает его', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'OPEN_FRAME_WINDOW', payload: { frameId: 'Датчики' } });
+    const frameWin = Object.values(s1.windows).find(w => w.frameId === 'Датчики');
+    assert.ok(frameWin, 'окно рамки создано');
+    assert.ok(frameWin.lanes.includes('A') && frameWin.lanes.includes('root'), 'дорожки обоих членов (A1 в A, Б в root) показаны');
+
+    const s2 = reducer(s1, { type: 'REMOVE_FRAME', payload: 'Датчики' });
+    assert.equal(Object.values(s2.windows).some(w => w.frameId === 'Датчики'), false, 'окно рамки закрылось вместе с рамкой');
+
+    // CLOSE_WINDOW — только обзор, данные не трогает
+    const s3 = reducer(s0, { type: 'CLOSE_WINDOW', payload: { windowId: 'W2' } });
+    assert.equal(s3.windows.W2, undefined);
+    assert.ok(s3.nodes.A1, 'узел A1 (был в дорожке A, окно W2) не удалён — окно лишь обзор');
+});
+
+test('v14 MOVE_WINDOW/RESIZE_WINDOW/PAN_WINDOW/ZOOM_WINDOW: чисто визуальные, вне истории', () => {
+    const s0 = v14State();
+    const pastBefore = s0.past.length;
+    let s = reducer(s0, { type: 'MOVE_WINDOW', payload: { windowId: 'W2', dx: 50, dy: 10 } });
+    assert.deepEqual(s.windows.W2.position, { x: s0.windows.W2.position.x + 50, y: s0.windows.W2.position.y + 10 });
+    s = reducer(s, { type: 'RESIZE_WINDOW', payload: { windowId: 'W2', size: { w: 10, h: 10 } } });
+    assert.ok(s.windows.W2.size.w >= 260 && s.windows.W2.size.h >= 180, 'минимальный размер — не меньше одной карточки (§7.1.5)');
+    s = reducer(s, { type: 'PAN_WINDOW', payload: { windowId: 'W2', offset: { x: 5, y: 6 } } });
+    assert.deepEqual(s.windows.W2.camera.offset, { x: 5, y: 6 });
+    s = reducer(s, { type: 'ZOOM_WINDOW', payload: { windowId: 'W2', zoom: 2 } });
+    assert.equal(s.windows.W2.camera.zoom, 2);
+    assert.equal(s.past.length, pastBefore, 'ни одно из четырёх не пишет историю');
+});
+
+test('v14 TOGGLE_WINDOW_COLLAPSE: сворачивает/разворачивает окно, вне истории', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'TOGGLE_WINDOW_COLLAPSE', payload: { windowId: 'W2' } });
+    assert.equal(s1.windows.W2.collapsed, true);
+    assert.equal(s1.past.length, s0.past.length);
+});
+
+test('v14 TOGGLE_WINDOW_MAXIMIZE: разворачивает на весь экран и возвращает обратно, в истории', () => {
+    const s0 = v14State();
+    const before = { position: s0.windows.W2.position, size: s0.windows.W2.size };
+    const s1 = reducer(s0, { type: 'TOGGLE_WINDOW_MAXIMIZE', payload: { windowId: 'W2', viewport: { x: 0, y: 0, w: 1900, h: 1000 } } });
+    assert.deepEqual(s1.windows.W2.size, { w: 1900, h: 1000 });
+    assert.ok(s1.windows.W2.preMaximize, 'исходные position/size запомнены');
+    assert.equal(s1.past.length, 1);
+
+    const s2 = reducer(s1, { type: 'TOGGLE_WINDOW_MAXIMIZE', payload: { windowId: 'W2' } });
+    assert.deepEqual(s2.windows.W2.position, before.position);
+    assert.deepEqual(s2.windows.W2.size, before.size);
+    assert.equal(s2.windows.W2.preMaximize, null);
+});
+
+test('v14 NEW_EMPTY_WINDOW: создаёт пустое окно без дорожек, которое не закрывается само', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'NEW_EMPTY_WINDOW' });
+    const empty = Object.values(s1.windows).find(w => w.lanes.length === 0);
+    assert.ok(empty, 'пустое окно создано и осталось (не схлопнулось)');
+    assert.equal(s1.past.length, 1);
+});
+
+test('v14 ALIGN_WINDOWS: раскладывает окна по колонкам глубины', () => {
+    let s = v14State();
+    s = reducer(s, { type: 'MOVE_WINDOW', payload: { windowId: 'W1', position: { x: 999, y: 999 } } });
+    s = reducer(s, { type: 'ALIGN_WINDOWS' });
+    // W1 показывает root (колонка 0), W2 показывает A (колонка 1) — разные колонки, разный x
+    assert.notEqual(s.windows.W1.position.x, s.windows.W2.position.x, 'разные колонки глубины — разный x');
+    assert.equal(s.past.length, v14State().past.length + 1, 'раскладка — один шаг истории (как старый ALIGN_LEVEL_WINDOWS)');
+});
+
+test('v14 UPDATE_WINDOW_PROPERTIES: камера — вне истории, свойства окна — в истории', () => {
+    const s0 = v14State();
+    const pastBefore = s0.past.length;
+    const s1 = reducer(s0, { type: 'UPDATE_WINDOW_PROPERTIES', payload: { windowId: 'W2', updates: { zoom: 1.5 } } });
+    assert.equal(s1.windows.W2.camera.zoom, 1.5);
+    assert.equal(s1.past.length, pastBefore, 'чисто камера — история не пишется');
+
+    const s2 = reducer(s1, { type: 'UPDATE_WINDOW_PROPERTIES', payload: { windowId: 'W2', updates: { name: 'Моё окно' } } });
+    assert.equal(s2.windows.W2.name, 'Моё окно');
+    assert.equal(s2.past.length, pastBefore + 1, 'изменение свойства окна — в истории');
+});
+
+test('v14 SET_ACTIVE_LANE / SET_ACTIVE_FRAME: курсоры вне истории', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'SET_ACTIVE_LANE', payload: 'A' });
+    assert.equal(s1.activeLaneId, 'A');
+    const s2 = reducer(s1, { type: 'SET_ACTIVE_FRAME', payload: 'Датчики' });
+    assert.equal(s2.activeFrameId, 'Датчики');
+    assert.equal(s2.past.length, s0.past.length);
+});
+
+// --- Рамки -------------------------------------------------------------------
+
+test('v14 ADD_FRAME: двойной режим — с выделением сразу с членами, без выделения пустая (§7.9)', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'ADD_FRAME', payload: { members: ['A1', 'A2'], name: 'Питание' } });
+    const id = s1.selectedIds[0];
+    assert.deepEqual(s1.frames[id].members, ['A1', 'A2']);
+    assert.equal(s1.frames[id].homeLaneId, 'A', 'домашняя дорожка — дорожка первого члена');
+
+    const s2 = reducer(s0, { type: 'ADD_FRAME', payload: {} });
+    const id2 = s2.selectedIds[0];
+    assert.deepEqual(s2.frames[id2].members, []);
+    assert.equal(s2.frames[id2].homeLaneId, null, 'без членов homeLaneId ждёт первого дропа');
+});
+
+test('v14 FRAME_ADD_MEMBERS: задаёт homeLaneId при первом добавлении в пустую рамку', () => {
+    const s0 = reducer(v14State(), { type: 'ADD_FRAME', payload: {} });
+    const frameId = s0.selectedIds[0];
+    assert.equal(s0.frames[frameId].homeLaneId, null);
+
+    const s1 = reducer(s0, { type: 'FRAME_ADD_MEMBERS', payload: { frameId, ids: ['A2'] } });
+    assert.deepEqual(s1.frames[frameId].members, ['A2']);
+    assert.equal(s1.frames[frameId].homeLaneId, 'A1', 'homeLaneId выставлен по дорожке первого добавленного члена');
+});
+
+test('v14 FRAME_REMOVE_MEMBERS: опустевшая рамка не удаляется автоматически (§7.3.4)', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'FRAME_REMOVE_MEMBERS', payload: { frameId: 'Датчики', ids: ['A1', 'Б'] } });
+    assert.ok(s1.frames['Датчики'], 'рамка осталась именованной заготовкой');
+    assert.deepEqual(s1.frames['Датчики'].members, []);
+});
+
+test('v14 UPDATE_FRAME / REMOVE_FRAME: свойства рамки и каскадное удаление порта/связи', () => {
+    let s = v14State();
+    s = reducer(s, { type: 'UPDATE_FRAME', payload: { id: 'Датчики', updates: { color: '#ff0000' } } });
+    assert.equal(s.frames['Датчики'].color, '#ff0000');
+
+    s = { ...s, ports: { ...s.ports, pF: { id: 'pF', nodeId: 'Датчики', type: 'output', edge: 'right', position: 0.5 } },
+        links: { ...s.links, lF: { id: 'lF', sourcePortId: 'pF', targetPortId: 'pF' } } };
+    s = reducer(s, { type: 'REMOVE_FRAME', payload: 'Датчики' });
+    assert.equal(s.frames['Датчики'], undefined);
+    assert.equal(s.ports.pF, undefined, 'порт рамки удалён каскадно');
+    assert.equal(s.links.lF, undefined, 'связь через порт рамки удалена каскадно');
+});
+
+test('v14 MOVE_FRAGMENT: сдвигает членов куска рамки в конкретной дорожке', () => {
+    const s0 = v14State();
+    const before = { ...s0.nodes.A1.position };
+    const s1 = reducer(s0, { type: 'MOVE_FRAGMENT', payload: { frameId: 'Датчики', ownerId: 'A', dx: 30, dy: 40 } });
+    assert.equal(s1.nodes.A1.position.x, before.x + 30);
+    assert.equal(s1.nodes.A1.position.y, before.y + 40);
+});
+
+// --- REPARENT_ENTITY / REMOVE_NODE (переписаны на месте) ---------------------
+
+test('v14 REPARENT_ENTITY: deep по умолчанию — потомки остаются структурно при переносимым узлом', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'A1', targetParentId: 'root' } });
+    assert.equal(s1.nodes.A1.parentId, 'root');
+    assert.equal(s1.nodes.A2.parentId, 'A1', 'A2 остался ребёнком A1 (deep — цепочка не трогается)');
+});
+
+test('v14 REPARENT_ENTITY: слой как цель недоступен вовсе — targetParentId только node|root', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'A1', targetParentId: 'Датчики' } });
+    assert.equal(s1, s0, 'рамка не может быть родителем — no-op');
+});
+
+test('v14 REPARENT_ENTITY: цикл отклоняется (nodes-only isDescendantOfV14/canReparentToV14)', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'A', targetParentId: 'A2' } });
+    assert.equal(s1, s0, 'A2 — потомок A, вложение образует цикл — no-op');
+});
+
+test('v14 REPARENT_ENTITY (shallow): прямые дети усыновляются прежним родителем с findFreePosition', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'A1', targetParentId: 'root', mode: 'shallow' } });
+    assert.equal(s1.nodes.A1.parentId, 'root', 'сам A1 переехал');
+    assert.equal(s1.nodes.A2.parentId, 'A', 'A2 усыновлён ПРЕЖНИМ родителем A1 (A), а не поехал следом');
+    assert.ok(Number.isFinite(s1.nodes.A2.position.x) && Number.isFinite(s1.nodes.A2.position.y));
+});
+
+test('v14 REPARENT_ENTITY: массив ids — один шаг Undo на весь батч; positionsById задаёт позиции под курсором', () => {
+    const s0 = v14State();
+    const pastBefore = s0.past.length;
+    const s1 = reducer(s0, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['A1', 'Б'], targetParentId: 'root', positionsById: { A1: { x: 11, y: 22 }, Б: { x: 33, y: 44 } } }
+    });
+    // Б уже в root — «уже там» отфильтровывается тихо, переезжает только A1
+    assert.equal(s1.nodes.A1.parentId, 'root');
+    assert.deepEqual(s1.nodes.A1.position, { x: 11, y: 22 });
+    assert.equal(s1.past.length, pastBefore + 1, 'весь батч — один шаг Undo');
+});
+
+test('v14 REPARENT_ENTITY: явный position (одиночный drop) переопределяет findFreePosition', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'A2', targetParentId: 'root', position: { x: 42, y: 24 } } });
+    assert.deepEqual(s1.nodes.A2.position, { x: 42, y: 24 });
+});
+
+test('v14 REPARENT_ENTITY: дроп на карточку узла без открытой дорожки открывает её автоматически (§0.4.3)', () => {
+    const s0 = v14State();
+    assert.equal(HierarchyUtils.windowsOfLane('Б', s0.windows).length, 0, 'дорожка Б изначально нигде не открыта');
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'A2', targetParentId: 'Б' } });
+    assert.equal(s1.nodes.A2.parentId, 'Б');
+    assert.ok(HierarchyUtils.windowsOfLane('Б', s1.windows).length > 0, 'дорожка Б открылась автоматически');
+});
+
+test('v14 REPARENT_ENTITY: членство в рамках не меняется при переносе узла', () => {
+    const s0 = v14State();
+    assert.ok(s0.frames['Датчики'].members.includes('A1'));
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'A1', targetParentId: 'root' } });
+    assert.ok(s1.frames['Датчики'].members.includes('A1'), 'A1 остался членом рамки после переноса — членство не структурное родство');
+});
+
+test('v14 REPARENT_ENTITY (shallow): Undo одним шагом возвращает И перенесённую сущность, И усыновлённых детей', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'A1', targetParentId: 'root', mode: 'shallow' } });
+    assert.notEqual(s1.nodes.A2.parentId, s0.nodes.A2.parentId);
+
+    const s2 = reducer(s1, { type: 'UNDO' });
+    assert.equal(s2.nodes.A1.parentId, 'A', 'A1 вернулся на место');
+    assert.deepEqual(s2.nodes.A2, s0.nodes.A2, 'потомок вернулся к исходному parentId и позиции — тем же шагом Undo');
+
+    const s3 = reducer(s2, { type: 'REDO' });
+    assert.equal(s3.nodes.A1.parentId, 'root');
+    assert.equal(s3.nodes.A2.parentId, 'A');
+});
+
+test('v14 REPARENT_ENTITY: historySnapshot делает Drag&Drop-жест (движение + перенос) одним шагом Undo', () => {
+    const s0 = { ...v14State(), selectedIds: ['Б'] };
+    const s1 = reducer(s0, { type: 'MOVE_SELECTED', payload: { dx: 100, dy: 0, skipHistory: true } });
+    const s2 = reducer(s1, {
+        type: 'REPARENT_ENTITY',
+        payload: { id: 'Б', targetParentId: 'A', historySnapshot: { nodes: s0.nodes, ports: s0.ports, links: s0.links } }
+    });
+    assert.equal(s2.nodes.Б.parentId, 'A', 'перенос состоялся');
+    assert.equal(s2.past.length, s0.past.length + 1, 'ровно один шаг истории на весь жест');
+
+    const s3 = reducer(s2, { type: 'UNDO' });
+    assert.deepEqual(s3.nodes.Б, s0.nodes.Б, 'Undo вернул ИСХОДНОЕ состояние до mousedown, а не промежуточное движение');
+});
+
+test('v14 дорожки-зеркала: одна дорожка, открытая в двух окнах — перенос отражается в обоих сразу (структурно, без спец-кода)', () => {
+    // W1 показывает root, W2 показывает A. Открываем root ЕЩЁ и в W2 (зеркало).
+    const s0 = reducer(v14State(), { type: 'OPEN_LANE', payload: { ownerId: 'root', windowId: 'W2' } });
+    assert.deepEqual(s0.windows.W2.lanes, ['A', 'root']);
+
+    // Переносим Б (лежит в root) в A — теперь Б должен явиться в дорожке A,
+    // видимой И в W2 (напрямую), и одновременно root-зеркало в W2 больше его не покажет.
+    const s1 = reducer(s0, { type: 'REPARENT_ENTITY', payload: { id: 'Б', targetParentId: 'A' } });
+    const rectInW2AsA = HierarchyUtils.nodeRectInWindow(s1.windows.W2, 'Б', s1);
+    assert.ok(rectInW2AsA, 'Б виден в W2 через дорожку A');
+    // Те же данные, тот же узел — не отдельная копия для «зеркала»
+    assert.equal(s1.nodes.Б.parentId, 'A');
+});
+
+test('v14 REMOVE_NODE: каскад по умолчанию удаляет всю ветку, порты/связи и членство в рамках', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'REMOVE_NODE', payload: 'A1' });
+    assert.equal(s1.nodes.A1, undefined);
+    assert.equal(s1.nodes.A2, undefined, 'потомок A1 удалён каскадом (Deep-семантика по умолчанию)');
+    assert.equal(s1.frames['Датчики'].members.includes('A1'), false, 'A1 выбыл из членства в рамке');
+});
+
+test('v14 REMOVE_NODE: keepChildren переносит прямых детей к деду с findFreePosition', () => {
+    const s0 = v14State();
+    const s1 = reducer(s0, { type: 'REMOVE_NODE', payload: { id: 'A1', keepChildren: true } });
+    assert.equal(s1.nodes.A1, undefined);
+    assert.ok(s1.nodes.A2, 'A2 выжил');
+    assert.equal(s1.nodes.A2.parentId, 'A', 'A2 усыновлён дедом (A) — прежним родителем A1');
 });
