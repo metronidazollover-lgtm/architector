@@ -88,7 +88,7 @@ const sceneArg = (process.argv.find(a => a.startsWith('--scene=')) || '').split(
                 ? Object.keys(window.__archStore.getState().projects || {}).length
                 : null,
             windows: (typeof window.__archStore !== 'undefined')
-                ? Object.keys(window.__archStore.getView().levelWindows || {}).length
+                ? Object.keys(window.__archStore.getView().windows || {}).length
                 : null
         };
     });
