@@ -67,14 +67,24 @@ test('migrateToV10: сирота с несуществующим родител�
     assert.deepEqual(m.nodes.orphan.position, { x: 5, y: 6 });
 });
 
-test('LOAD_STATE: v9-файл мигрирует на лету, v10 проходит как есть', () => {
+// v14 (Фаза 5, §7.15 плана): LOAD_STATE теперь доводит результат до v14 —
+// слой L стал рамкой, inLayer (был вложен координатно в L) реструктурно
+// переехал к структурному родителю L ('root' в этой фикстуре), позиция
+// осталась внутренней деталью авторасстановки (смарт-плейсмент + пересчёт
+// координат слоя в дорожку), поэтому проверяем результат миграции
+// (parentId/членство в рамке), а не конкретное число пикселей.
+test('LOAD_STATE: v9-файл мигрирует на лету и доводится до v14, v10 проходит так же', () => {
     const s0 = { ...defaultState };
     const s1 = reducer(s0, { type: 'LOAD_STATE', payload: v9project() });
-    assert.deepEqual(s1.nodes.inLayer.position, { x: 20, y: 90 });
+    assert.equal(s1.nodes.inLayer.parentId, 'root', 'inLayer реструктурно переехал к структурному родителю бывшего слоя L');
+    assert.ok(s1.frames.L, 'слой L стал рамкой');
+    assert.deepEqual(s1.frames.L.members, ['inLayer'], 'inLayer остался членом рамки L');
+    assert.equal(s1.nodes.child.parentId, 'inLayer', 'child как был ребёнком узла inLayer, так и остался');
 
     const v10payload = { ...v9project(), formatVersion: 10 };
     const s2 = reducer(s0, { type: 'LOAD_STATE', payload: v10payload });
-    assert.deepEqual(s2.nodes.inLayer.position, { x: 20, y: 90 }); // auto-aligned on load
+    assert.equal(s2.nodes.inLayer.parentId, 'root');
+    assert.deepEqual(s2.frames.L.members, ['inLayer']);
 });
 
 test('LOAD_STATE: конвертирует массив связей links в словарь { [id]: link }', () => {

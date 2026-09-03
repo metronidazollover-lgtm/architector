@@ -160,6 +160,12 @@ test('mergeActiveView без активного проекта: безопасн
 test('ADD_PROJECT_FROM_FILE: импорт добавляет проект, не заменяя существующий', () => {
     let m = wrapFlatToMulti(makeFlat());
     const firstId = m.activeProjectId;
+    // Даём первому проекту реальное окно, чтобы было от чего отталкивать импорт вправо
+    m = multiReducer(m, {
+        type: 'FOR_PROJECT',
+        payload: { projectId: firstId, action: { type: 'OPEN_LANE', payload: { ownerId: 'root' } } }
+    });
+
     const fileData = {
         formatVersion: 10,
         nodes: {
@@ -177,14 +183,17 @@ test('ADD_PROJECT_FROM_FILE: импорт добавляет проект, не 
     assert.notEqual(m.activeProjectId, firstId, 'импортированный стал активным');
     assert.equal(imported.projectName, 'Импортированный проект', 'имя из файла');
     assert.ok(imported.nodes.imp1 && imported.nodes.imp2, 'содержимое файла на месте');
-    const levels = Object.values(imported.levelWindows).map(w => w.levelIndex).sort();
-    assert.deepEqual(levels, [0, 1], 'иерархия дала два уровня');
+    // v14: иерархии уровней больше нет — imp2 просто вложен в imp1 как дочерний
+    // узел внутри одного и того же окна корневой дорожки.
+    const importedWindows = Object.values(imported.windows);
+    assert.equal(importedWindows.length, 1, 'у импортированного проекта одно окно (корневая дорожка)');
+    assert.deepEqual(importedWindows[0].lanes, ['root']);
 
-    // Окна импортированного — правее окон первого проекта
-    const firstRight = Math.max(...Object.values(m.projects[firstId].levelWindows)
+    // Окно импортированного проекта — правее окна первого проекта
+    const firstRight = Math.max(...Object.values(m.projects[firstId].windows)
         .map(w => w.position.x + w.size.w));
-    Object.values(imported.levelWindows).forEach(w => {
-        assert.ok(w.position.x >= firstRight, `окно уровня ${w.levelIndex} правее первого проекта`);
+    importedWindows.forEach(w => {
+        assert.ok(w.position.x >= firstRight, 'окно импортированного проекта правее первого проекта');
     });
     assert.deepEqual(imported.past, [], 'история импортированного пуста');
 });
@@ -882,12 +891,19 @@ test('MERGE_PROJECT_FROM_FILE: связь внутри файла остаётс
     assert.ok(proj.ports[link.targetPortId], 'переписанный targetPortId существует среди перенесённых портов');
 });
 
-test('MERGE_PROJECT_FROM_FILE: окно того же levelIndex сливается в СУЩЕСТВУЮЩЕЕ; отсутствующий уровень заводит новое', () => {
+test('MERGE_PROJECT_FROM_FILE: окна файла всегда заводятся заново (без якорения по levelIndex), сдвинуты правее существующих окон активного проекта', () => {
     let m = wrapFlatToMulti(makeFlat());
     const pidActive = m.activeProjectId;
-    const activeWinBefore = Object.values(m.projects[pidActive].levelWindows)[0];
+    // v14: у нового проекта нет окна «из коробки» — открываем дорожку root,
+    // чтобы было реальное окно, от которого мержу нужно оттолкнуться вправо.
+    m = multiReducer(m, {
+        type: 'FOR_PROJECT',
+        payload: { projectId: pidActive, action: { type: 'OPEN_LANE', payload: { ownerId: 'root' } } }
+    });
+    const activeWinBefore = Object.values(m.projects[pidActive].windows)[0];
 
-    // Файл с двумя уровнями: 0 (сольётся с существующим) и 1 (новый в активном)
+    // Файл в СТАРОМ (v13) формате — levelWindows/levelIndex; LOAD_STATE внутри
+    // MERGE_PROJECT_FROM_FILE сам доводит его до v14 (§7.15 плана).
     const fileData = {
         nodes: {
             fRoot: { id: 'fRoot', name: 'FRoot', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' },
@@ -904,10 +920,13 @@ test('MERGE_PROJECT_FROM_FILE: окно того же levelIndex сливает�
     m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
 
     const proj = m.projects[pidActive];
-    const windowsAfter = Object.values(proj.levelWindows);
-    assert.equal(windowsAfter.filter(w => w.levelIndex === 0).length, 1, 'на levelIndex 0 по-прежнему ровно одно окно (слияние, не дубликат)');
-    assert.equal(windowsAfter.filter(w => w.levelIndex === 1).length, 1, 'на levelIndex 1 появилось ровно одно НОВОЕ окно');
-    assert.ok(proj.levelWindows[activeWinBefore.id], 'существующее окно активного проекта пережило слияние (тот же id)');
+    assert.ok(proj.windows[activeWinBefore.id], 'существующее окно активного проекта пережило слияние (тот же id)');
+    const newWindows = Object.values(proj.windows).filter(w => w.id !== activeWinBefore.id);
+    assert.ok(newWindows.length >= 1, 'окна файла добавились как НОВЫЕ (не слиты ни с чем по адресу/индексу)');
+    const activeRight = activeWinBefore.position.x + activeWinBefore.size.w;
+    newWindows.forEach(w => {
+        assert.ok(w.position.x >= activeRight, 'новое окно файла сдвинуто правее уже существующего окна активного проекта');
+    });
 
     const fRootId = Object.keys(proj.nodes).find(id => proj.nodes[id].name === 'FRoot');
     const fChildId = Object.keys(proj.nodes).find(id => proj.nodes[id].name === 'FChild');

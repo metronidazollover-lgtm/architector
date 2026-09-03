@@ -264,8 +264,9 @@ test('LOAD_STATE: ноды на слоях автоматически вырав
     const overlapY = n1.position.y < n2.position.y + 100 + 20 && n1.position.y + 100 + 20 > n2.position.y;
     assert.ok(!(overlapX && overlapY), 'ноды на слое не перекрываются после LOAD_STATE');
 
-    // Проверяем, что размер слоя оптимизировался
-    assert.ok(s1.layers.L1.size.w < 600, `размер слоя должен был уменьшиться, текущий: ${s1.layers.L1.size.w}`);
+    // v14 (§7.15 плана): слой L1 стал рамкой — у рамки нет своего size
+    // (кусок пересчитывается из bbox членов на лету), проверяем членство.
+    assert.deepEqual(s1.frames.L1.members.sort(), ['node1', 'node2'], 'оба узла остались членами рамки L1');
 });
 
 // === resolveContextCollisions: выталкивание нод (зазор 30px) ===
@@ -322,14 +323,17 @@ test('LOAD_STATE: отдельные ноды автоматически ото�
     const s0 = makeState();
     const s1 = reducer(s0, { type: 'LOAD_STATE', payload: loadedPayload });
 
-    const nOutside = s1.nodeOutside || s1.nodes.nodeOutside;
-    const layer = s1.layers.L1;
+    // v14: слоя-контейнера больше нет — nodeInside стал обычным узлом
+    // (бывшим членом рамки L1) с реальной позицией после сворачивания
+    // смещения слоя. Проверяем, что она не пересекается с nodeOutside.
+    const nInside = s1.nodes.nodeInside;
+    const nOutside = s1.nodes.nodeOutside;
 
     const gap = 30;
-    const nW = (nOutside.size && nOutside.size.w) || 200;
-    const nH = (nOutside.size && nOutside.size.h) || 80;
-    const overlapX = nOutside.position.x < layer.position.x + layer.size.w + gap && nOutside.position.x + nW + gap > layer.position.x;
-    const overlapY = nOutside.position.y < layer.position.y + layer.size.h + gap && nOutside.position.y + nH + gap > layer.position.y;
+    const iW = nInside.size.w, iH = nInside.size.h;
+    const oW = nOutside.size.w, oH = nOutside.size.h;
+    const overlapX = nOutside.position.x < nInside.position.x + iW + gap && nOutside.position.x + oW + gap > nInside.position.x;
+    const overlapY = nOutside.position.y < nInside.position.y + iH + gap && nOutside.position.y + oH + gap > nInside.position.y;
 
     assert.ok(!(overlapX && overlapY), `Свободная нода должна быть вне зоны слоя + 30px: ${JSON.stringify(nOutside.position)}`);
 });
@@ -384,28 +388,11 @@ test('GeometryUtils.alignLayers: во вложенных контекстах в
 // v14 (§3 плана): ALIGN_LAYERS удалён как обработчик экшена — слоёв нет,
 // см. ALIGN_WINDOWS в новом v14-разделе (раскладка окон по колонкам глубины).
 
-test('LOAD_STATE: перекрывающиеся слои автоматически расталкиваются на 30px', () => {
-    const loadedPayload = {
-        nodes: {},
-        layers: {
-            L1: { id: 'L1', name: 'L1', position: { x: 0, y: 0 }, size: { w: 200, h: 200 }, parentId: 'root' },
-            L2: { id: 'L2', name: 'L2', position: { x: 50, y: 50 }, size: { w: 200, h: 200 }, parentId: 'root' }
-        },
-        ports: {},
-        links: []
-    };
-
-    const s0 = makeState();
-    const s1 = reducer(s0, { type: 'LOAD_STATE', payload: loadedPayload });
-
-    const l1 = s1.layers.L1;
-    const l2 = s1.layers.L2;
-
-    const overlapX = l1.position.x < l2.position.x + 200 + 30 && l1.position.x + 200 + 30 > l2.position.x;
-    const overlapY = l1.position.y < l2.position.y + 200 + 30 && l1.position.y + 200 + 30 > l2.position.y;
-
-    assert.ok(!(overlapX && overlapY), 'слои должны расталкиваться на 30px при LOAD_STATE');
-});
+// v14 (§7.15 плана): тест "перекрывающиеся слои расталкиваются на 30px" удалён —
+// у рамок (frames) в v14 нет собственных position/size, только members: [nodeId...].
+// Пустая рамка (без узлов) не занимает никакой мировой прямоугольник вообще
+// (fragmentRect возвращает null), так что у "раздвигания пустых слоёв" нет
+// v14-аналога для проверки.
 
 // === snapToGrid: принудительное включение при создании и импорте ===
 
@@ -442,8 +429,8 @@ test('LOAD_STATE: принудительно включает snapToGrid во в
 
     assert.ok(s1.nodes.n1.snapToGrid, 'n1.snapToGrid должен быть переопределен в true');
     assert.ok(s1.nodes.n2.snapToGrid, 'n2.snapToGrid должен быть инициализирован в true');
-    assert.ok(s1.layers.L1.snapToGrid, 'L1.snapToGrid должен быть переопределен в true');
-    assert.ok(s1.layers.L2.snapToGrid, 'L2.snapToGrid должен быть инициализирован в true');
+    assert.ok(s1.frames.L1.snapToGrid, 'L1.snapToGrid должен быть переопределен в true');
+    assert.ok(s1.frames.L2.snapToGrid, 'L2.snapToGrid должен быть инициализирован в true');
 });
 
 // === Тесты выделения и перемещения вложенных групп ===

@@ -146,34 +146,44 @@ test('Кэш координат инвалидируется при измене
     assert.equal(after.scale, 3);
 });
 
-test('Содержимое загруженного проекта попадает внутрь рамки своего уровня', () => {
+// v14 (Фаза 5, §7.15 плана): старый тест "содержимое попадает внутрь рамки
+// своего уровня" проверял, что per-level окно (в v13 всегда авто-подгонялось
+// под размер своего содержимого) визуально вмещает все свои узлы без
+// прокрутки. В v14 у дорожки внутри окна ФИКСИРОВАННАЯ ширина колонки
+// (ROOT_LANE_W/LANE_W, см. laneRect в hierarchy.js) — это окно-вьюпорт со
+// своими pan/zoom (camera), а не бокс, авто-подгоняемый под контент; узел,
+// вылезающий за пределы текущего вьюпорта дорожки, не баг, а норма (для
+// просмотра пользователь панорамирует/зумит дорожку). "Вмещается без
+// прокрутки" не имеет v14-аналога для проверки — заменено проверкой самой
+// миграции: LOAD_STATE отдаёт v14-форму и КАЖДЫЙ узел демо-проекта имеет
+// корректный (числовой, неотрицательный по метрикам размера) прямоугольник
+// в окне своей дорожки, если та где-то открыта.
+test('LOAD_STATE демо-проекта: результат — валидная v14-форма (frames/windows), геометрия узлов вычислима', () => {
     const fs = require('fs');
     const path = require('path');
     const demoJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../demo_project.json'), 'utf8'));
 
     const s = reducer(defaultState, { type: 'LOAD_STATE', payload: demoJson });
-    const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
+    assert.ok(s.frames && typeof s.frames === 'object', 'LOAD_STATE вернул v14-форму (frames)');
+    assert.ok(s.windows && typeof s.windows === 'object', 'LOAD_STATE вернул v14-форму (windows)');
+    assert.ok(Object.keys(s.windows).length > 0, 'миграция демо-проекта открыла хотя бы одно окно');
 
+    let checked = 0;
     const offenders = [];
     Object.values(s.nodes || {}).forEach(node => {
-        const lvl = HierarchyUtils.getLevel(node.id, s.nodes, s.layers);
-        const win = HierarchyUtils.getWindowOfLevel(lvl, s.levelWindows);
-        assert.ok(win, `для уровня ${lvl} должно существовать окно`);
+        const ownerId = node.parentId || 'root';
+        const win = HierarchyUtils.windowsOfLane(ownerId, s.windows)[0];
+        if (!win) return; // дорожка нигде не открыта — ожидаемо не видна, не нарушитель
 
-        const b = HierarchyUtils.getNodeWorldBounds(node.id, s);
-        const frame = {
-            left: win.position.x + borderW,
-            top: win.position.y + borderW + headerH,
-            right: win.position.x + win.size.w - borderW,
-            bottom: win.position.y + win.size.h - borderW
-        };
-
-        if (b.x < frame.left || b.y < frame.top || b.x + b.w > frame.right || b.y + b.h > frame.bottom) {
-            offenders.push(`${node.id} (уровень ${lvl})`);
+        const b = HierarchyUtils.nodeRectInWindow(win, node.id, s);
+        checked++;
+        if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y) || b.w <= 0 || b.h <= 0) {
+            offenders.push(`${node.id} (дорожка ${ownerId})`);
         }
     });
 
-    assert.deepEqual(offenders, [], 'узлы демо-проекта не должны выходить за рамку своего окна');
+    assert.deepEqual(offenders, [], 'геометрия узла в окне своей дорожки должна быть вычислимым конечным прямоугольником');
+    assert.ok(checked > 0, 'хотя бы один узел демо-проекта должен был попасть в открытую дорожку');
 });
 
 test('UPDATE_LEVEL_PROPERTIES: поля камеры маршрутизируются в levelViews, а не теряются', () => {
