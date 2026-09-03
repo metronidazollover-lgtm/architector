@@ -241,5 +241,12 @@ function LaneWindow(props) {
     );
 }
 
-if (typeof window !== 'undefined') window.LaneWindow = LaneWindow;
-if (typeof module !== 'undefined') module.exports = LaneWindow;
+// computeWindowDerived не строит новых массивов/объектов (win — прямая ссылка
+// на state.windows[windowId], которую MOVE_SELECTED не трогает; остальные
+// поля — примитивы), поэтому обычного shallowEqual достаточно и здесь не
+// нужен deepShallowEqual, в отличие от Lane.js/Frame.js. Но без React.memo
+// родительский Canvas всё равно вызывал бы LaneWindow заново на каждый
+// dispatch (см. Lane.js/Port.js).
+const MemoizedLaneWindow = React.memo ? React.memo(LaneWindow) : LaneWindow;
+if (typeof window !== 'undefined') window.LaneWindow = MemoizedLaneWindow;
+if (typeof module !== 'undefined') module.exports = MemoizedLaneWindow;

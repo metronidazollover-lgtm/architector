@@ -88,7 +88,12 @@ function Frame(props) {
         (view) => computeFrameDerived(view, frameId, windowId, ownerId),
         [frameId, windowId, ownerId]
     );
-    const derived = useProjectSelector(selectDerived);
+    // rect приходит из H.fragmentRect — новый объект {x,y,w,h} на каждый вызов
+    // даже когда bbox не изменился, а portIds строится через .map() заново
+    // (тот же паттерн, что у childIds в Lane.js). Обычный shallowEqual видел бы
+    // оба поля «изменившимися» по Object.is и перерисовывал Frame на любой
+    // dispatch; deepShallowEqual сравнивает их по содержимому (см. engine.js).
+    const derived = useProjectSelector(selectDerived, StoreEngine.deepShallowEqual);
     if (!derived.ok) return null;
     const { frame, rect, isHome, isSelected, isActive, isDropReceiver, visibleCount, totalCount, portIds, nestDepth } = derived;
 
@@ -185,9 +190,13 @@ function Frame(props) {
     );
 }
 
+// Без React.memo родительский Lane при каждом рендере пересоздаёт элементы
+// всех своих Frame, и React вызывает их заново независимо от того, вернул ли
+// useProjectSelector ту же ссылку (см. Lane.js/Port.js).
+const MemoizedFrame = React.memo ? React.memo(Frame) : Frame;
 if (typeof window !== 'undefined') {
-    window.Frame = Frame;
+    window.Frame = MemoizedFrame;
 }
 if (typeof module !== 'undefined') {
-    module.exports = { Frame, computeFrameDerived };
+    module.exports = { Frame: MemoizedFrame, computeFrameDerived };
 }

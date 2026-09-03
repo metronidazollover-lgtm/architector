@@ -61,7 +61,12 @@ function Lane(props) {
     const projectId = React.useContext(ProjectContext);
 
     const selectDerived = React.useCallback((view) => computeLaneDerived(view, windowId, ownerId), [windowId, ownerId]);
-    const derived = useProjectSelector(selectDerived);
+    // computeLaneDerived строит childIds/frameIdsHere/linkIdsHere через
+    // .map()/.filter() заново на каждый вызов — новые ссылки массивов даже
+    // когда состав тот же. Обычный shallowEqual (Object.is по каждому полю)
+    // всегда видел бы «изменение» и перерисовывал Lane на любой dispatch;
+    // deepShallowEqual сравнивает эти поля по содержимому (см. engine.js).
+    const derived = useProjectSelector(selectDerived, StoreEngine.deepShallowEqual);
     if (!derived.ok) return null;
     const { hidden, width, name, color, path, childIds, frameIdsHere, linkIdsHere, isDropReceiver, zoom, offset } = derived;
 
@@ -176,9 +181,15 @@ function Lane(props) {
     );
 }
 
+// Мемоизация работает только вместе с точечной подпиской (см. Port.js): без
+// React.memo родительский LaneWindow при каждом рендере пересоздаёт элементы
+// всех своих Lane, и React вызывает их заново независимо от того, вернул ли
+// useProjectSelector ту же ссылку — сравнение результата селектора спасает от
+// лишнего ПЕРЕСЧЁТА данных, но не от лишнего ВЫЗОВА компонента.
+const MemoizedLane = React.memo ? React.memo(Lane) : Lane;
 if (typeof window !== 'undefined') {
-    window.Lane = Lane;
+    window.Lane = MemoizedLane;
 }
 if (typeof module !== 'undefined') {
-    module.exports = { Lane, computeLaneDerived };
+    module.exports = { Lane: MemoizedLane, computeLaneDerived };
 }

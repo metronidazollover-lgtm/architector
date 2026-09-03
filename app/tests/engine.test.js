@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createStore, createSelectorCache, shallowEqual } = require('../store/engine.js');
+const { createStore, createSelectorCache, shallowEqual, deepShallowEqual } = require('../store/engine.js');
 
 const counterReducer = (state, action) => {
     switch (action.type) {
@@ -96,6 +96,34 @@ test('shallowEqual: массивы, объекты и примитивы', () =>
     const shared = { x: 1 };
     assert.equal(shallowEqual({ p: shared }, { p: shared }), true);
     assert.equal(shallowEqual({ p: { x: 1 } }, { p: { x: 1 } }), false);
+});
+
+test('deepShallowEqual: массивы/объекты внутри среза сравниваются по содержимому', () => {
+    assert.equal(deepShallowEqual(1, 1), true);
+    assert.equal(deepShallowEqual(null, {}), false);
+    // Свежий массив с тем же содержимым — обычный shallowEqual счёл бы поле
+    // изменившимся (Object.is по ссылке), deepShallowEqual — нет
+    assert.equal(deepShallowEqual({ ids: [1, 2] }, { ids: [1, 2] }), true);
+    assert.equal(deepShallowEqual({ ids: [1, 2] }, { ids: [2, 1] }), false);
+    assert.equal(deepShallowEqual({ ids: [1] }, { ids: [1, 2] }), false);
+    assert.equal(deepShallowEqual({ a: { x: 1 } }, { a: { x: 1 } }), true);
+    assert.equal(deepShallowEqual({ a: 1, ids: [1] }, { a: 1, ids: [1, 2] }), false);
+});
+
+test('createSelectorCache + deepShallowEqual: свежий массив с тем же составом не меняет ссылку', () => {
+    // Воспроизводит баг Lane.js: селектор строит childIds через .map() заново
+    // на каждый вызов. С обычным shallowEqual результат всегда «новый» и
+    // подписчик перерисовывается зря; с deepShallowEqual ссылка сохраняется,
+    // пока состав id не изменился.
+    const select = createSelectorCache((view) => ({ childIds: view.nodes.map(n => n.id) }), deepShallowEqual);
+
+    const a = select({ nodes: [{ id: '1' }, { id: '2' }] });
+    const b = select({ nodes: [{ id: '1' }, { id: '2' }] });
+    assert.equal(a, b, 'разные объекты view, тот же состав childIds — ссылка сохранена');
+
+    const c = select({ nodes: [{ id: '1' }, { id: '3' }] });
+    assert.notEqual(c, b, 'реальное изменение состава даёт новую ссылку');
+    assert.deepEqual(c, { childIds: ['1', '3'] });
 });
 
 test('createSelectorCache: не пересчитывает срез в пределах поколения вида', () => {
