@@ -145,7 +145,7 @@ function OutlinerTree({ onSelect }) {
                             <div
                                 key={f.id}
                                 className={`flex items-center gap-1 py-1 px-1 rounded cursor-pointer text-xs hover:bg-white/5 ${(state.selectedIds || []).includes(f.id) ? 'bg-[var(--accent-blue)]/30' : ''}`}
-                                onClick={() => { dispatch({ type: 'SET_SELECTED', payload: [f.id] }); dispatch({ type: 'SET_ACTIVE_FRAME', payload: f.id }); dispatch({ type: 'CENTER_ON_ENTITY', payload: f.id }); }}
+                                onClick={() => { dispatch({ type: 'SET_SELECTED', payload: f.id }); dispatch({ type: 'SET_ACTIVE_FRAME', payload: f.id }); dispatch({ type: 'CENTER_ON_ENTITY', payload: f.id }); }}
                             >
                                 <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: f.color || '#0284c7' }} />
                                 <span className="truncate flex-1">{f.name || f.id}</span>

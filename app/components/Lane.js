@@ -78,7 +78,7 @@ function Lane(props) {
         if (e.target.closest('button')) return;
         activate();
         dispatch({ type: 'SET_ACTIVE_LANE', payload: ownerId });
-        if (ownerId !== 'root') dispatch({ type: 'SET_SELECTED', payload: [ownerId] });
+        if (ownerId !== 'root') dispatch({ type: 'SET_SELECTED', payload: ownerId });
     };
 
     const handleDragStart = (e) => {

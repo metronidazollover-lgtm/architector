@@ -102,7 +102,7 @@ function Frame(props) {
         if (projectId && projectId !== st0.activeProjectId) {
             dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId });
         }
-        dispatch({ type: 'SET_SELECTED', payload: [frameId] });
+        dispatch({ type: 'SET_SELECTED', payload: frameId });
         dispatch({ type: 'SET_ACTIVE_FRAME', payload: frameId });
 
         const startX = e.clientX, startY = e.clientY;
@@ -173,7 +173,7 @@ function Frame(props) {
                     className="frame-dot absolute pointer-events-auto flex items-center justify-center rounded-full text-[10px] text-white cursor-pointer select-none"
                     style={{ top: -8, left: 8, width: 16, height: 16, backgroundColor: borderColor }}
                     title={`${frame.name || 'Рамка'}: ${visibleCount} здесь`}
-                    onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_SELECTED', payload: [frameId] }); dispatch({ type: 'SET_ACTIVE_FRAME', payload: frameId }); }}
+                    onClick={(e) => { e.stopPropagation(); dispatch({ type: 'SET_SELECTED', payload: frameId }); dispatch({ type: 'SET_ACTIVE_FRAME', payload: frameId }); }}
                 >{visibleCount}</div>
             )}
             {isHome && portIds.map(portId => (

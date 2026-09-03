@@ -128,6 +128,14 @@ function LaneWindow(props) {
     // Колёсико над телом окна масштабирует ОБЩУЮ камеру всех его дорожек
     // (win.camera — одна на всё окно, §2.3 LANES_MODEL.md); Ctrl/Cmd+колёсико
     // не перехватывается — уходит наверх, в мировой зум Canvas.js.
+    //
+    // React 18 регистрирует onWheel как ПАССИВНЫЙ обработчик — e.preventDefault()
+    // внутри него не работает и печатает предупреждение в консоль ("Unable to
+    // preventDefault inside passive event listener invocation"), а страница
+    // прокручивается сама. Вешаем нативный { passive: false } слушатель через
+    // callback-ref — тело окна условно рендерится (сворачивается), поэтому
+    // useEffect с зависимостями здесь не переживёт пересоздание DOM-узла
+    // (тот же приём, что был у LevelWindow.js для зума колесом).
     const handleBodyWheel = (e) => {
         if (e.ctrlKey || e.metaKey) return;
         e.stopPropagation();
@@ -172,15 +180,29 @@ function LaneWindow(props) {
         window.addEventListener('mouseup', handleUp);
     };
 
-    const collapsed = !!win.collapsed || allLanesHidden;
+    const bodyElRef = React.useRef(null);
+    const bodyWheelRef = React.useCallback((node) => {
+        if (bodyElRef.current) bodyElRef.current.removeEventListener('wheel', handleBodyWheel);
+        bodyElRef.current = node;
+        if (node) node.addEventListener('wheel', handleBodyWheel, { passive: false });
+    }, [handleBodyWheel]);
+
+    // Ручное сворачивание (win.collapsed) прячет тело окна целиком — обратно
+    // его разворачивает та же кнопка в шапке. «Схлопывание» от allLanesHidden
+    // (§10.6 LANES_MODEL.md) — другое: оно только СЖИМАЕТ окно по высоте до
+    // тонких полосок дорожек, но не должно прятать их совсем — иначе кнопку
+    // «глаз», которой можно развернуть дорожку обратно, стало бы некуда
+    // нажать (тело окна с этой кнопкой было бы вообще не отрендерено).
+    const collapsed = !!win.collapsed;
     const borderColor = win.color || (win.frameId ? '#0284c7' : '#334155');
+    const HIDDEN_LANE_H = 28;
 
     return (
         <div
             className="lane-window absolute rounded-2xl border-2"
             style={{
                 left: win.position.x, top: win.position.y,
-                width: win.size.w, height: collapsed ? 40 : win.size.h,
+                width: win.size.w, height: collapsed ? 40 : (allLanesHidden ? 40 + HIDDEN_LANE_H : win.size.h),
                 borderColor,
                 backgroundColor: '#0a0d14',
                 zIndex: isSelected ? 30 : 10,
@@ -209,7 +231,7 @@ function LaneWindow(props) {
                 </div>
             </div>
             {!collapsed && (
-                <div className="flex flex-row overflow-hidden rounded-b-2xl" style={{ height: win.size.h - 40 }} onWheel={handleBodyWheel} onMouseDown={handleBodyMouseDown}>
+                <div ref={bodyWheelRef} className="flex flex-row overflow-hidden rounded-b-2xl" style={{ height: allLanesHidden ? HIDDEN_LANE_H : win.size.h - 40 }} onMouseDown={handleBodyMouseDown}>
                     {(win.lanes || []).map(ownerId => (
                         <Lane key={ownerId} windowId={windowId} ownerId={ownerId} />
                     ))}

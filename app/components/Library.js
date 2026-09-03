@@ -38,7 +38,7 @@ function Library({ projectId }) {
 
     const handleSelect = (id) => {
         const node = nodes[id];
-        dispatch({ type: 'SET_SELECTED', payload: [id] });
+        dispatch({ type: 'SET_SELECTED', payload: id });
         dispatch({ type: 'CENTER_ON_ENTITY', payload: id });
         if (node) {
             const hasChildren = (H.getChildrenByParent(nodes)[id] || []).length > 0;
