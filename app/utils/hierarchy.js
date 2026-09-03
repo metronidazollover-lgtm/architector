@@ -3,22 +3,16 @@
 
 // Кэш абсолютных позиций, уровней и пространственных индексов на поколение стейта:
 // объекты пересоздаются редьюсером при каждом изменении, поэтому WeakMap инвалидируется сам.
-const _absCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
 const _levelCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
 const _portsByNodeCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
 const _linksByPortCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
 const _linkOrderCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
 
-// Стабильные пустышки. Литерал `layers || {}` создавал НОВЫЙ объект на каждый
+// Стабильная пустышка. Литерал `layers || {}` создавал НОВЫЙ объект на каждый
 // вызов, и кэш уровней, ключом которого служит ссылка на словарь, промахивался
 // всегда: поколение пересоздавалось на каждом обращении. По профилю это был
 // самый дорогой участок кадра.
 const EMPTY_DICT = Object.freeze({});
-const _crossLinksCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
-const _byLevelCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
-const _proxyIndexCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
-const _nodesByParentCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
-const _layersByParentCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
 
 const HierarchyUtils = {
     /**
@@ -85,62 +79,6 @@ const HierarchyUtils = {
     },
 
     /**
-     * Быстрый индекс узлов по parentId (слой или 'root'): O(1) чтение дочерних узлов.
-     * Автоматически кэшируется по ссылке на словарь nodes (WeakMap).
-     */
-    getNodesByParentId: (nodes) => {
-        if (!nodes || typeof nodes !== 'object') return {};
-        if (_nodesByParentCache && _nodesByParentCache.has(nodes)) {
-            return _nodesByParentCache.get(nodes);
-        }
-        const index = {};
-        Object.values(nodes).forEach(n => {
-            if (n) {
-                const pid = n.parentId || 'root';
-                if (!index[pid]) index[pid] = [];
-                index[pid].push(n);
-            }
-        });
-        if (_nodesByParentCache) _nodesByParentCache.set(nodes, index);
-        return index;
-    },
-
-    /**
-     * Быстрый индекс слоев по parentId (узел, слой или 'root').
-     * Автоматически кэшируется по ссылке на словарь layers (WeakMap).
-     */
-    getLayersByParentId: (layers) => {
-        if (!layers || typeof layers !== 'object') return {};
-        if (_layersByParentCache && _layersByParentCache.has(layers)) {
-            return _layersByParentCache.get(layers);
-        }
-        const index = {};
-        Object.values(layers).forEach(l => {
-            if (l) {
-                const pid = l.parentId || 'root';
-                if (!index[pid]) index[pid] = [];
-                index[pid].push(l);
-            }
-        });
-        if (_layersByParentCache) _layersByParentCache.set(layers, index);
-        return index;
-    },
-
-    /**
-     * Метрики рамки окна уровня — ЕДИНСТВЕННЫЙ источник правды.
-     * Читаются и ядром координат, и компонентом LevelWindow: пока значение
-     * лежит в одном месте, расчётные точки привязки не могут разойтись с DOM.
-     * headerH — высота шапки окна (Tailwind h-10), borderW — толщина рамки
-     * контейнера окна (box-sizing: border-box сдвигает содержимое внутрь).
-     */
-    LEVEL_WINDOW_METRICS: { headerH: 40, borderW: 2 },
-
-    // Шаг сетки перетаскивания узлов/слоёв (см. `snapToGrid` в Node.js/Layer.js,
-    // step = 30) — используется расчётом размещения нового независимого слоя,
-    // чтобы вычисленный зазор не «съедался» последующим снапом к сетке.
-    LAYER_GRID_STEP: 30,
-
-    /**
      * Сырая сумма позиций по всей цепочке parentId, включая узлы-родители.
      * ЛЕГАСИ: используется ТОЛЬКО миграциями (в формате v10 позиция ребёнка
      * задавалась относительно родительского узла). Для рендера и геометрии
@@ -169,48 +107,6 @@ const HierarchyUtils = {
             }
         }
         return { x, y };
-    },
-
-    /**
-     * Локальная позиция сущности внутри холста своего уровня.
-     * Модель v11: parentId — координатный контейнер ('root' или слой) и
-     * НИКОГДА не узел, поэтому цепочка не пересекает границу уровня.
-     * Защитный break на узле оставлен для данных, не прошедших миграцию.
-     * @param {string} id
-     * @param {Object<string, NodeEntity>} nodes
-     * @param {?Object<string, LayerEntity>} layers
-     * @returns {Point}
-     */
-    getLocalPosition: (id, nodes, layers) => {
-        let generation = _absCache && _absCache.get(nodes);
-        if (generation && generation.layersRef === layers) {
-            const hit = generation.map.get(id);
-            if (hit) return hit;
-        } else if (_absCache) {
-            generation = { layersRef: layers, map: new Map() };
-            _absCache.set(nodes, generation);
-        }
-
-        let x = 0, y = 0;
-        let current = nodes[id] || (layers && layers[id]);
-        const visited = new Set();
-        while (current && !visited.has(current.id)) {
-            visited.add(current.id);
-            x += current.position?.x || 0;
-            y += current.position?.y || 0;
-            const parentId = current.parentId;
-            if (!parentId || parentId === 'root') break;
-            if (nodes[parentId]) break; // граница уровня: выше подниматься нельзя
-            if (layers && layers[parentId]) {
-                current = layers[parentId];
-            } else {
-                break;
-            }
-        }
-
-        const result = { x, y };
-        if (generation) generation.map.set(id, result);
-        return result;
     },
 
     /**
@@ -325,166 +221,6 @@ const HierarchyUtils = {
     // Две похоже названные функции координат — та самая причина разъезжавшихся связей.
 
     /**
-     * Пересчёт абсолютной позиции в систему координат нового родителя.
-     * @param {Point} absPos
-     * @param {string} newParentId
-     * @param {Object<string, NodeEntity>} nodes
-     * @param {?Object<string, LayerEntity>} layers
-     * @returns {Point}
-     */
-    toRelativePosition: (absPos, newParentId, nodes, layers) => {
-        if (!newParentId || newParentId === 'root') return { x: absPos.x, y: absPos.y };
-        const parentAbs = HierarchyUtils.getLocalPosition(newParentId, nodes, layers);
-        return { x: absPos.x - parentAbs.x, y: absPos.y - parentAbs.y };
-    },
-
-    /**
-     * Ограничивающий прямоугольник прямых детей узла (узлы и слои)
-     * в системе координат родителя. null, если детей нет.
-     * @returns {?{minX:number,minY:number,maxX:number,maxY:number}}
-     */
-    getChildrenBBox: (parentId, nodes, layers) => {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        let found = false;
-
-        const extend = (entity, defW, defH) => {
-            if (!entity || entity.parentId !== parentId) return;
-            found = true;
-            const x = entity.position?.x || 0;
-            const y = entity.position?.y || 0;
-            minX = Math.min(minX, x);
-            minY = Math.min(minY, y);
-            maxX = Math.max(maxX, x + (entity.size?.w || defW));
-            maxY = Math.max(maxY, y + (entity.size?.h || defH));
-        };
-
-        Object.values(nodes || {}).forEach(n => extend(n, 200, 100));
-        Object.values(layers || {}).forEach(l => extend(l, 600, 400));
-
-        return found ? { minX, minY, maxX, maxY } : null;
-    },
-
-    /**
-     * Точный глобальный уровень вложенности (depth, 0-based) сущности графа.
-     * Узлы на Главном холсте, порты и связи на них — уровень 0.
-     * Элементы внутри контейнеров — уровень 1, 2 и т.д.
-     * @param {string} id
-     * @param {Object} nodes
-     * @param {Object} [layers]
-     * @param {Object} [ports]
-     * @param {Object} [links]
-     * @returns {number}
-     */
-    getEntityDepth: (id, nodes, layers = null, ports = null, links = null) => {
-        if (!id || id === 'root') return 0;
-        
-        const safeNodes = nodes || {};
-        const safeLayers = layers || {};
-        const safePorts = ports || {};
-        const safeLinks = Array.isArray(links) ? links.reduce((acc, l) => { if (l && l.id) acc[l.id] = l; return acc; }, {}) : (links || {});
-
-        // 1. Если это порт
-        if (safePorts[id]) {
-            const port = safePorts[id];
-            return HierarchyUtils.getEntityDepth(port.nodeId, safeNodes, safeLayers, safePorts, safeLinks);
-        }
-
-        // 2. Если это связь
-        if (safeLinks[id]) {
-            const link = safeLinks[id];
-            if (!link.context || link.context === 'root') return 0;
-            return HierarchyUtils.getEntityDepth(link.context, safeNodes, safeLayers, safePorts, safeLinks) + 1;
-        }
-
-        // 3. Если это слой
-        if (safeLayers[id]) {
-            const layer = safeLayers[id];
-            return HierarchyUtils.getEntityDepth(layer.parentId || 'root', safeNodes, safeLayers, safePorts, safeLinks);
-        }
-
-        // 4. Если это узел
-        if (safeNodes[id]) {
-            let depth = 0;
-            let pId = safeNodes[id].parentId;
-            const visited = new Set([id]);
-            while (pId && pId !== 'root' && !visited.has(pId)) {
-                visited.add(pId);
-                if (safeLayers[pId]) {
-                    pId = safeLayers[pId].parentId;
-                } else if (safeNodes[pId]) {
-                    depth++;
-                    pId = safeNodes[pId].parentId;
-                } else {
-                    break;
-                }
-            }
-            return depth;
-        }
-
-        return 0;
-    },
-
-    /**
-     * Является ли candidateId потомком (или самим) ancestorId по цепочке parentId.
-     * Защита от циклов при перевложении.
-     */
-    isDescendantOf: (candidateId, ancestorId, nodes, layers) => {
-        if (candidateId === ancestorId) return true;
-        let current = (nodes && nodes[candidateId]) || (layers && layers[candidateId]);
-        const visited = new Set();
-        while (current && !visited.has(current.id)) {
-            visited.add(current.id);
-            if (current.parentId === ancestorId) return true;
-            current = (nodes && nodes[current.parentId]) || (layers && layers[current.parentId]) || null;
-        }
-        return false;
-    },
-
-    // Прямые дети узла/контекста: узлы, слои и связи, у которых оба конца внутри
-    getChildrenStats: (nodes, layers, ports, links, parentId) => {
-        let nodeCount = 0;
-        let layerCount = 0;
-        const childNodeIds = new Set();
-
-        // Родство считается по ownerId (узел-владелец на предыдущем уровне),
-        // а для слоя-контейнера — по parentId. Иначе бейдж папки молча покажет 0.
-        const isChild = (e) => e && (e.ownerId === parentId || (!e.ownerId && e.parentId === parentId));
-
-        Object.values(nodes || {}).forEach(n => {
-            if (isChild(n)) {
-                nodeCount++;
-                childNodeIds.add(n.id);
-            }
-        });
-
-        Object.values(layers || {}).forEach(l => {
-            if (isChild(l)) layerCount++;
-        });
-
-        let linkCount = 0;
-        const linkList = Array.isArray(links) ? links : Object.values(links || {});
-        linkList.forEach(l => {
-            if (!l) return;
-            const sourcePort = ports[l.sourcePortId];
-            const targetPort = ports[l.targetPortId];
-            if (sourcePort && targetPort && childNodeIds.has(sourcePort.nodeId) && childNodeIds.has(targetPort.nodeId)) {
-                linkCount++;
-            }
-        });
-
-        return { nodeCount, layerCount, linkCount, total: nodeCount + layerCount };
-    },
-
-    /**
-     * Точный уровень глубины узла или слоя (0 для root, 1 для детей root, 2 для внуков и т.д.)
-     * @param {string} id
-     * @param {Object<string, NodeEntity>} nodes
-     * @param {?Object<string, LayerEntity>} [layers]
-     * @returns {number}
-     */
-    getEntityLevel: (id, nodes, layers = null, levelWindows = null) => HierarchyUtils.getLevel(id, nodes, layers, levelWindows),
-
-    /**
      * Максимальный уровень глубины сущностей в текущем проекте.
      * @param {Object<string, NodeEntity>} nodes
      * @param {?Object<string, LayerEntity>} [layers]
@@ -493,338 +229,10 @@ const HierarchyUtils = {
     getMaxProjectLevel: (nodes, layers = null) => {
         let maxLvl = 0;
         Object.keys(nodes || {}).forEach(id => {
-            const lvl = HierarchyUtils.getEntityLevel(id, nodes, layers);
+            const lvl = HierarchyUtils.getLevel(id, nodes, layers);
             if (lvl > maxLvl) maxLvl = lvl;
         });
         return maxLvl;
-    },
-
-    /**
-     * Нормализация значения фокуса ветки: исторически levelFocusParentId
-     * хранил одиночный id (строку), теперь — массив id (мульти-выделение).
-     * @param {string|Array<string>|null|undefined} value
-     * @returns {Array<string>}
-     */
-    toFocusList: (value) => {
-        if (Array.isArray(value)) return value.filter(Boolean);
-        return value ? [value] : [];
-    },
-
-    /**
-     * Владелец ветки сущности на её уровне: собственный ownerId, либо владелец
-     * содержащего слоя (вложенность в слои не меняет ветку), либо легаси-родитель.
-     * @param {string} id
-     * @param {Object<string, NodeEntity>} nodes
-     * @param {?Object<string, LayerEntity>} [layers]
-     * @returns {?string}
-     */
-    getBranchOwner: (id, nodes, layers = null) => {
-        const safeNodes = nodes || {};
-        const safeLayers = layers || {};
-        let current = safeNodes[id] || safeLayers[id];
-        const visited = new Set();
-        while (current && !visited.has(current.id)) {
-            visited.add(current.id);
-            if (current.ownerId) return current.ownerId;
-            const pid = current.parentId;
-            if (pid && pid !== 'root' && safeLayers[pid]) { current = safeLayers[pid]; continue; }
-            if (pid && pid !== 'root' && safeNodes[pid]) return pid; // легаси parentId-родство
-            return null;
-        }
-        return null;
-    },
-
-    /**
-     * Проходит ли цепочка предков сущности (владельцы + содержащие слои)
-     * через хотя бы один id из набора.
-     * @param {string} id
-     * @param {Array<string>} ancestorIds
-     * @param {Object<string, NodeEntity>} nodes
-     * @param {?Object<string, LayerEntity>} [layers]
-     * @returns {boolean}
-     */
-    hasAncestorIn: (id, ancestorIds, nodes, layers = null) => {
-        const set = HierarchyUtils.toFocusList(ancestorIds);
-        if (set.length === 0) return false;
-        const safeNodes = nodes || {};
-        const safeLayers = layers || {};
-        let current = safeNodes[id] || safeLayers[id];
-        const visited = new Set();
-        while (current && !visited.has(current.id)) {
-            visited.add(current.id);
-            const pid = current.parentId;
-            let nextId = null;
-            if (pid && pid !== 'root' && safeLayers[pid]) nextId = pid;                    // слой-контейнер
-            else if (pid && pid !== 'root' && safeNodes[pid] && !current.ownerId) nextId = pid; // легаси
-            else if (current.ownerId) nextId = current.ownerId;
-            if (!nextId) return false;
-            if (set.includes(nextId)) return true;
-            current = safeNodes[nextId] || safeLayers[nextId];
-        }
-        return false;
-    },
-
-    /**
-     * Проходит ли цепочка КООРДИНАТНЫХ КОНТЕЙНЕРОВ сущности (только `parentId`,
-     * через слои) через хотя бы один id из набора. В отличие от `hasAncestorIn`,
-     * НЕ поднимается по `ownerId` — межуровневое родство (владение) для этой
-     * проверки не считается «содержанием» (Plan_fix.md: баг — при перетаскивании
-     * узла его ownerId-потомок на другом уровне ошибочно материализовался в
-     * нескливаемом drag-оверлее `Canvas.js`, потому что `hasAncestorIn` посчитал
-     * его «предком через `ancestorIds`» и по ownerId-цепочке тоже).
-     * Использовать там, где важно только фактическое визуальное вложение через
-     * `parentId` (drag-оверлей, «не двигать дважды» при групповом перетаскивании) —
-     * НЕ для фильтрации «только верхних» при массовом переносе/выделении, где
-     * ownerId-родство обязано учитываться (там по-прежнему `hasAncestorIn`).
-     * @param {string} id
-     * @param {string|Array<string>} containerIds
-     * @param {Object<string, NodeEntity>} nodes
-     * @param {?Object<string, LayerEntity>} [layers]
-     * @returns {boolean}
-     */
-    hasContainerAncestorIn: (id, containerIds, nodes, layers = null) => {
-        const set = HierarchyUtils.toFocusList(containerIds);
-        if (set.length === 0) return false;
-        const safeNodes = nodes || {};
-        const safeLayers = layers || {};
-        let current = safeNodes[id] || safeLayers[id];
-        const visited = new Set();
-        while (current && current.parentId && current.parentId !== 'root' && !visited.has(current.parentId)) {
-            if (set.includes(current.parentId)) return true;
-            visited.add(current.parentId);
-            // safeNodes тоже проверяем: легаси-проекты (миграция v9→v10, до появления
-            // ownerId) могут иметь parentId, указывающий на узел, а не только на слой.
-            current = safeNodes[current.parentId] || safeLayers[current.parentId] || null;
-        }
-        return false;
-    },
-
-    /**
-     * v13: может ли entityId получить `parentId = targetParentId`. Заменила
-     * `canTransferToLayer` (удалена — TRANSFER_NODE физически убран из
-     * редьюсера, все места диспатча переведены на REPARENT_ENTITY) во всех
-     * живых местах: `getDropTarget`, `ContextActionBar.js`, `OutlinerTree.js`.
-     *
-     * В отличие от v11-версии здесь нет ни отдельного «спуска в собственную
-     * ветку» (цикл просто отклоняется целиком, reason: 'cycle'), ни проверки
-     * «слой чужого уровня»: при едином `parentId` вторая, конфликтующая
-     * система координат (`ownerId`) просто не существует, поэтому вложение
-     * в любой контейнер валидно, пока не образует цикл.
-     *
-     * @param {string} entityId
-     * @param {string} targetParentId `'root'`, id слоя, id узла или id окна уровня
-     * @param {Object<string, NodeEntity>} nodes словари ЦЕЛИ (куда переносим)
-     * @param {?Object<string, LayerEntity>} [layers]
-     * @param {?Object<string, Object>} [levelWindows]
-     * @param {?{nodes: Object, layers: Object}} [entityDicts] словари САМОЙ
-     *   сущности, если отличаются от целевых (Фаза 6.3, кросс-проектный
-     *   перенос — entityId и targetParentId живут в РАЗНЫХ проектах). Без
-     *   аргумента (внутрипроектный вызов) — та же пара nodes/layers.
-     * @returns {{ ok: boolean, reason: ?string }}
-     */
-    canReparentTo: (entityId, targetParentId, nodes, layers = null, levelWindows = null, entityDicts = null) => {
-        const safeNodes = nodes || {};
-        const safeLayers = layers || {};
-        const safeWindows = levelWindows || {};
-        const eNodes = (entityDicts && entityDicts.nodes) || safeNodes;
-        const eLayers = (entityDicts && entityDicts.layers) || safeLayers;
-        const entity = eNodes[entityId] || eLayers[entityId];
-        if (!entity) return { ok: false, reason: 'not-found' };
-        if (entityId === targetParentId) return { ok: false, reason: 'self' };
-        if (targetParentId !== 'root' && !safeLayers[targetParentId]
-            && !safeNodes[targetParentId] && !safeWindows[targetParentId]) {
-            return { ok: false, reason: 'not-found' };
-        }
-        // Кросс-проектный вызов (entityDicts задан и реально отличается от
-        // целевых словарей): цикл геометрически невозможен — сущность и цель
-        // живут в РАЗНЫХ, никак не связанных деревьях.
-        if (eNodes === safeNodes && eLayers === safeLayers
-            && HierarchyUtils.isDescendantOf(targetParentId, entityId, safeNodes, safeLayers)) {
-            return { ok: false, reason: 'cycle' };
-        }
-        return { ok: true, reason: null };
-    },
-
-    /**
-     * Контекст создания нового узла/слоя кнопкой «+» панели инструментов.
-     *
-     * Возвращает { ok, parentId, levelIndex, reason }:
-     *   ok:false, reason:'multi-select'      — выделено несколько узлов/слоёв,
-     *                                          цель неоднозначна, кнопки недоступны;
-     *   ok:false, reason:'ambiguous-branch'  — выделения нет, а фокус-набор уровня
-     *                                          содержит несколько владельцев (видно
-     *                                          несколько веток) — нужно выделить узел;
-     *   ok:true                              — parentId/levelIndex определены:
-     *     • выделен один узел  → его БРАТ (владелец — ownerId узла);
-     *     • выделен один слой  → внутрь слоя;
-     *     • выделено окно / активен уровень → единственный фокус-владелец ветки,
-     *       иначе первый родитель уровнем выше, иначе root.
-     *
-     * @param {Object} state
-     * @returns {{ ok: boolean, parentId: ?string, levelIndex: ?number, reason: ?string }}
-     */
-    getAddContext: (state) => {
-        const nodes = (state && state.nodes) || {};
-        const layers = (state && state.layers) || {};
-        const selectedIds = (state && state.selectedIds) || [];
-
-        // Массовое выделение сущностей — цель неоднозначна
-        const selEntities = selectedIds.filter(id => nodes[id] || layers[id]);
-        if (selEntities.length > 1) {
-            return { ok: false, parentId: null, levelIndex: null, reason: 'multi-select' };
-        }
-
-        const focusOwners = (levelIndex) => HierarchyUtils
-            .toFocusList(state.levelFocusParentId && state.levelFocusParentId[levelIndex])
-            .filter(fid => nodes[fid]);
-
-        const byLevelContext = (levelIndex) => {
-            if (levelIndex === 0) return { ok: true, parentId: 'root', levelIndex: 0, reason: null };
-            const owners = focusOwners(levelIndex);
-            if (owners.length === 1) return { ok: true, parentId: owners[0], levelIndex, reason: null };
-            if (owners.length > 1) return { ok: false, parentId: null, levelIndex, reason: 'ambiguous-branch' };
-            // Фокусной ветки нет: создаётся ЧЕСТНЫЙ СИРОТА-ЯКОРЬ на этом уровне
-            // (homeLevel), а не тайное усыновление случайным узлом уровня выше.
-            // Такой узел — глава независимой ветки: его дети лягут на уровень ниже.
-            return { ok: true, parentId: 'root', levelIndex, reason: null, anchorLevel: levelIndex };
-        };
-
-        const selectedId = selectedIds[0];
-
-        // 1. Выделено окно уровня (level-window-K)
-        if (selectedId && typeof selectedId === 'string' && selectedId.startsWith('level-window-')) {
-            const levelIndex = parseInt(selectedId.replace('level-window-', ''), 10);
-            if (Number.isNaN(levelIndex)) return { ok: true, parentId: 'root', levelIndex: 0, reason: null };
-            return byLevelContext(levelIndex);
-        }
-
-        // 2. Выделен один слой — новый элемент внутрь слоя
-        if (selEntities.length === 1 && layers[selEntities[0]]) {
-            const layer = layers[selEntities[0]];
-            return {
-                ok: true,
-                parentId: layer.id,
-                levelIndex: HierarchyUtils.getEntityLevel(layer.id, nodes, layers),
-                reason: null
-            };
-        }
-
-        // 3. Выделен один узел — новый элемент становится его БРАТОМ
-        //    (v11: parentId узла — координатный контейнер, родство в ownerId).
-        //    Если узел связан с владельцем через поколение (ownerGap > 1),
-        //    брат наследует ту же дистанцию — иначе он «всплыл» бы на уровень выше.
-        if (selEntities.length === 1 && nodes[selEntities[0]]) {
-            const node = nodes[selEntities[0]];
-            const lvl = HierarchyUtils.getEntityLevel(node.id, nodes, layers);
-            const brotherParent = node.ownerId
-                || (node.parentId && node.parentId !== 'root' ? node.parentId : 'root');
-            const gap = node.ownerId ? HierarchyUtils.getOwnerGap(node) : 1;
-            return {
-                ok: true,
-                parentId: brotherParent,
-                levelIndex: lvl,
-                reason: null,
-                ...(gap > 1 ? { ownerGap: gap } : {})
-            };
-        }
-
-        // 4. Нет выделения — активный уровень (последний клик в окно)
-        return byLevelContext((state && state.activeLevelIndex) || 0);
-    },
-
-    /**
-     * Видимость сущности с учётом изоляции веток («глаз»).
-     *
-     * ПРИОРИТЕТ: глаз Главного холста (уровень 0) — глобальный. Пока он включён
-     * и есть фокус-корни, он ИГНОРИРУЕТ локальные настройки уровней: на всех
-     * уровнях видны только сами фокус-корни и их потомки (вся ветка вглубь).
-     * Когда глобальный глаз выключен, каждый уровень применяет свой локальный
-     * глаз: видны только сущности, чей владелец ветки входит в фокус-набор
-     * уровня. Пустой фокус-набор при включённом глазе показывает всё
-     * (глаз «ждёт» первого выделения).
-     *
-     * @param {string} id
-     * @param {Object} state
-     * @returns {boolean}
-     */
-    isEntityVisible: (id, state) => {
-        if (!state) return true;
-        const nodes = state.nodes || {};
-        const layers = state.layers || {};
-        if (!nodes[id] && !layers[id]) return false;
-        const hide = state.levelHideNeighbors || {};
-        const focus = state.levelFocusParentId || {};
-
-        // 1. Глобальный глаз Главного холста
-        if (hide[0]) {
-            const roots = HierarchyUtils.toFocusList(focus[0]).filter(fid => nodes[fid] || layers[fid]);
-            if (roots.length > 0) {
-                if (roots.includes(id)) return true;
-                return HierarchyUtils.hasAncestorIn(id, roots, nodes, layers);
-            }
-        }
-
-        // 2. Локальный глаз уровня сущности (на уровне 0 локальной изоляции нет)
-        const lvl = HierarchyUtils.getEntityLevel(id, nodes, layers);
-        if (lvl === 0) return true;
-        if (!hide[lvl]) return true;
-        const owners = HierarchyUtils.toFocusList(focus[lvl]).filter(fid => nodes[fid] || layers[fid]);
-        if (owners.length === 0) return true;
-        if (owners.includes(id)) return true; // сам фокус-владелец (если он на этом уровне)
-        const branchOwner = HierarchyUtils.getBranchOwner(id, nodes, layers);
-        return branchOwner !== null && owners.includes(branchOwner);
-    },
-
-    /**
-     * Получить информацию о межуровневых связях для конкретного порта.
-     * @param {string} portId
-     * @param {Object} ports
-     * @param {Object} links
-     * @param {Object} nodes
-     * @param {Object} [layers]
-     * @returns {{ isCrossLevel: boolean, maxConnectedLevel: number, targetLevels: number[], connectionCount: number }}
-     */
-    getCrossLevelPortInfo: (portId, ports, links, nodes, layers = null) => {
-        const port = ports && ports[portId];
-        if (!port || !port.nodeId) return { isCrossLevel: false, maxConnectedLevel: 0, targetLevels: [], connectionCount: 0 };
-        
-        const myLevel = HierarchyUtils.getEntityLevel(port.nodeId, nodes, layers);
-        // Перебираем ТОЛЬКО связи этого порта. Прежний полный проход по всем
-        // связям проекта вызывался для каждого порта на каждый кадр и давал
-        // O(порты × связи): на сцене в 2000 узлов это 2.3 секунды на кадр.
-        // Индекс кэшируется по ссылке на словарь links, то есть строится один
-        // раз на поколение состояния.
-        const linkList = Array.isArray(links)
-            ? links.filter(l => l && (l.sourcePortId === portId || l.targetPortId === portId))
-            : (HierarchyUtils.getLinksByPortId(links)[portId] || []);
-
-        const targetLevels = [];
-        let maxConnectedLevel = 0;
-        let isCrossLevel = false;
-
-        linkList.forEach(l => {
-            if (!l) return;
-            let otherPortId = null;
-            if (l.sourcePortId === portId) otherPortId = l.targetPortId;
-            else if (l.targetPortId === portId) otherPortId = l.sourcePortId;
-
-            if (otherPortId && ports[otherPortId]) {
-                const otherNodeId = ports[otherPortId].nodeId;
-                const otherLevel = HierarchyUtils.getEntityLevel(otherNodeId, nodes, layers);
-                if (otherLevel !== myLevel) {
-                    isCrossLevel = true;
-                    targetLevels.push(otherLevel);
-                    if (otherLevel > maxConnectedLevel) maxConnectedLevel = otherLevel;
-                }
-            }
-        });
-
-        return {
-            isCrossLevel,
-            maxConnectedLevel,
-            targetLevels,
-            connectionCount: targetLevels.length
-        };
     },
 
     /**
@@ -868,910 +276,14 @@ const HierarchyUtils = {
     },
 
     /**
-     * Расчет бесконфликтных координат для НЕЗАВИСИМОГО слоя на холсте уровня
-     * (кнопка «независимый слой»: без выделения — parentId:'root'). Новый слой
-     * ставится строго ниже уже существующих слоёв СВОЕГО уровня и своего же
-     * координатного контейнера root (вложенные слои в расчёт не берутся —
-     * PLAN_LAYERS_AND_CONTEXT_CREATION.md, п.1), с отступом коллизии (шаг сетки,
-     * см. `LAYER_GRID_STEP`), чтобы `resolveLayerCollision` не сдвинул его
-     * повторно сразу после создания.
-     * @param {number} levelIndex
-     * @param {Object} state
-     * @returns {{ x: number, y: number }}
-     */
-    getSmartLayerPlacement: (levelIndex, state) => {
-        const nodes = (state && state.nodes) || {};
-        const layers = (state && state.layers) || {};
-        const step = HierarchyUtils.LAYER_GRID_STEP || 30;
-        const rootLayers = Object.values(layers).filter(l => l
-            && (l.parentId || 'root') === 'root'
-            && HierarchyUtils.getEntityLevel(l.id, nodes, layers) === levelIndex);
-
-        if (rootLayers.length === 0) {
-            return { x: 40, y: 60 };
-        }
-
-        let maxY = -Infinity;
-        rootLayers.forEach(l => {
-            const bottom = (l.position?.y || 0) + (l.size?.h || 400);
-            if (bottom > maxY) maxY = bottom;
-        });
-
-        const rawY = maxY + 10;
-        // Округление ВВЕРХ до ближайшего шага сетки: ADD_LAYER всегда снапает
-        // (snapToGrid:true) — без округления снап после вычисления может
-        // свести зазор к нулю и тут же спровоцировать resolveLayerCollision.
-        const snappedY = Math.ceil(rawY / step) * step;
-        return { x: 40, y: Math.max(snappedY, rawY) };
-    },
-
-    /**
-     * Каскадное обновление размеров цепочки родительских слоёв «снизу вверх»:
-     * когда сущность (узел или слой) оказывается внутри слоя-контейнера (после
-     * вложения/переноса), родитель должен подрасти, чтобы вместить её по
-     * bounding-box содержимого (узлы И вложенные слои), и так же — его
-     * собственный родитель, и так далее до корня.
-     *
-     * Чистая функция: возвращает словарь ОБНОВЛЕНИЙ размеров `{ [layerId]: {w,h} }`
-     * — вызывающий код (редьюсер) сам применяет их к `state.layers`, чтобы весь
-     * жест остался одной записью истории.
-     *
-     * @param {string} movedEntityId id сущности, которая только что оказалась
-     *   внутри нового родителя (её parentId уже обновлён к моменту вызова)
-     * @param {Object} state
-     * @returns {Object<string, {w:number,h:number}>}
-     */
-    bubbleUpLayerResize: (movedEntityId, state) => {
-        const nodes = (state && state.nodes) || {};
-        const layers = (state && state.layers) || {};
-        const updates = {};
-        // Локальная проекция слоёв с уже применёнными по ходу апдейтами —
-        // цепочка бабблинга должна видеть подросшего непосредственного ребёнка.
-        const applied = { ...layers };
-        const padding = 20;
-
-        let currentId = movedEntityId;
-        const visited = new Set();
-        for (let i = 0; i < 64; i++) {
-            const child = applied[currentId] || nodes[currentId];
-            if (!child || visited.has(currentId)) break;
-            visited.add(currentId);
-
-            const parentId = child.parentId;
-            if (!parentId || parentId === 'root') break;
-            const parentLayer = applied[parentId];
-            if (!parentLayer) break;
-
-            let maxR = 0, maxB = 0, any = false;
-            Object.values(nodes).forEach(n => {
-                if (n && n.parentId === parentId) {
-                    any = true;
-                    maxR = Math.max(maxR, (n.position?.x || 0) + (n.size?.w || 200));
-                    maxB = Math.max(maxB, (n.position?.y || 0) + (n.size?.h || 100));
-                }
-            });
-            Object.values(applied).forEach(l => {
-                if (l && l.id !== parentId && l.parentId === parentId) {
-                    any = true;
-                    maxR = Math.max(maxR, (l.position?.x || 0) + (l.size?.w || 600));
-                    maxB = Math.max(maxB, (l.position?.y || 0) + (l.size?.h || 400));
-                }
-            });
-            if (!any) break;
-
-            const headerH = Math.max(90, (parentLayer.fontSize ? Math.round(parentLayer.fontSize * 2.5 + 45) : 90));
-            const curW = parentLayer.size?.w || 600;
-            const curH = parentLayer.size?.h || 400;
-            const fitW = Math.max(300, maxR + padding);
-            const fitH = Math.max(headerH + 100, maxB + padding);
-            const newW = Math.max(curW, fitW);
-            const newH = Math.max(curH, fitH);
-
-            if (newW !== curW || newH !== curH) {
-                const size = { w: newW, h: newH };
-                updates[parentId] = size;
-                applied[parentId] = { ...parentLayer, size };
-            }
-            currentId = parentId;
-        }
-
-        return updates;
-    },
-
-    /**
-     * Расчет расположения нового окна уровня в мировом пространстве.
-     * @param {number} levelIndex
-     * @param {Object<number, LevelWindowEntity>} existingLevelWindows
-     * @returns {{ position: { x: number, y: number }, size: { w: number, h: number } }}
-     */
-    getSmartWindowPlacement: (levelIndex, existingLevelWindows = {}) => {
-        const prevWin = existingLevelWindows[levelIndex - 1];
-        if (prevWin && prevWin.position && prevWin.size) {
-            return {
-                position: {
-                    x: prevWin.position.x,
-                    y: prevWin.position.y + prevWin.size.h + 100
-                },
-                size: {
-                    w: prevWin.size.w || 900,
-                    h: prevWin.size.h || 600
-                }
-            };
-        }
-        return {
-            position: { x: -450, y: -300 + levelIndex * 700 },
-            size: { w: 900, h: 600 }
-        };
-    },
-
-    /**
-     * Окно, обслуживающее указанный уровень. Ключ словаря — стабильный id окна,
-     * номер уровня хранится в поле levelIndex, поэтому перенумерация уровней
-     * не переписывает ключи и не рвёт выделение, историю и ссылки на порты.
-     * @param {number} levelIndex
-     * @param {Object<string, LevelWindowEntity>} levelWindows
-     * @returns {?LevelWindowEntity}
-     */
-    getWindowOfLevel: (levelIndex, levelWindows) => {
-        if (!levelWindows) return null;
-        const found = Object.values(levelWindows).find(w => w && w.levelIndex === levelIndex);
-        if (found) return found;
-        // ЛЕГАСИ: словарь ещё ключуется номером уровня
-        return levelWindows[levelIndex] || null;
-    },
-
-    /**
-     * Камера окна (панорама, зум, свёрнутость). Живёт в state.levelViews вне
-     * снапшотов истории — как state.canvas, чтобы Undo не дёргал точку обзора.
-     * @param {string} windowId
-     * @param {Object} state
-     * @returns {{ innerOffset: Point, innerZoom: number, isCollapsed: boolean }}
-     */
-    getLevelView: (windowId, state) => {
-        const fallback = { innerOffset: { x: 0, y: 0 }, innerZoom: 1, isCollapsed: false };
-        if (!windowId || !state) return fallback;
-        const view = state.levelViews && state.levelViews[windowId];
-        if (view) {
-            return {
-                innerOffset: view.innerOffset || { x: 0, y: 0 },
-                innerZoom: view.innerZoom || 1,
-                isCollapsed: !!view.isCollapsed
-            };
-        }
-        // ЛЕГАСИ: камера ещё лежит внутри записи окна
-        const win = state.levelWindows && state.levelWindows[windowId];
-        if (win) {
-            return {
-                innerOffset: win.innerOffset || { x: 0, y: 0 },
-                innerZoom: win.innerZoom || 1,
-                isCollapsed: !!win.isCollapsed
-            };
-        }
-        return fallback;
-    },
-
-    /**
-     * ЕДИНСТВЕННОЕ координатное ядро: мировая позиция и масштаб сущности.
-     * Порядок слагаемых буквально повторяет DOM окна уровня:
-     *   рамка (border-box) -> шапка -> transform: translate(innerOffset) scale(innerZoom)
-     * Любое расхождение здесь мгновенно разъезжается в концах связей.
-     * @param {string} id
-     * @param {Object} state
-     * @returns {{ x: number, y: number, scale: number }}
-     */
-    getWorldTransform: (id, state) => {
-        if (!id || !state) return { x: 0, y: 0, scale: 1.0 };
-        const nodes = state.nodes || {};
-        const layers = state.layers || {};
-
-        const local = HierarchyUtils.getLocalPosition(id, nodes, layers);
-        const level = HierarchyUtils.getLevel(id, nodes, layers);
-        const win = HierarchyUtils.getWindowOfLevel(level, state.levelWindows);
-
-        if (!win) return { x: local.x, y: local.y, scale: 1.0 };
-
-        const view = HierarchyUtils.getLevelView(win.id != null ? win.id : String(level), state);
-        const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
-        const winX = win.position?.x || 0;
-        const winY = win.position?.y || 0;
-
-        return {
-            x: winX + borderW + view.innerOffset.x + local.x * view.innerZoom,
-            y: winY + borderW + headerH + view.innerOffset.y + local.y * view.innerZoom,
-            scale: view.innerZoom
-        };
-    },
-
-    /**
-     * Мировые габариты узла с учётом внутреннего масштаба его окна.
-     * @param {string} nodeId
-     * @param {Object} state
-     * @returns {?{ x: number, y: number, w: number, h: number }}
-     */
-    getNodeWorldBounds: (nodeId, state) => {
-        if (!state || !state.nodes || !state.nodes[nodeId]) return null;
-        const node = state.nodes[nodeId];
-        const t = HierarchyUtils.getWorldTransform(nodeId, state);
-        return {
-            x: t.x,
-            y: t.y,
-            w: (node.size?.w || 200) * t.scale,
-            h: (node.size?.h || 100) * t.scale
-        };
-    },
-
-    /**
-     * Мировые габариты слоя (аналог getNodeWorldBounds для слоёв).
-     * @param {string} layerId
-     * @param {Object} state
-     * @returns {?{ x: number, y: number, w: number, h: number }}
-     */
-    getLayerWorldBounds: (layerId, state) => {
-        if (!state || !state.layers || !state.layers[layerId]) return null;
-        const layer = state.layers[layerId];
-        const t = HierarchyUtils.getWorldTransform(layerId, state);
-        return {
-            x: t.x,
-            y: t.y,
-            w: (layer.size?.w || 600) * t.scale,
-            h: (layer.size?.h || 400) * t.scale
-        };
-    },
-
-    /**
-     * Мировые габариты узла ИЛИ слоя.
-     * @param {string} id
-     * @param {Object} state
-     * @returns {?{ x: number, y: number, w: number, h: number }}
-     */
-    getEntityWorldBounds: (id, state) => {
-        if (state && state.nodes && state.nodes[id]) return HierarchyUtils.getNodeWorldBounds(id, state);
-        if (state && state.layers && state.layers[id]) return HierarchyUtils.getLayerWorldBounds(id, state);
-        return null;
-    },
-
-    /**
-     * РЕЗОЛВЕР ЦЕЛИ Drag&Drop: что под перетаскиваемыми элементами и валидна ли цель.
-     *
-     * Правила (см. PLAN_DRAG_AND_DROP.md):
-     * - узлы и слои-приёмники срабатывают при ПЕРЕСЕЧЕНИИ КОНТУРОВ с перетаскиваемым
-     *   элементом; окно уровня — при попадании УКАЗАТЕЛЯ внутрь его рамки;
-     * - приоритет: узел → слой → окно; из двух узлов-приёмников берётся тот, что под
-     *   указателем, иначе с наибольшей площадью пересечения;
-     * - сами перетаскиваемые элементы и все их потомки исключаются (защита от циклов);
-     * - свёрнутые окна не принимают дроп;
-     * - dragDropMode=false: доступна только группировка в слои СВОЕГО уровня и
-     *   перемещение по своему окну; всё межуровневое и вложения — invalid ('dnd-off');
-     * - слои в роли переносимых, ОДИНОЧНО: валидируются ТЕМ ЖЕ путём, что и узлы
-     *   (`canReparentTo`/`isDescendantOf`) — узел/слой/окно как цель, любой
-     *   контейнер валиден, пока не образует цикл (v13, docs/IDEAL_INTERACTIONS.md §2);
-     * - массовый/смешанный перенос слоя(ёв) вместе с чем-то ещё (`dragged.length > 1`
-     *   и хотя бы один — слой) — всё ещё invalid ('layer-transfer-later'): это
-     *   этап 4 плана (пока не реализован).
-     *
-     * @param {Array<string>} draggedIds выделенные «верхние» переносимые id
-     * @param {Point} pointerWorld указатель мыши в мировых координатах
-     * @param {Object} state словари ЦЕЛИ — где ищутся кандидаты дропа
-     * @param {{dragDropMode?: boolean}} [opts]
-     * @param {?Object} [sourceState] словари переносимых сущностей, если
-     *   отличаются от `state` (Фаза 6.3, кросс-проектный перенос —
-     *   перетаскиваемые узлы физически лежат в ДРУГОМ проекте, чем то окно,
-     *   над которым сейчас курсор). Без аргумента (внутрипроектный вызов,
-     *   как раньше) — совпадает с `state`.
-     * @returns {?{ kind: 'node'|'layer'|'window', id: string, valid: boolean, reason: ?string, isMove?: boolean, descend?: boolean }}
-     */
-    getDropTarget: (draggedIds, pointerWorld, state, opts = {}, sourceState = null) => {
-        if (!state || !draggedIds || draggedIds.length === 0 || !pointerWorld) return null;
-        const dragDropMode = opts.dragDropMode !== false;
-        const srcState = sourceState || state;
-        const srcNodes = srcState.nodes || {};
-        const srcLayers = srcState.layers || {};
-        const nodes = state.nodes || {};
-        const layers = state.layers || {};
-
-        const dragged = draggedIds.filter(id => srcNodes[id] || srcLayers[id]);
-        if (dragged.length === 0) return null;
-        // Массовый/смешанный перенос слоя(ёв) вместе с чем-то ещё — этап 4
-        // PLAN_DRAG_AND_DROP.md, вне объёма (реализован только перенос ОДНОГО
-        // «верхнего» слоя — PLAN_LAYERS_AND_CONTEXT_CREATION.md, 2026-08-30).
-        const unsupportedMixedLayer = dragged.length > 1 && dragged.some(id => !!srcLayers[id]);
-        const draggedLevels = dragged.map(id => HierarchyUtils.getEntityLevel(id, srcNodes, srcLayers, srcState.levelWindows));
-
-        // Исключаются сами переносимые и их потомки: по владению/слоям
-        // (hasAncestorIn) и по координатным контейнерам (isDescendantOf).
-        // Проверяется в словарях ЦЕЛИ (id — кандидат ИЗ state), но кросс-
-        // проектные dragged-id там попросту не встречаются — natural no-op.
-        const isExcluded = (id) => dragged.includes(id)
-            || HierarchyUtils.hasAncestorIn(id, dragged, nodes, layers)
-            || dragged.some(d => HierarchyUtils.isDescendantOf(id, d, nodes, layers));
-
-        const dragRects = dragged.map(id => HierarchyUtils.getEntityWorldBounds(id, srcState)).filter(Boolean);
-        if (dragRects.length === 0) return null;
-
-        const intersects = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-        const overlap = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x))
-            * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-        const containsPt = (b) => pointerWorld.x >= b.x && pointerWorld.x <= b.x + b.w
-            && pointerWorld.y >= b.y && pointerWorld.y <= b.y + b.h;
-
-        // Лучший кандидат словаря: контур пересекается с любым переносимым;
-        // предпочтение — под указателем, затем наибольшее суммарное пересечение
-        const pickBest = (dict) => {
-            let best = null, bestPt = false, bestArea = 0;
-            Object.keys(dict).forEach(id => {
-                if (!dict[id] || isExcluded(id)) return;
-                const b = HierarchyUtils.getEntityWorldBounds(id, state);
-                if (!b) return;
-                let area = 0;
-                dragRects.forEach(r => { if (intersects(r, b)) area += overlap(r, b); });
-                if (area <= 0) return;
-                const pt = containsPt(b);
-                if (!best || (pt && !bestPt) || (pt === bestPt && area > bestArea)) {
-                    best = id; bestPt = pt; bestArea = area;
-                }
-            });
-            return best;
-        };
-
-        // 1. Узел-приёмник (вложение: переносимые станут его детьми)
-        const nodeTarget = pickBest(nodes);
-        if (nodeTarget) {
-            const make = (valid, reason) => ({ kind: /** @type {'node'} */ ('node'), id: nodeTarget, valid, reason: reason || null });
-            if (unsupportedMixedLayer) return make(false, 'layer-transfer-later');
-            if (!dragDropMode) return make(false, 'dnd-off');
-            // Все переносимые уже прямые дети этой цели — переносить нечего.
-            // v13-сущность: parentId указывает на узел напрямую. Ещё не
-            // мигрированная v11-сущность: ownerId (с gap===1, «через поколение»
-            // не считается «уже там»).
-            const allChildren = dragged.every(id => {
-                const e = srcNodes[id] || srcLayers[id];
-                return e.ownerId
-                    ? (e.ownerId === nodeTarget && HierarchyUtils.getOwnerGap(e) === 1)
-                    : e.parentId === nodeTarget;
-            });
-            if (allChildren) return make(false, 'same-parent');
-            return make(true, null);
-        }
-
-        // 2. Слой-приёмник
-        const layerTarget = pickBest(layers);
-        if (layerTarget) {
-            const make = (valid, reason) => ({ kind: /** @type {'layer'} */ ('layer'), id: layerTarget, valid, reason: reason || null });
-            if (unsupportedMixedLayer) return make(false, 'layer-transfer-later');
-            const layerLevel = HierarchyUtils.getEntityLevel(layerTarget, nodes, layers, state.levelWindows);
-            const crossLevel = draggedLevels.some(lvl => lvl !== layerLevel);
-            if (!dragDropMode && crossLevel) return make(false, 'dnd-off');
-            if (dragged.every(id => (srcNodes[id] || srcLayers[id])?.parentId === layerTarget)) return make(false, 'same-parent');
-            // v13: нет отдельного «спуска в собственную ветку» — canReparentTo
-            // либо разрешает вложение, либо отклоняет цикл целиком (self/cycle).
-            for (const id of dragged) {
-                const verdict = HierarchyUtils.canReparentTo(id, layerTarget, nodes, layers, state.levelWindows, { nodes: srcNodes, layers: srcLayers });
-                if (!verdict.ok) return make(false, verdict.reason);
-            }
-            return make(true, null);
-        }
-
-        // 3. Окно уровня — по указателю; при наложении окон побеждает верхнее
-        //    (правило zIndex рендера: выделенное поверх, затем больший уровень)
-        let winTarget = null;
-        const selWinId = (state.selectedIds || []).find(sid => typeof sid === 'string' && sid.startsWith('level-window-'));
-        Object.values(state.levelWindows || {}).forEach(win => {
-            if (!win) return;
-            const pos = win.position || { x: 0, y: 0 };
-            const size = win.size || { w: 1000, h: 700 };
-            if (!containsPt({ x: pos.x, y: pos.y, w: size.w, h: size.h })) return;
-            if (!winTarget) { winTarget = win; return; }
-            const winIsSel = selWinId === `level-window-${win.levelIndex}`;
-            const curIsSel = selWinId === `level-window-${winTarget.levelIndex}`;
-            if (winIsSel && !curIsSel) { winTarget = win; return; }
-            if (!winIsSel && curIsSel) return;
-            if ((win.levelIndex || 0) > (winTarget.levelIndex || 0)) winTarget = win;
-        });
-        if (winTarget) {
-            const make = (valid, reason, isMove) => ({ kind: /** @type {'window'} */ ('window'), id: winTarget.id, valid, reason: reason || null, isMove: !!isMove });
-            const view = HierarchyUtils.getLevelView(winTarget.id, state);
-            if (view.isCollapsed) return make(false, 'collapsed');
-            // «Своё окно» — буквально ТО ЖЕ окно (по id, глобально уникален
-            // между проектами), а не совпадение номера уровня: у кросс-
-            // проектного дропа номер уровня цели может случайно совпасть с
-            // номером уровня источника, оставаясь при этом другим окном.
-            const ownWindow = dragged.every(id => {
-                const lvl = HierarchyUtils.getEntityLevel(id, srcNodes, srcLayers, srcState.levelWindows);
-                const win = HierarchyUtils.getWindowOfLevel(lvl, srcState.levelWindows);
-                return !!win && win.id === winTarget.id;
-            });
-            if (ownWindow) return make(true, null, true); // обычное перемещение
-            if (unsupportedMixedLayer) return make(false, 'layer-transfer-later');
-            if (!dragDropMode) return make(false, 'dnd-off');
-            return make(true, null, false);
-        }
-
-        return null; // пустота мира
-    },
-
-    /**
-     * getDropTarget, расширенный на сканирование ВСЕХ открытых проектов
-     * (Фаза 6.3): неактивные проекты уже полностью рендерятся на общем
-     * холсте в единой мировой системе координат, так что перетащить узел
-     * из одного проекта в другой физически ничем не отличается от переноса
-     * внутри одного — разница только в том, из чьих словарей резолвится
-     * ЦЕЛЬ. Приоритет между проектами тот же, что и внутри одного вызова
-     * getDropTarget: валидный кандидат побеждает невалидный, среди валидных —
-     * node > layer > window.
-     * @param {Array<string>} draggedIds
-     * @param {Point} pointerWorld
-     * @param {Object} multiState корневое мультисостояние (state.projects/projectOrder)
-     * @param {string} sourceProjectId проект переносимых сущностей
-     * @param {{dragDropMode?: boolean}} [opts]
-     * @returns {?Object} тот же формат, что getDropTarget, плюс `projectId` цели
-     */
-    getDropTargetAcrossProjects: (draggedIds, pointerWorld, multiState, sourceProjectId, opts = {}) => {
-        if (!multiState || !sourceProjectId || !draggedIds || draggedIds.length === 0 || !pointerWorld) return null;
-        const getFlat = (typeof window !== 'undefined' && window.getProjectFlatView) ? window.getProjectFlatView : null;
-        if (!getFlat) return null;
-        const sourceView = getFlat(sourceProjectId);
-        if (!sourceView) return null;
-
-        const priority = { node: 3, layer: 2, window: 1 };
-        let best = null;
-        (multiState.projectOrder || []).forEach(pid => {
-            const proj = multiState.projects && multiState.projects[pid];
-            if (!proj) return;
-            if (multiState.containerIsolation && HierarchyUtils.isProjectVisible
-                && !HierarchyUtils.isProjectVisible(pid, multiState.containerIsolation, proj.levelWindows)) return;
-            const view = pid === sourceProjectId ? sourceView : getFlat(pid);
-            if (!view) return;
-            const t = HierarchyUtils.getDropTarget(draggedIds, pointerWorld, view, opts, sourceView);
-            if (!t) return;
-            const candidate = { ...t, projectId: pid };
-            if (!best) { best = candidate; return; }
-            if (candidate.valid && !best.valid) { best = candidate; return; }
-            if (candidate.valid === best.valid && priority[candidate.kind] > priority[best.kind]) best = candidate;
-        });
-        return best;
-    },
-
-    /**
-     * Целевые локальные позиции для дропа в окно уровня: мировые координаты
-     * каждого переносимого элемента переводятся в систему холста целевого окна
-     * (с учётом его камеры) — элементы ложатся там, где их отпустили,
-     * сохраняя раскладку группы.
-     * @param {Array<string>} ids
-     * @param {LevelWindowEntity} win целевое окно
-     * @param {Object} state
-     * @returns {?Object<string, Point>}
-     */
-    computeDropPositions: (ids, win, state, sourceState = null) => {
-        if (!ids || !win || !state) return null;
-        // sourceState (Фаза 6.3): переносимые сущности живут в ДРУГОМ проекте,
-        // чем целевое окно — их мировые координаты резолвятся из своего же
-        // проекта, камера/зум целевого окна — из state. Без аргумента (как
-        // раньше) оба совпадают.
-        const srcState = sourceState || state;
-        const view = HierarchyUtils.getLevelView(win.id, state);
-        const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
-        const z = view.innerZoom || 1;
-        const offX = view.innerOffset?.x || 0;
-        const offY = view.innerOffset?.y || 0;
-        const winX = win.position?.x || 0;
-        const winY = win.position?.y || 0;
-        const result = {};
-        ids.forEach(id => {
-            const b = HierarchyUtils.getEntityWorldBounds(id, srcState);
-            if (!b) return;
-            result[id] = {
-                x: Math.round((b.x - winX - borderW - offX) / z),
-                y: Math.round((b.y - winY - borderW - headerH - offY) / z)
-            };
-        });
-        return result;
-    },
-
-    /**
-     * Текст вопроса-подтверждения перед Drag&Drop-переносом: что произойдёт
-     * (смена родителя/уровня) и какие родственные связи будут разорваны.
-     * @param {Array<string>} ids переносимые «верхние» id
-     * @param {{kind: string, id: string, descend?: boolean, projectId?: string}} target цель дропа
-     * @param {Object} state словари переносимых сущностей
-     * @param {string} mode
-     * @param {?Object} [targetState] словари ЦЕЛИ, если это ДРУГОЙ проект
-     *   (Фаза 6.3, кросс-проектный перенос) — без аргумента (как раньше)
-     *   совпадает с `state`.
-     * @returns {string}
-     */
-    buildTransferConfirmText: (ids, target, state, mode, targetState = null) => {
-        const nodes = state.nodes || {};
-        const layers = state.layers || {};
-        const tState = targetState || state;
-        const tNodes = tState.nodes || {};
-        const tLayers = tState.layers || {};
-        const nameOf = (id) => {
-            const e = nodes[id] || layers[id];
-            return (e && e.name) ? `«${e.name}»` : `«${id}»`;
-        };
-        const targetNameOf = (id) => {
-            const e = tNodes[id] || tLayers[id];
-            return (e && e.name) ? `«${e.name}»` : `«${id}»`;
-        };
-        const label = ids.length === 1
-            ? `${layers[ids[0]] ? 'Слой' : 'Узел'} ${nameOf(ids[0])}`
-            : `${ids.length} элементов`;
-        const crossProjectSuffix = (targetState && targetState !== state && tState.projectName)
-            ? ` (проект «${tState.projectName}»)` : '';
-
-        let head = '';
-        let ownerWillChange = true;
-        if (target.kind === 'node') {
-            const lvl = HierarchyUtils.getEntityLevel(target.id, tNodes, tLayers) + 1;
-            head = `${label}: станет ребёнком узла ${targetNameOf(target.id)}${crossProjectSuffix} (Уровень ${lvl}).`;
-        } else if (target.kind === 'layer') {
-            const lvl = HierarchyUtils.getEntityLevel(target.id, tNodes, tLayers);
-            const cross = targetState && targetState !== state ? true : ids.some(id => HierarchyUtils.getEntityLevel(id, nodes, layers) !== lvl);
-            ownerWillChange = cross;
-            head = cross
-                ? `${label}: перенос в слой ${targetNameOf(target.id)}${crossProjectSuffix} на Уровень ${lvl}.`
-                : `${label}: положить в слой ${targetNameOf(target.id)} (уровень не меняется).`;
-            if (target.descend) {
-                head += ' Слой в собственной ветке: элемент спустится к потомкам, его прямые дети отвяжутся и останутся на местах.';
-            }
-        } else {
-            const win = tState.levelWindows && tState.levelWindows[target.id];
-            const lvl = win ? win.levelIndex : 0;
-            head = `${label}: перенос на Уровень ${lvl}${crossProjectSuffix} (без родителя — ${ids.length === 1 ? 'сиротой' : 'сиротами'}).`;
-        }
-
-        const broken = [];
-        if (ownerWillChange) {
-            ids.forEach(id => {
-                const e = nodes[id] || layers[id];
-                if (!e || !e.ownerId) return;
-                if (target.kind === 'node' && target.id === e.ownerId) return; // тот же родитель
-                const parent = nodes[e.ownerId] || layers[e.ownerId];
-                if (parent) broken.push(`связь ${nameOf(id)} с родителем ${nameOf(e.ownerId)} будет разорвана`);
-            });
-        }
-
-        // «Вырывание из цепочек» (PLAN_SHALLOW_TRANSFER_DND.md): в режиме
-        // 'shallow', в отличие от обычного (цепочка едет следом), прямые
-        // подопечные переносимого узла остаются на месте и перепривязываются
-        // к его прежнему владельцу выше. Предупреждаем об этом отдельно от
-        // «связь будет разорвана» — тут связь не рвётся, а перескакивает через
-        // поколение. Не дублируем с «спуском в собственную ветку»
-        // (target.descend) — там уже есть своё, отдельное предупреждение.
-        const reanchored = [];
-        if (mode === 'shallow' && ownerWillChange && !target.descend) {
-            ids.forEach(id => {
-                const e = nodes[id] || layers[id];
-                if (!e) return;
-                const hasStayingChild = (dict) => Object.values(dict || {})
-                    .some(w => w && w.ownerId === id && !ids.includes(w.id));
-                if (!hasStayingChild(nodes) && !hasStayingChild(layers)) return;
-                const grandparent = e.ownerId ? (nodes[e.ownerId] || layers[e.ownerId]) : null;
-                reanchored.push(grandparent
-                    ? `подопечные ${nameOf(id)} останутся на месте и перепривяжутся к ${nameOf(e.ownerId)}`
-                    : `подопечные ${nameOf(id)} останутся на месте и станут самостоятельными (сиротами-якорями)`);
-            });
-        }
-
-        let warn = '';
-        if (broken.length > 0) {
-            const shown = broken.slice(0, 3);
-            warn = '\n\n⚠ ' + shown.join(';\n⚠ ')
-                + (broken.length > 3 ? `;\n⚠ …и ещё ${broken.length - 3}` : '') + '.';
-        }
-        if (reanchored.length > 0) {
-            const shown = reanchored.slice(0, 3);
-            warn += '\n\nℹ ' + shown.join(';\nℹ ')
-                + (reanchored.length > 3 ? `;\nℹ …и ещё ${reanchored.length - 3}` : '') + '.';
-        }
-
-        return `${head}${warn}\n\nПеренести?`;
-    },
-
-    /**
-     * Мировая точка порта — единственная точка правды для связей и хит-тестов.
-     * Работает и для портов узлов, и для мастер-порта окна уровня.
-     * @param {string} portId
-     * @param {Object} state
-     * @returns {?Point}
-     */
-    getPortWorldPosition: (portId, state) => {
-        if (!state) return null;
-        const port = state.ports ? state.ports[portId] : null;
-        if (!port) return null;
-
-        if (port.isMaster) {
-            return HierarchyUtils.getMasterPortWorldCoordinates(port.windowId != null ? port.windowId : port.windowIndex, state);
-        }
-
-        const host = (state.nodes && state.nodes[port.nodeId]) || (state.layers && state.layers[port.nodeId]) || null;
-        if (!host) return null;
-
-        const geom = (typeof window !== 'undefined' && window.GeometryUtils) ? window.GeometryUtils :
-                     (typeof global !== 'undefined' && global.GeometryUtils) ? global.GeometryUtils :
-                     (typeof require === 'function' ? require('./geometry.js') : null);
-        if (!geom) return null;
-
-        const rel = geom.getPortRelativePosition(port, host);
-        const t = HierarchyUtils.getWorldTransform(host.id, state);
-        return { x: t.x + rel.x * t.scale, y: t.y + rel.y * t.scale };
-    },
-
-    /** Быстрый индекс портов по ID сущности (узла или слоя): алиас к getPortsByNodeId. */
-    getPortsByEntityId: (ports) => HierarchyUtils.getPortsByNodeId(ports),
-
-    /** @deprecated Псевдоним getPortWorldPosition, оставлен на время переезда вызовов. */
-    getPortWorldCoordinates: (portId, state) => HierarchyUtils.getPortWorldPosition(portId, state),
-
-    /**
-     * Концы связи в мировых координатах плюс её классификация.
-     * Одна функция на оба конца: пока обе точки считаются здесь, стык
-     * внутреннего и магистрального отрезка не может разъехаться.
-     * @param {string} linkId
-     * @param {Object} state
-     * @returns {?{ p1: Point & { edge: string }, p2: Point & { edge: string }, isCrossLevel: boolean, levelIndex: ?number, sourceLevel: number, targetLevel: number }}
-     */
-    getLinkEndpoints: (linkId, state) => {
-        if (!state || !state.links) return null;
-        const link = state.links[linkId];
-        if (!link) return null;
-
-        const sPort = state.ports && state.ports[link.sourcePortId];
-        const tPort = state.ports && state.ports[link.targetPortId];
-        if (!sPort || !tPort) return null;
-
-        const p1 = HierarchyUtils.getPortWorldPosition(link.sourcePortId, state);
-        const p2 = HierarchyUtils.getPortWorldPosition(link.targetPortId, state);
-        if (!p1 || !p2) return null;
-
-        const levelOfPort = (port) => {
-            if (port.isMaster) {
-                const win = state.levelWindows && state.levelWindows[port.windowId != null ? port.windowId : port.windowIndex];
-                return win ? (win.levelIndex != null ? win.levelIndex : 0) : 0;
-            }
-            return HierarchyUtils.getLevel(port.nodeId, state.nodes, state.layers);
-        };
-
-        const sourceLevel = levelOfPort(sPort);
-        const targetLevel = levelOfPort(tPort);
-        const isCrossLevel = sourceLevel !== targetLevel;
-
-        return {
-            p1: { x: p1.x, y: p1.y, edge: sPort.edge || 'right' },
-            p2: { x: p2.x, y: p2.y, edge: tPort.edge || 'left' },
-            isCrossLevel,
-            levelIndex: isCrossLevel ? null : sourceLevel,
-            sourceLevel,
-            targetLevel
-        };
-    },
-
-    /**
-     * Преобразование координат курсора экрана в координаты мирового холста.
-     * @param {number} clientX
-     * @param {number} clientY
-     * @param {{ offset: { x: number, y: number }, zoom: number }} canvas
-     * @param {DOMRect} [containerRect]
-     * @returns {{ x: number, y: number }}
-     */
-    screenToWorld: (clientX, clientY, canvas, containerRect = null) => {
-        const left = containerRect ? containerRect.left : 0;
-        const top = containerRect ? containerRect.top : 0;
-        const zoom = (canvas && canvas.zoom) || 1;
-        const offX = (canvas && canvas.offset && canvas.offset.x) || 0;
-        const offY = (canvas && canvas.offset && canvas.offset.y) || 0;
-        return {
-            x: (clientX - left - offX) / zoom,
-            y: (clientY - top - offY) / zoom
-        };
-    },
-
-    /**
-     * Преобразование мировых координат в экранные пиксели.
-     * @param {number} x
-     * @param {number} y
-     * @param {{ offset: { x: number, y: number }, zoom: number }} canvas
-     * @param {DOMRect} [containerRect]
-     * @returns {{ x: number, y: number }}
-     */
-    worldToScreen: (x, y, canvas, containerRect = null) => {
-        const left = containerRect ? containerRect.left : 0;
-        const top = containerRect ? containerRect.top : 0;
-        const zoom = (canvas && canvas.zoom) || 1;
-        const offX = (canvas && canvas.offset && canvas.offset.x) || 0;
-        const offY = (canvas && canvas.offset && canvas.offset.y) || 0;
-        return {
-            x: left + offX + x * zoom,
-            y: top + offY + y * zoom
-        };
-    },
-
-    /**
-     * Фильтрация слоев: обычные слои без окон уровней.
-     * @param {Object<string, LayerEntity>} layers
-     * @returns {Object<string, LayerEntity>}
-     */
-    getPlainLayers: (layers) => {
-        const result = {};
-        Object.entries(layers || {}).forEach(([id, l]) => {
-            if (l && !l.isLevelWindow) result[id] = l;
-        });
-        return result;
-    },
-
-    /**
-     * Фильтрация слоев: только окна уровней.
-     * @param {Object<string, LayerEntity>} layers
-     * @returns {Object<string, LayerEntity>}
-     */
-    getLevelWindows: (layers) => {
-        const result = {};
-        Object.entries(layers || {}).forEach(([id, l]) => {
-            if (l && l.isLevelWindow) result[id] = l;
-        });
-        return result;
-    },
-
-    /**
-     * Вычисление координат мастер-порта окна уровня в мировом пространстве.
-     * @param {number|string} winKey стабильный id окна либо (легаси) номер уровня
-     * @param {Object} state
-     * @returns {{ x: number, y: number }}
-     */
-    getMasterPortWorldCoordinates: (winKey, state) => {
-        if (!state || !state.levelWindows) return { x: 0, y: 0 };
-        // Ключом может быть стабильный id окна либо (легаси) номер уровня
-        const win = state.levelWindows[winKey]
-            || HierarchyUtils.getWindowOfLevel(Number(winKey), state.levelWindows);
-        if (!win) return { x: 0, y: 0 };
-
-        const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
-        return {
-            x: (win.position?.x || 0) + borderW + 26,
-            y: (win.position?.y || 0) + borderW + headerH / 2
-        };
-    },
-
-    /**
-     * Вычисление прокси-портов на границах рамки окна для межуровневых связей.
-     * @param {number} winIndex
-     * @param {Object} state
-     * @returns {Array<Object>}
-     */
-    /**
-     * Прокси-порт конкретной связи на рамке конкретного окна.
-     * Через него проходят оба стыка трёхсегментной межуровневой связи:
-     * внутренний отрезок внутри окна и магистральный отрезок в мире.
-     * @param {string} linkId
-     * @param {string} windowId
-     * @param {Object} state
-     * @returns {?Object}
-     */
-    /**
-     * Прокси-порты окна, разложенные по id связи, с кэшем на поколение состояния.
-     *
-     * Без кэша getProxyForLink строил ПОЛНЫЙ список прокси окна заново на каждую
-     * связь — по два раза на каждую межуровневую связь за кадр. На сцене с
-     * сотнями таких связей это был самый дорогой участок кадра (около половины
-     * процессорного времени по профилю).
-     * @param {string|number} windowId
-     * @param {Object} state
-     * @returns {Object<string, Object>} linkId → прокси-порт
-     */
-    getProxyIndexForWindow: (windowId, state) => {
-        if (!state) return EMPTY_DICT;
-        const key = String(windowId);
-        let perState = _proxyIndexCache && _proxyIndexCache.get(state.nodes || EMPTY_DICT);
-        const sameDeps = perState
-            && perState.linksRef === state.links
-            && perState.portsRef === state.ports
-            && perState.layersRef === state.layers
-            && perState.windowsRef === state.levelWindows
-            && perState.viewsRef === state.levelViews;
-
-        if (!sameDeps) {
-            perState = {
-                linksRef: state.links,
-                portsRef: state.ports,
-                layersRef: state.layers,
-                windowsRef: state.levelWindows,
-                viewsRef: state.levelViews,
-                byWindow: {}
-            };
-            if (_proxyIndexCache && state.nodes) _proxyIndexCache.set(state.nodes, perState);
-        }
-
-        if (!perState.byWindow[key]) {
-            const byLink = {};
-            HierarchyUtils.getProxyPortsForWindow(windowId, state).forEach(pr => {
-                if (pr && pr.linkId) byLink[pr.linkId] = pr;
-            });
-            perState.byWindow[key] = byLink;
-        }
-        return perState.byWindow[key];
-    },
-
-    getProxyForLink: (linkId, windowId, state) => {
-        return HierarchyUtils.getProxyIndexForWindow(windowId, state)[linkId] || null;
-    },
-
-    /**
-     * Локальная точка прокси-порта в системе координат ВНУТРЕННЕГО контейнера окна
-     * (того, к которому применён translate(innerOffset) scale(innerZoom)).
-     * Нужна для внутреннего отрезка связи, который рисуется вместе с узлами.
-     * @param {Object} proxy
-     * @param {Object} view
-     * @returns {Point}
-     */
-    getProxyViewportLocalPos: (proxy, view) => {
-        const z = (view && view.innerZoom) || 1;
-        const off = (view && view.innerOffset) || { x: 0, y: 0 };
-        return {
-            x: (proxy.viewportPos.x - off.x) / z,
-            y: (proxy.viewportPos.y - off.y) / z
-        };
-    },
-
-    /**
-     * Межуровневые связи, разложенные по уровням, ОДНИМ проходом по словарю
-     * связей и с кэшем на поколение состояния.
-     *
-     * Прежде этот разбор делался внутри getProxyPortsForWindow, то есть заново
-     * для КАЖДОГО окна на КАЖДЫЙ рендер: при четырёх окнах и 700 связях это
-     * 2800 обходов с вычислением уровней на кадр. По профилю — самый дорогой
-     * участок кадра.
-     * @param {Object} state
-     * @returns {Object<number, Array>} уровень → список записей о связях
-     */
-    getCrossLinksByLevel: (state) => {
-        if (!state || !state.links) return {};
-        const links = state.links;
-        const cached = _crossLinksCache && _crossLinksCache.get(links);
-        if (cached && cached.portsRef === state.ports && cached.nodesRef === state.nodes && cached.layersRef === state.layers) {
-            return cached.byLevel;
-        }
-
-        const linksList = Array.isArray(links) ? links : Object.values(links || {});
-        const byLevel = {};
-        const push = (lvl, entry) => {
-            if (!byLevel[lvl]) byLevel[lvl] = [];
-            byLevel[lvl].push(entry);
-        };
-
-        linksList.forEach(link => {
-            if (!link || !link.id) return;
-            const sp = state.ports && state.ports[link.sourcePortId];
-            const tp = state.ports && state.ports[link.targetPortId];
-            if (!sp || !tp) return;
-            const sn = (state.nodes && state.nodes[sp.nodeId]) || (state.layers && state.layers[sp.nodeId]);
-            const tn = (state.nodes && state.nodes[tp.nodeId]) || (state.layers && state.layers[tp.nodeId]);
-            if (!sn || !tn) return;
-
-            const sLvl = HierarchyUtils.getEntityLevel(sn.id, state.nodes, state.layers);
-            const tLvl = HierarchyUtils.getEntityLevel(tn.id, state.nodes, state.layers);
-            if (sLvl === tLvl) return; // внутриуровневая
-
-            push(sLvl, { link, isSource: true, myPort: sp, myNode: sn, otherPort: tp, otherNode: tn, otherLevel: tLvl });
-            push(tLvl, { link, isSource: false, myPort: tp, myNode: tn, otherPort: sp, otherNode: sn, otherLevel: sLvl });
-        });
-
-        if (_crossLinksCache && links && typeof links === 'object') {
-            _crossLinksCache.set(links, {
-                portsRef: state.ports, nodesRef: state.nodes, layersRef: state.layers, byLevel
-            });
-        }
-        return byLevel;
-    },
-
-    /**
      * === Изоляция контейнеров ===
-     * Вторая ось видимости, независимая от «глаза».
+     * Единственная ось видимости в v14 (Фаза 6: «глаз» веток —
+     * levelHideNeighbors/levelFocusParentId, изолировавший СУЩНОСТИ внутри
+     * уровня — удалён вместе с уровнями; понятия «видимая ветка» в v14 не
+     * существует, только открытая/закрытая дорожка).
      *
-     * «Глаз» (levelHideNeighbors + levelFocusParentId) изолирует СУЩНОСТИ внутри
-     * уровня. Здесь изолируются сами контейнеры — проекты и окна уровней: всё
-     * прочее содержимое общего холста перестаёт быть видно, и работать можно
-     * только с изолированным. Смешивать две оси в одном поле нельзя: они
-     * отвечают на разные вопросы и включаются разными кнопками.
+     * Изолируются контейнеры — проекты и окна: всё прочее содержимое общего
+     * холста перестаёт быть видно, и работать можно только с изолированным.
      *
      * Инвариант: изоляция не может быть активной без хотя бы одного видимого
      * изолированного контейнера — иначе на экране не останется кнопки, которой
@@ -1814,409 +326,782 @@ const HierarchyUtils = {
         return Object.keys(projectWindows || {}).some(wid => windows.indexOf(wid) !== -1);
     },
 
-    /**
-     * Сущности, разложенные по уровням, ОДНИМ проходом и с кэшем на поколение.
-     *
-     * Каждое окно уровня прежде само перебирало ВСЕ узлы и слои проекта, вызывая
-     * getEntityLevel на каждую сущность. При пяти окнах и 2000 узлов это 10 000
-     * проверок на кадр — при том, что разложение одинаково для всех окон.
-     * @param {Object} nodes
-     * @param {Object} layers
-     * @returns {Object<number, {nodes: Array, layers: Array}>}
-     */
-    getEntitiesByLevel: (nodes, layers) => {
-        const safeNodes = nodes || EMPTY_DICT;
-        const safeLayers = layers || EMPTY_DICT;
-        const cached = _byLevelCache && _byLevelCache.get(safeNodes);
-        if (cached && cached.layersRef === safeLayers) return cached.byLevel;
-
-        const byLevel = {};
-        const bucket = (lvl) => {
-            if (!byLevel[lvl]) byLevel[lvl] = { nodes: [], layers: [] };
-            return byLevel[lvl];
-        };
-        Object.keys(safeNodes).forEach(id => {
-            const n = safeNodes[id];
-            if (!n) return;
-            bucket(HierarchyUtils.getEntityLevel(id, safeNodes, safeLayers)).nodes.push(n);
-        });
-        Object.keys(safeLayers).forEach(id => {
-            const l = safeLayers[id];
-            if (!l) return;
-            bucket(HierarchyUtils.getEntityLevel(id, safeNodes, safeLayers)).layers.push(l);
-        });
-
-        if (_byLevelCache && nodes && typeof nodes === 'object') {
-            _byLevelCache.set(safeNodes, { layersRef: safeLayers, byLevel });
-        }
-        return byLevel;
-    },
-
-    /**
-     * Прямоугольник ЛОКАЛЬНЫХ координат окна уровня, который сейчас реально
-     * попадает на экран (culling по вьюпорту).
-     *
-     * Смысл: сущности за пределами экрана можно не создавать вовсе — их всё
-     * равно не видно, а браузер обязан размещать и держать каждый элемент.
-     * Возвращается прямоугольник с запасом в один экран по каждой стороне,
-     * чтобы при быстрой панораме ничего не мигало, либо null — если окно
-     * целиком за экраном (тогда его содержимое не нужно вовсе).
-     *
-     * @param {Object} win окно уровня (position, size)
-     * @param {{ innerOffset: {x:number,y:number}, innerZoom: number }} camera камера окна
-     * @param {{ offset: {x:number,y:number}, zoom: number }} worldCamera камера мира
-     * @param {{ w: number, h: number }} screen размер видимой области в пикселях
-     * @returns {?{x0:number,y0:number,x1:number,y1:number}}
-     */
-    getVisibleLocalRect: (win, camera, worldCamera, screen) => {
-        if (!win || !camera || !worldCamera || !screen) return null;
-        const zoomW = worldCamera.zoom || 1;
-        const offW = worldCamera.offset || { x: 0, y: 0 };
-        const innerZoom = camera.innerZoom || 1;
-        const innerOffset = camera.innerOffset || { x: 0, y: 0 };
-        const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
-        const winPos = win.position || { x: 0, y: 0 };
-        const winSize = win.size || { w: 1000, h: 700 };
-
-        // Видимая часть мира в мировых координатах
-        const viewX0 = (0 - offW.x) / zoomW;
-        const viewY0 = (0 - offW.y) / zoomW;
-        const viewX1 = (screen.w - offW.x) / zoomW;
-        const viewY1 = (screen.h - offW.y) / zoomW;
-
-        // Тело окна в мировых координатах (без рамки и шапки)
-        const bodyX0 = winPos.x + borderW;
-        const bodyY0 = winPos.y + headerH;
-        const bodyX1 = winPos.x + winSize.w - borderW;
-        const bodyY1 = winPos.y + winSize.h - borderW;
-
-        // Пересечение: что от тела окна видно на экране
-        const x0 = Math.max(viewX0, bodyX0);
-        const y0 = Math.max(viewY0, bodyY0);
-        const x1 = Math.min(viewX1, bodyX1);
-        const y1 = Math.min(viewY1, bodyY1);
-        if (x1 <= x0 || y1 <= y0) return null; // окно целиком за экраном
-
-        // Мировые координаты → локальные координаты холста уровня
-        const toLocalX = (wx) => (wx - bodyX0 - innerOffset.x) / innerZoom;
-        const toLocalY = (wy) => (wy - bodyY0 - innerOffset.y) / innerZoom;
-
-        // Запас в один экран по каждой стороне гасит мигание при панораме
-        const padX = screen.w / (zoomW * innerZoom);
-        const padY = screen.h / (zoomW * innerZoom);
-
-        return {
-            x0: toLocalX(x0) - padX,
-            y0: toLocalY(y0) - padY,
-            x1: toLocalX(x1) + padX,
-            y1: toLocalY(y1) + padY
-        };
-    },
-
-    /**
-     * Пересекается ли прямоугольник сущности с видимой областью.
-     * @param {{x:number,y:number}} pos локальная позиция
-     * @param {{w:number,h:number}} size
-     * @param {?{x0:number,y0:number,x1:number,y1:number}} rect null = ограничения нет
-     * @returns {boolean}
-     */
-    isRectVisible: (pos, size, rect) => {
-        if (!rect) return true;
-        const x = (pos && pos.x) || 0;
-        const y = (pos && pos.y) || 0;
-        const w = (size && size.w) || 0;
-        const h = (size && size.h) || 0;
-        return !(x + w < rect.x0 || x > rect.x1 || y + h < rect.y0 || y > rect.y1);
-    },
-
-    /**
-     * Чистая геометрия одного прокси-порта на рамке окна — вынесена из
-     * замыкания getProxyPortsForWindow (Фаза 6.1), чтобы её же мог
-     * переиспользовать getExternalProxyPortsForWindow для кросс-проектных
-     * связей: сама формула (грань + доля вдоль неё -> точка на рамке и во
-     * вьюпорте содержимого) не зависит от того, откуда взялась запись `item`.
-     * @param {Object} win окно уровня (position, size)
-     * @param {number} winIndex levelIndex окна — только для id прокси
-     * @param {{link: Object, isSource: boolean, myPort: Object, otherPort: Object, otherLevel?: number}} item
-     * @param {string} edge 'top'|'bottom'|'left'|'right'
-     * @param {number} fraction 0..1 вдоль грани
-     * @returns {Object}
-     */
-    buildWindowProxyGeometry: (win, winIndex, item, edge, fraction) => {
-        const winSize = win.size || { w: 1000, h: 700 };
-        const winPos = win.position || { x: 0, y: 0 };
-        const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
-        const bodyH = Math.max(200, winSize.h - headerH);
-
-        let frameX = 0;
-        let frameY = 0;
-        let viewportLocalX = 0;
-        let viewportLocalY = 0;
-
-        if (edge === 'top') {
-            // Мировая точка прокси (frameX/frameY) — на ВНЕШНЕМ контуре окна,
-            // как у left/right/bottom: магистраль подходит к самому верху рамки,
-            // а не к границе шапка/содержимое. Внутренний отрезок связи при этом
-            // по-прежнему целится в верх ВЬЮПОРТА содержимого (viewportLocalY=0,
-            // под шапкой) — своя система координат, см. getProxyViewportLocalPos.
-            // Между двумя точками — высота шапки; на экране этот участок
-            // перекрыт самой шапкой, так что разрыва не видно.
-            frameX = winSize.w * fraction;
-            frameY = 0;
-            viewportLocalX = frameX;
-            viewportLocalY = 0;
-        } else if (edge === 'bottom') {
-            frameX = winSize.w * fraction;
-            frameY = winSize.h;
-            viewportLocalX = frameX;
-            viewportLocalY = bodyH;
-        } else if (edge === 'left') {
-            frameX = 0;
-            frameY = headerH + bodyH * fraction;
-            viewportLocalX = 0;
-            viewportLocalY = bodyH * fraction;
-        } else { // right
-            frameX = winSize.w;
-            frameY = headerH + bodyH * fraction;
-            viewportLocalX = winSize.w;
-            viewportLocalY = bodyH * fraction;
-        }
-
-        const worldPos = {
-            x: winPos.x + borderW + frameX,
-            y: winPos.y + borderW + frameY
-        };
-
-        return {
-            id: `proxy-${item.link.id}-${winIndex}`,
-            linkId: item.link.id,
-            link: item.link,
-            isSource: item.isSource,
-            myPortId: item.myPort.id,
-            otherPortId: item.otherPort.id,
-            targetLevel: item.otherLevel,
-            edge,
-            slotFraction: fraction,
-            framePos: { x: frameX, y: frameY },
-            viewportPos: { x: viewportLocalX, y: viewportLocalY },
-            worldPos,
-            color: item.link.color || '#38bdf8'
-        };
-    },
-
-    /**
-     * Кросс-проектные прокси-порты на рамке окна ОДНОГО проекта (Фаза 6.1):
-     * та же геометрия, что и у getProxyPortsForWindow, но источник записей —
-     * не state.links одного проекта, а multiState.crossProjectLinks, и второй
-     * конец каждой связи резолвится в ДРУГОМ проекте. Грань выбирается
-     * сравнением мировых центров окон по доминирующей оси — между проектами
-     * нет общего понятия «уровня», сравнивать его не с чем.
-     * @param {string} windowId
-     * @param {string} projectId
-     * @param {Object} multiState корневое мультисостояние (state.projects/crossProjectLinks)
-     * @returns {Array<Object>} прокси в форме getProxyPortsForWindow + isExternal/otherProjectId
-     */
-    getExternalProxyPortsForWindow: (windowId, projectId, multiState) => {
-        if (!multiState || !multiState.crossProjectLinks || !projectId) return [];
-        const proj = multiState.projects && multiState.projects[projectId];
-        if (!proj) return [];
-        const win = proj.levelWindows && proj.levelWindows[windowId];
-        if (!win) return [];
-
-        const items = [];
-        Object.keys(multiState.crossProjectLinks).forEach(linkId => {
-            const link = multiState.crossProjectLinks[linkId];
-            if (!link) return;
-            const isSource = link.sourceProjectId === projectId;
-            if (!isSource && link.targetProjectId !== projectId) return;
-            const myPortId = isSource ? link.sourcePortId : link.targetPortId;
-            const otherPortId = isSource ? link.targetPortId : link.sourcePortId;
-            const otherProjectId = isSource ? link.targetProjectId : link.sourceProjectId;
-            const myPort = proj.ports && proj.ports[myPortId];
-            if (!myPort) return;
-            const myNode = (proj.nodes && proj.nodes[myPort.nodeId]) || (proj.layers && proj.layers[myPort.nodeId]);
-            if (!myNode) return;
-            const myLvl = HierarchyUtils.getEntityLevel(myNode.id, proj.nodes, proj.layers, proj.levelWindows);
-            const myWin = HierarchyUtils.getWindowOfLevel(myLvl, proj.levelWindows);
-            if (!myWin || myWin.id !== windowId) return; // сущность живёт в ДРУГОМ окне этого же проекта
-
-            const otherProj = multiState.projects && multiState.projects[otherProjectId];
-            const otherPort = otherProj && otherProj.ports && otherProj.ports[otherPortId];
-            const otherNode = otherPort && ((otherProj.nodes && otherProj.nodes[otherPort.nodeId]) || (otherProj.layers && otherProj.layers[otherPort.nodeId]));
-            let otherWorldRect = null;
-            if (otherNode && otherProj) {
-                const otherLvl = HierarchyUtils.getEntityLevel(otherNode.id, otherProj.nodes, otherProj.layers, otherProj.levelWindows);
-                const otherWin = HierarchyUtils.getWindowOfLevel(otherLvl, otherProj.levelWindows);
-                if (otherWin) {
-                    const p = otherWin.position || { x: 0, y: 0 };
-                    const s = otherWin.size || { w: 1000, h: 700 };
-                    otherWorldRect = { x: p.x, y: p.y, w: s.w, h: s.h };
-                }
-            }
-            items.push({ link, isSource, myPort, myNode, otherPort, otherNode, otherProjectId, otherWorldRect });
-        });
-        if (items.length === 0) return [];
-
-        const proxies = [];
-        const autoItems = [];
-        items.forEach(item => {
-            const ov = item.link.proxyOverrides ? item.link.proxyOverrides[windowId] : null;
-            if (ov && ['top', 'bottom', 'left', 'right'].includes(ov.edge) && typeof ov.fraction === 'number') {
-                proxies.push({
-                    ...HierarchyUtils.buildWindowProxyGeometry(win, win.levelIndex, item, ov.edge, Math.max(0.03, Math.min(0.97, ov.fraction))),
-                    isExternal: true, otherProjectId: item.otherProjectId
-                });
-            } else {
-                autoItems.push(item);
-            }
-        });
-
-        const winPos = win.position || { x: 0, y: 0 };
-        const winSize = win.size || { w: 1000, h: 700 };
-        const myCenter = { x: winPos.x + winSize.w / 2, y: winPos.y + winSize.h / 2 };
-        const byEdge = { top: [], bottom: [], left: [], right: [] };
-        autoItems.forEach(item => {
-            let edge = 'right';
-            if (item.otherWorldRect) {
-                const oc = { x: item.otherWorldRect.x + item.otherWorldRect.w / 2, y: item.otherWorldRect.y + item.otherWorldRect.h / 2 };
-                const dx = oc.x - myCenter.x;
-                const dy = oc.y - myCenter.y;
-                edge = (Math.abs(dx) >= Math.abs(dy)) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'top' : 'bottom');
-            }
-            byEdge[edge].push(item);
-        });
-        Object.entries(byEdge).forEach(([edge, list]) => {
-            if (list.length === 0) return;
-            list.sort((a, b) => a.link.id.localeCompare(b.link.id));
-            const total = list.length;
-            list.forEach((item, slotIdx) => {
-                proxies.push({
-                    ...HierarchyUtils.buildWindowProxyGeometry(win, win.levelIndex, item, edge, (slotIdx + 1) / (total + 1)),
-                    isExternal: true, otherProjectId: item.otherProjectId
-                });
-            });
-        });
-        return proxies;
-    },
-
-    /**
-     * Точечный поиск кросс-проектного прокси конкретной связи на конкретном
-     * окне — аналог getProxyForLink для getExternalProxyPortsForWindow.
-     * @param {string} linkId @param {string} windowId @param {string} projectId
-     * @param {Object} multiState
-     * @returns {?Object}
-     */
-    getExternalProxyForLink: (linkId, windowId, projectId, multiState) => {
-        const list = HierarchyUtils.getExternalProxyPortsForWindow(windowId, projectId, multiState);
-        return list.find(p => p.linkId === linkId) || null;
-    },
-
-    /**
-     * Прокси непримирённых «штекеров» (Фаза 6.2, project.pendingGateways) на
-     * рамке окна — визуальный маркер того, что здесь раньше была кросс-
-     * проектная связь, второй половины сейчас нет в загруженном рабочем
-     * пространстве. В отличие от getExternalProxyPortsForWindow, грань/доля
-     * НЕ пересчитываются (сравнивать не с чем — второе окно не загружено),
-     * а берутся из самой записи (снимок на момент разрыва либо ручной Shift+
-     * драг штекера, UPDATE_PENDING_GATEWAY_PROXY). Магистрали для этих
-     * прокси не бывает — рисовать её не к чему.
-     * @param {string} windowId @param {string} projectId @param {Object} multiState
-     * @returns {Array<Object>} прокси в форме getProxyPortsForWindow + isPending/gateway
-     */
-    getPendingGatewayProxiesForWindow: (windowId, projectId, multiState) => {
-        if (!multiState || !projectId) return [];
-        const proj = multiState.projects && multiState.projects[projectId];
-        if (!proj || !proj.pendingGateways) return [];
-        const win = proj.levelWindows && proj.levelWindows[windowId];
-        if (!win) return [];
-
-        const proxies = [];
-        Object.values(proj.pendingGateways).forEach(gw => {
-            if (!gw || !gw.portId) return;
-            const myPort = proj.ports && proj.ports[gw.portId];
-            if (!myPort) return;
-            const myNode = (proj.nodes && proj.nodes[myPort.nodeId]) || (proj.layers && proj.layers[myPort.nodeId]);
-            if (!myNode) return;
-            const lvl = HierarchyUtils.getEntityLevel(myNode.id, proj.nodes, proj.layers, proj.levelWindows);
-            const myWin = HierarchyUtils.getWindowOfLevel(lvl, proj.levelWindows);
-            if (!myWin || myWin.id !== windowId) return;
-
-            const edge = ['top', 'bottom', 'left', 'right'].includes(gw.edge) ? gw.edge : 'right';
-            const fraction = Math.max(0.03, Math.min(0.97, typeof gw.fraction === 'number' ? gw.fraction : 0.5));
-            const pseudoItem = {
-                link: { id: gw.linkId, color: gw.color, linkStyle: gw.linkStyle, name: gw.name },
-                isSource: gw.direction === 'out',
-                myPort,
-                otherPort: { id: gw.remotePortId || null }
-            };
-            proxies.push({
-                ...HierarchyUtils.buildWindowProxyGeometry(win, win.levelIndex, pseudoItem, edge, fraction),
-                isPending: true,
-                gateway: gw
-            });
-        });
-        return proxies;
-    },
-
-    getProxyPortsForWindow: (winIndex, state) => {
-        if (!state || !state.levelWindows) return [];
-        const win = state.levelWindows[winIndex] || HierarchyUtils.getWindowOfLevel(Number(winIndex), state.levelWindows);
-        if (!win) return [];
-        winIndex = win.levelIndex != null ? win.levelIndex : Number(winIndex);
-        const winSize = win.size || { w: 1000, h: 700 };
-        const winPos = win.position || { x: 0, y: 0 };
-        const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
-        const bodyH = Math.max(200, winSize.h - headerH);
-
-        const crossLinks = HierarchyUtils.getCrossLinksByLevel(state)[winIndex] || [];
-
-        if (crossLinks.length === 0) return [];
-
-        // Сборка прокси-объекта по грани и доле вдоль неё (fraction 0..1) —
-        // тонкая обёртка над HierarchyUtils.buildWindowProxyGeometry (вынесена
-        // в чистую функцию в Фазе 6.1, чтобы её же переиспользовал
-        // getExternalProxyPortsForWindow для кросс-проектных связей).
-        const makeProxy = (item, edge, fraction) => HierarchyUtils.buildWindowProxyGeometry(win, winIndex, item, edge, fraction);
-
-        // Прокси с ручным положением (Shift+драг по рамке) исключаются из
-        // авторасстановки: остальные распределяются по граням как раньше.
-        const proxies = [];
-        const autoItems = [];
-        crossLinks.forEach(item => {
-            const ov = win.id && item.link.proxyOverrides ? item.link.proxyOverrides[win.id] : null;
-            if (ov && ['top', 'bottom', 'left', 'right'].includes(ov.edge) && typeof ov.fraction === 'number') {
-                proxies.push(makeProxy(item, ov.edge, Math.max(0.03, Math.min(0.97, ov.fraction))));
-            } else {
-                autoItems.push(item);
-            }
-        });
-
-        const byEdge = { top: [], bottom: [], left: [], right: [] };
-        autoItems.forEach(item => {
-            let edge = 'bottom';
-            if (item.otherLevel < winIndex) edge = 'top';
-            else if (item.otherLevel > winIndex) edge = 'bottom';
-            else {
-                const otherWin = HierarchyUtils.getWindowOfLevel(item.otherLevel, state.levelWindows);
-                if (otherWin && otherWin.position && otherWin.position.x < winPos.x) edge = 'left';
-                else edge = 'right';
-            }
-            byEdge[edge].push(item);
-        });
-
-        Object.entries(byEdge).forEach(([edge, items]) => {
-            if (items.length === 0) return;
-            items.sort((a, b) => a.otherLevel - b.otherLevel || a.link.id.localeCompare(b.link.id));
-
-            const total = items.length;
-            items.forEach((item, slotIdx) => {
-                proxies.push(makeProxy(item, edge, (slotIdx + 1) / (total + 1)));
-            });
-        });
-
-        return proxies;
-    }
 };
+
+// =============================================================================
+// v14 («Отчеты, аудиты, планы/Lanes_v14/PLAN_V14_LANES.md») — Дорожки/Окна/
+// Рамки вместо уровней и слоёв, см. docs/LANES_MODEL.md. Единственный живой
+// реестр геометрии/иерархии с конца Фазы 4; всё, что было выше (v13-only —
+// уровни, слои, ownerId/ownerGap/homeLevel, окна-по-глубине), физически
+// удалено в Фазе 6. Часть функций здесь по-прежнему носит суффикс V14
+// (isDescendantOfV14, canReparentToV14, getWorldTransformV14,
+// getPortWorldPositionV14, getAddContextV14, getProxyIndexForWindowV14) —
+// исторически «временное» имя на время сосуществования со старой одноимённой
+// версией; переименование в финальные имена так и не потребовалось (старые
+// версии просто удалены), суффикс остался как есть.
+// =============================================================================
+
+const _depthCacheV14 = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+const _childrenByParentCacheV14 = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+const _framesByMemberCacheV14 = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+
+// Ширина дорожки — константа (§2.3 LANES_MODEL.md); корень шире, скрытая
+// («глаз») дорожка — полоска. Метрики шапки/рамки окна — то же значение,
+// что было у удалённой v13-константы LEVEL_WINDOW_METRICS.
+const LANE_W = 420;
+const ROOT_LANE_W = 520;
+const HIDDEN_LANE_W = 26;
+const FRAME_PAD = 20;
+const FRAME_NEST_STEP = 12;
+const WINDOW_METRICS = { headerH: 40, borderW: 2 };
+
+Object.assign(HierarchyUtils, {
+    LANE_W, ROOT_LANE_W, HIDDEN_LANE_W, FRAME_PAD, FRAME_NEST_STEP, WINDOW_METRICS,
+
+    /**
+     * v14: глубина узла — длина цепочки `parentId` до `'root'` (прямые дети
+     * корня — глубина 1). Заменяет getEntityLevel: слоёв в цепочке больше
+     * нет, поэтому нет прохода «слой не считается» — только узлы.
+     * @param {string} id
+     * @param {Object<string, NodeEntityV14>} nodes
+     * @returns {number}
+     */
+    getDepth: (id, nodes) => {
+        if (!id || id === 'root') return 0;
+        const safeNodes = nodes || EMPTY_DICT;
+        let generation = _depthCacheV14 && _depthCacheV14.get(safeNodes);
+        if (!generation) {
+            generation = new Map();
+            if (_depthCacheV14 && nodes) _depthCacheV14.set(safeNodes, generation);
+        }
+        if (generation.has(id)) return generation.get(id);
+
+        let depth = 0;
+        let current = safeNodes[id];
+        const visited = new Set();
+        while (current && !visited.has(current.id)) {
+            visited.add(current.id);
+            depth++;
+            const pid = current.parentId;
+            if (!pid || pid === 'root' || !safeNodes[pid]) break;
+            current = safeNodes[pid];
+        }
+        generation.set(id, depth);
+        return depth;
+    },
+
+    /**
+     * v14: путь узла — цепочка id от корневого предка до самого узла
+     * (§3 LANES_MODEL.md, секция ДЕРЕВО нотации использует имена вдоль
+     * этого же пути).
+     * @param {string} id
+     * @param {Object<string, NodeEntityV14>} nodes
+     * @returns {Array<string>}
+     */
+    getPath: (id, nodes) => {
+        const safeNodes = nodes || EMPTY_DICT;
+        const path = [];
+        let current = safeNodes[id];
+        const visited = new Set();
+        while (current && !visited.has(current.id)) {
+            visited.add(current.id);
+            path.unshift(current.id);
+            const pid = current.parentId;
+            if (!pid || pid === 'root' || !safeNodes[pid]) break;
+            current = safeNodes[pid];
+        }
+        return path;
+    },
+
+    /**
+     * v14: быстрый индекс детей по parentId ('root' или id узла).
+     * Аналог getNodesByParentId, но без слоёв — единственная структура parentId.
+     * @param {Object<string, NodeEntityV14>} nodes
+     * @returns {Object<string, Array<NodeEntityV14>>}
+     */
+    getChildrenByParent: (nodes) => {
+        if (!nodes || typeof nodes !== 'object') return {};
+        if (_childrenByParentCacheV14 && _childrenByParentCacheV14.has(nodes)) return _childrenByParentCacheV14.get(nodes);
+        const index = {};
+        Object.values(nodes).forEach(n => {
+            if (!n) return;
+            const pid = n.parentId || 'root';
+            if (!index[pid]) index[pid] = [];
+            index[pid].push(n);
+        });
+        if (_childrenByParentCacheV14) _childrenByParentCacheV14.set(nodes, index);
+        return index;
+    },
+
+    /**
+     * v14: быстрый индекс рамок по id узла-члена (§4.2 LANES_MODEL.md).
+     * @param {Object<string, FrameEntity>} frames
+     * @returns {Object<string, Array<FrameEntity>>}
+     */
+    getFramesByMember: (frames) => {
+        if (!frames || typeof frames !== 'object') return {};
+        if (_framesByMemberCacheV14 && _framesByMemberCacheV14.has(frames)) return _framesByMemberCacheV14.get(frames);
+        const index = {};
+        Object.values(frames).forEach(f => {
+            if (!f) return;
+            (f.members || []).forEach(mid => {
+                if (!index[mid]) index[mid] = [];
+                index[mid].push(f);
+            });
+        });
+        if (_framesByMemberCacheV14) _framesByMemberCacheV14.set(frames, index);
+        return index;
+    },
+
+    /** v14: рамки, членом которых является узел. @returns {Array<FrameEntity>} */
+    framesOf: (nodeId, frames) => HierarchyUtils.getFramesByMember(frames)[nodeId] || [],
+
+    /**
+     * v14: узел (только узлы — isDescendantOf теперь не поднимается через
+     * слои, их больше нет в цепочке parentId). Меняется относительно старой
+     * версии выше (там же nodes ИЛИ layers) — временное имя до конца Фазы 4.
+     */
+    isDescendantOfV14: (candidateId, ancestorId, nodes) => {
+        if (candidateId === ancestorId) return true;
+        const safeNodes = nodes || EMPTY_DICT;
+        let current = safeNodes[candidateId];
+        const visited = new Set();
+        while (current && !visited.has(current.id)) {
+            visited.add(current.id);
+            if (current.parentId === ancestorId) return true;
+            current = safeNodes[current.parentId] || null;
+        }
+        return false;
+    },
+
+    /**
+     * v14: может ли entityId получить `parentId = targetParentId` — цель
+     * только 'root' или id узла (рамка/окно не могут быть родителем).
+     * Временное имя до конца Фазы 4 (заменит canReparentTo).
+     * @param {string} entityId
+     * @param {string} targetParentId
+     * @param {Object<string, NodeEntityV14>} nodes
+     * @param {?{nodes: Object}} [entityDicts] словари САМОЙ сущности при
+     *   кросс-проектном переносе (Фаза 5), если отличаются от целевых.
+     * @returns {{ok: boolean, reason: ?string}}
+     */
+    canReparentToV14: (entityId, targetParentId, nodes, entityDicts = null) => {
+        const safeNodes = nodes || EMPTY_DICT;
+        const eNodes = (entityDicts && entityDicts.nodes) || safeNodes;
+        const entity = eNodes[entityId];
+        if (!entity) return { ok: false, reason: 'not-found' };
+        if (entityId === targetParentId) return { ok: false, reason: 'self' };
+        if (targetParentId !== 'root' && !safeNodes[targetParentId]) return { ok: false, reason: 'not-found' };
+        if (eNodes === safeNodes && HierarchyUtils.isDescendantOfV14(targetParentId, entityId, safeNodes)) {
+            return { ok: false, reason: 'cycle' };
+        }
+        return { ok: true, reason: null };
+    },
+
+    /**
+     * v14: окна, в которых открыта дорожка ownerId ('root' или id узла).
+     * Пустой массив — дорожка нигде не открыта (узел не отображается).
+     * @param {string} ownerId
+     * @param {Object<string, WindowEntity>} windows
+     * @returns {Array<WindowEntity>}
+     */
+    windowsOfLane: (ownerId, windows) => {
+        return Object.values(windows || {}).filter(w => w && Array.isArray(w.lanes) && w.lanes.includes(ownerId));
+    },
+
+    /**
+     * v14: горизонтальное смещение дорожки внутри окна — сумма ширин
+     * предшествующих дорожек (корень шире; скрытая «глазом» — полоска).
+     * @param {WindowEntity} win
+     * @param {string} ownerId
+     * @returns {number}
+     */
+    laneOffset: (win, ownerId) => {
+        if (!win || !Array.isArray(win.lanes)) return 0;
+        const hidden = win.hidden || [];
+        let x = 0;
+        for (const lid of win.lanes) {
+            if (lid === ownerId) return x;
+            x += hidden.includes(lid) ? HIDDEN_LANE_W : (lid === 'root' ? ROOT_LANE_W : LANE_W);
+        }
+        return x;
+    },
+
+    /**
+     * v14: мировой прямоугольник вьюпорта дорожки (без шапки/рамки окна).
+     * @param {WindowEntity} win
+     * @param {string} ownerId
+     * @returns {?{x:number,y:number,w:number,h:number}}
+     */
+    laneRect: (win, ownerId) => {
+        if (!win || !Array.isArray(win.lanes) || !win.lanes.includes(ownerId)) return null;
+        const winPos = win.position || { x: 0, y: 0 };
+        const winSize = win.size || { w: 1000, h: 700 };
+        const hidden = (win.hidden || []).includes(ownerId);
+        const w = hidden ? HIDDEN_LANE_W : (ownerId === 'root' ? ROOT_LANE_W : LANE_W);
+        const offset = HierarchyUtils.laneOffset(win, ownerId);
+        return {
+            x: winPos.x + WINDOW_METRICS.borderW + offset,
+            y: winPos.y + WINDOW_METRICS.headerH,
+            w,
+            h: Math.max(0, winSize.h - WINDOW_METRICS.headerH - WINDOW_METRICS.borderW)
+        };
+    },
+
+    /**
+     * v14: точка в локальных координатах дорожки (как node.position) ->
+     * мировая точка, с учётом камеры окна (offset/zoom).
+     * @param {WindowEntity} win
+     * @param {string} ownerId
+     * @param {Point} point
+     * @returns {?{x:number,y:number,scale:number}}
+     */
+    laneLocalToWorld: (win, ownerId, point) => {
+        const lane = HierarchyUtils.laneRect(win, ownerId);
+        if (!lane) return null;
+        const camera = (win && win.camera) || { offset: { x: 0, y: 0 }, zoom: 1 };
+        const zoom = camera.zoom || 1;
+        const offX = (camera.offset && camera.offset.x) || 0;
+        const offY = (camera.offset && camera.offset.y) || 0;
+        return { x: lane.x + offX + (point.x || 0) * zoom, y: lane.y + offY + (point.y || 0) * zoom, scale: zoom };
+    },
+
+    /**
+     * v14: мировой прямоугольник узла В КОНКРЕТНОМ окне (его дорожка должна
+     * быть открыта в этом окне).
+     * @param {WindowEntity} win
+     * @param {string} nodeId
+     * @param {Object} state
+     * @returns {?{x:number,y:number,w:number,h:number}}
+     */
+    nodeRectInWindow: (win, nodeId, state) => {
+        const node = state && state.nodes && state.nodes[nodeId];
+        if (!node || !win) return null;
+        const ownerId = node.parentId || 'root';
+        const topLeft = HierarchyUtils.laneLocalToWorld(win, ownerId, node.position || { x: 0, y: 0 });
+        if (!topLeft) return null;
+        const size = node.size || { w: 200, h: 100 };
+        return { x: topLeft.x, y: topLeft.y, w: size.w * topLeft.scale, h: size.h * topLeft.scale };
+    },
+
+    /**
+     * v14: мировой прямоугольник узла в ЛЮБОМ окне, где открыта его дорожка
+     * (предпочитая `preferWindowId`, если он валиден). null — дорожка нигде
+     * не открыта, узел не отображается (инвариант §2.3 LANES_MODEL.md).
+     * @param {string} nodeId
+     * @param {Object} state
+     * @param {?string} [preferWindowId]
+     * @returns {?{x:number,y:number,w:number,h:number}}
+     */
+    nodeWorldRect: (nodeId, state, preferWindowId) => {
+        const node = state && state.nodes && state.nodes[nodeId];
+        if (!node) return null;
+        const ownerId = node.parentId || 'root';
+        const windows = (state && state.windows) || {};
+        let win = null;
+        if (preferWindowId && windows[preferWindowId] && (windows[preferWindowId].lanes || []).includes(ownerId)) {
+            win = windows[preferWindowId];
+        } else {
+            win = HierarchyUtils.windowsOfLane(ownerId, windows)[0] || null;
+        }
+        if (!win) return null;
+        return HierarchyUtils.nodeRectInWindow(win, nodeId, state);
+    },
+
+    /**
+     * v14: мировая позиция и масштаб узла (аналог старого getWorldTransform,
+     * но окно+дорожка вместо уровня). Временное имя до конца Фазы 4.
+     * @param {string} id
+     * @param {Object} state
+     * @returns {{x:number,y:number,scale:number}}
+     */
+    getWorldTransformV14: (id, state) => {
+        if (!id || !state || id === 'root') return { x: 0, y: 0, scale: 1.0 };
+        const node = state.nodes && state.nodes[id];
+        if (!node) return { x: 0, y: 0, scale: 1.0 };
+        const rect = HierarchyUtils.nodeWorldRect(id, state);
+        if (!rect) return { x: 0, y: 0, scale: 1.0 };
+        const w = (node.size && node.size.w) || 1;
+        return { x: rect.x, y: rect.y, scale: w ? rect.w / w : 1 };
+    },
+
+    /**
+     * v14: bbox членов рамки, лежащих в конкретной дорожке (кусок рамки),
+     * в ЛОКАЛЬНЫХ координатах дорожки (как node.position), с отступом
+     * FRAME_PAD. exceptId исключает одного члена (например, во время его
+     * перетаскивания). null — в этой дорожке нет видимых членов рамки.
+     * @param {WindowEntity} win
+     * @param {string} ownerId
+     * @param {string} frameId
+     * @param {Object} state
+     * @param {?string} [exceptId]
+     * @returns {?{x:number,y:number,w:number,h:number}}
+     */
+    fragmentRect: (win, ownerId, frameId, state, exceptId) => {
+        const frame = state && state.frames && state.frames[frameId];
+        if (!frame || !win) return null;
+        const nodes = state.nodes || {};
+        const members = (frame.members || []).filter(id => id !== exceptId
+            && nodes[id] && (nodes[id].parentId || 'root') === ownerId);
+        if (!members.length) return null;
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        members.forEach(id => {
+            const n = nodes[id];
+            const pos = n.position || { x: 0, y: 0 };
+            const size = n.size || { w: 200, h: 100 };
+            minX = Math.min(minX, pos.x);
+            minY = Math.min(minY, pos.y);
+            maxX = Math.max(maxX, pos.x + size.w);
+            maxY = Math.max(maxY, pos.y + size.h);
+        });
+        return { x: minX - FRAME_PAD, y: minY - FRAME_PAD, w: (maxX - minX) + FRAME_PAD * 2, h: (maxY - minY) + FRAME_PAD * 2 };
+    },
+
+    /**
+     * v14: мировая точка порта — узел ИЛИ рамка (порт рамки — на куске
+     * homeLaneId; без членов там — на первом непустом куске, homeLaneId не
+     * переписывается, см. §4.2 LANES_MODEL.md). Временное имя до Фазы 4.
+     * @param {string} portId
+     * @param {Object} state
+     * @returns {?Point}
+     */
+    getPortWorldPositionV14: (portId, state) => {
+        if (!state) return null;
+        const port = state.ports ? state.ports[portId] : null;
+        if (!port) return null;
+
+        const geom = (typeof window !== 'undefined' && window.GeometryUtils) ? window.GeometryUtils :
+                     (typeof global !== 'undefined' && global.GeometryUtils) ? global.GeometryUtils :
+                     (typeof require === 'function' ? require('./geometry.js') : null);
+        if (!geom) return null;
+
+        const node = state.nodes && state.nodes[port.nodeId];
+        if (node) {
+            const t = HierarchyUtils.getWorldTransformV14(port.nodeId, state);
+            const rel = geom.getPortRelativePosition(port, node);
+            return { x: t.x + rel.x * t.scale, y: t.y + rel.y * t.scale };
+        }
+
+        const frame = state.frames && state.frames[port.nodeId];
+        if (!frame) return null;
+
+        const windows = state.windows || {};
+        const tryFragment = (ownerId) => {
+            const win = HierarchyUtils.windowsOfLane(ownerId, windows)[0];
+            if (!win) return null;
+            const rect = HierarchyUtils.fragmentRect(win, ownerId, frame.id, state);
+            if (!rect) return null;
+            const topLeft = HierarchyUtils.laneLocalToWorld(win, ownerId, { x: rect.x, y: rect.y });
+            if (!topLeft) return null;
+            const rel = geom.getPortRelativePosition(port, { size: { w: rect.w, h: rect.h } });
+            return { x: topLeft.x + rel.x * topLeft.scale, y: topLeft.y + rel.y * topLeft.scale };
+        };
+
+        const homeLaneId = frame.homeLaneId || 'root';
+        const onHome = tryFragment(homeLaneId);
+        if (onHome) return onHome;
+
+        // Домашняя дорожка без видимых членов — порты временно на первом
+        // непустом куске (homeLaneId НЕ переписывается).
+        const nodes = state.nodes || {};
+        const altOwnerId = (frame.members || [])
+            .map(mid => nodes[mid] && (nodes[mid].parentId || 'root'))
+            .find(Boolean);
+        return altOwnerId ? tryFragment(altOwnerId) : null;
+    },
+
+    /**
+     * v14: контекст создания нового узла кнопкой «+» (§10 LANES_MODEL.md,
+     * Toolbar). Единственная ветка вместо старой ambiguous-branch/multi-owner
+     * логики — дорожка однозначна: activeLaneId, либо дорожка единственного
+     * выделенного узла, либо root. Временное имя до конца Фазы 4.
+     * @param {Object} state
+     * @returns {{ok: boolean, parentId: ?string, reason: ?string}}
+     */
+    getAddContextV14: (state) => {
+        const nodes = (state && state.nodes) || {};
+        const selectedIds = (state && state.selectedIds) || [];
+        const selNodes = selectedIds.filter(id => nodes[id]);
+        if (selNodes.length > 1) return { ok: false, parentId: null, reason: 'multi-select' };
+        if (selNodes.length === 1) {
+            return { ok: true, parentId: nodes[selNodes[0]].parentId || 'root', reason: null };
+        }
+        return { ok: true, parentId: (state && state.activeLaneId) || 'root', reason: null };
+    },
+
+    /**
+     * v14: единственный резолвер цели Drag&Drop — окно → дорожка → карточка →
+     * кусок рамки (§14 LANES_MODEL.md). Однопроектный (кросс-проектный вариант
+     * — Фаза 5, по аналогии со старым getDropTargetAcrossProjects).
+     * @param {Point} pointerWorld
+     * @param {Array<string>} draggedIds
+     * @param {Object} state
+     * @param {{dragDropMode?: boolean}} [opts]
+     * @returns {{ok: boolean, reason?: ?string, windowId?: string, ownerId?: string, nodeId?: string, frameId?: string, isMove?: boolean}}
+     */
+    resolveDropTarget: (pointerWorld, draggedIds, state, opts = {}) => {
+        if (!state || !draggedIds || !draggedIds.length || !pointerWorld) return { ok: false, reason: 'invalid' };
+        const dragDropMode = opts.dragDropMode !== false;
+        const nodes = state.nodes || {};
+        const windows = state.windows || {};
+        const frames = state.frames || {};
+        const dragged = draggedIds.filter(id => nodes[id]);
+        if (!dragged.length) return { ok: false, reason: 'invalid' };
+
+        const isExcluded = (id) => dragged.includes(id)
+            || dragged.some(d => HierarchyUtils.isDescendantOfV14(id, d, nodes));
+
+        const containsPt = (rect) => !!rect && pointerWorld.x >= rect.x && pointerWorld.x <= rect.x + rect.w
+            && pointerWorld.y >= rect.y && pointerWorld.y <= rect.y + rect.h;
+
+        // 1. Окно под курсором. При перекрытии здесь побеждает последнее по
+        // порядку словаря — временная эвристика; явный z-order активного окна
+        // (§10.3 LANES_MODEL.md) появится вместе с самим состоянием окон в UI (Фаза 4).
+        let win = null, windowId = null;
+        Object.entries(windows).forEach(([wid, w]) => {
+            if (!w) return;
+            const pos = w.position || { x: 0, y: 0 };
+            const size = w.size || { w: 900, h: 600 };
+            if (containsPt({ x: pos.x, y: pos.y, w: size.w, h: size.h })) { win = w; windowId = wid; }
+        });
+        if (!win) return { ok: false, reason: 'empty' };
+        if (win.collapsed) return { ok: false, reason: 'collapsed', windowId };
+
+        // 2. Дорожка под курсором
+        let ownerId = null;
+        (win.lanes || []).forEach(lid => {
+            if (containsPt(HierarchyUtils.laneRect(win, lid))) ownerId = lid;
+        });
+        if (!ownerId) return { ok: false, reason: 'empty', windowId };
+
+        const sameOwner = dragged.every(id => (nodes[id].parentId || 'root') === ownerId);
+
+        // 3. Карточка узла в этой дорожке — вложение (Nest)
+        let cardTarget = null;
+        Object.keys(nodes).forEach(id => {
+            if (isExcluded(id) || (nodes[id].parentId || 'root') !== ownerId) return;
+            if (containsPt(HierarchyUtils.nodeRectInWindow(win, id, state))) cardTarget = id;
+        });
+        if (cardTarget) {
+            if (!dragDropMode) return { ok: false, reason: 'dnd-off', windowId, nodeId: cardTarget };
+            const allChildren = dragged.every(id => nodes[id].parentId === cardTarget);
+            if (allChildren) return { ok: false, reason: 'same-parent', windowId, nodeId: cardTarget };
+            for (const id of dragged) {
+                const verdict = HierarchyUtils.canReparentToV14(id, cardTarget, nodes);
+                if (!verdict.ok) return { ok: false, reason: verdict.reason, windowId, nodeId: cardTarget };
+            }
+            return { ok: true, windowId, nodeId: cardTarget };
+        }
+
+        // 4. Кусок рамки в этой дорожке, без попадания на конкретную карточку — членство
+        let frameId = null;
+        Object.keys(frames).forEach(fid => {
+            const local = HierarchyUtils.fragmentRect(win, ownerId, fid, state);
+            if (!local) return;
+            const topLeft = HierarchyUtils.laneLocalToWorld(win, ownerId, { x: local.x, y: local.y });
+            if (!topLeft) return;
+            const rect = { x: topLeft.x, y: topLeft.y, w: local.w * topLeft.scale, h: local.h * topLeft.scale };
+            if (containsPt(rect)) frameId = fid;
+        });
+
+        // 5. Фон дорожки: Move в своей же дорожке либо Nest/Extract на её владельца
+        if (sameOwner) return { ok: true, windowId, ownerId, isMove: true, ...(frameId ? { frameId } : {}) };
+        if (!dragDropMode) return { ok: false, reason: 'dnd-off', windowId, ownerId };
+        for (const id of dragged) {
+            const verdict = HierarchyUtils.canReparentToV14(id, ownerId, nodes);
+            if (!verdict.ok) return { ok: false, reason: verdict.reason, windowId, ownerId };
+        }
+        return { ok: true, windowId, ownerId, ...(frameId ? { frameId } : {}) };
+    },
+
+    /**
+     * v14: связи, разложенные по ОКНАМ (не по глубине): связь межоконная в
+     * окне W, если W показывает дорожку одного порта, а дорожка другого в W
+     * НЕ показана — одна и та же связь может быть внутренней в одном окне и
+     * межоконной в другом (дорожка-зеркало в нескольких окнах, §5 плана).
+     * Заменяет getCrossLinksByLevel — новое имя, без временного суффикса.
+     * @param {Object} state
+     * @returns {Object<string, Array<{link:Object, isSource:boolean, myPort:Object, otherPort:Object, otherOwnerId:string}>>}
+     */
+    getLinksCrossingWindows: (state) => {
+        if (!state || !state.links) return {};
+        const nodes = state.nodes || {};
+        const frames = state.frames || {};
+        const windows = state.windows || {};
+        const linksList = Array.isArray(state.links) ? state.links : Object.values(state.links || {});
+        const byWindow = {};
+        const push = (wid, entry) => { (byWindow[wid] || (byWindow[wid] = [])).push(entry); };
+
+        const ownerOf = (hostId) => (nodes[hostId] && (nodes[hostId].parentId || 'root'))
+            || (frames[hostId] && (frames[hostId].homeLaneId || 'root'))
+            || null;
+
+        linksList.forEach(link => {
+            if (!link || !link.id) return;
+            const sp = state.ports && state.ports[link.sourcePortId];
+            const tp = state.ports && state.ports[link.targetPortId];
+            if (!sp || !tp) return;
+            const sOwner = ownerOf(sp.nodeId);
+            const tOwner = ownerOf(tp.nodeId);
+            if (!sOwner || !tOwner) return;
+            const sWindows = HierarchyUtils.windowsOfLane(sOwner, windows).map(w => w.id);
+            const tWindows = HierarchyUtils.windowsOfLane(tOwner, windows).map(w => w.id);
+            sWindows.forEach(wid => {
+                if (!tWindows.includes(wid)) push(wid, { link, isSource: true, myPort: sp, otherPort: tp, otherOwnerId: tOwner });
+            });
+            tWindows.forEach(wid => {
+                if (!sWindows.includes(wid)) push(wid, { link, isSource: false, myPort: tp, otherPort: sp, otherOwnerId: sOwner });
+            });
+        });
+        return byWindow;
+    },
+
+    /**
+     * v14: межоконные связи конкретного окна, по id связи. Временное имя до
+     * конца Фазы 4 (заменит getProxyIndexForWindow). Пиксельная геометрия
+     * прокси-порта (framePos/viewportPos/worldPos) — задача Фазы 5, здесь
+     * только индекс «какая связь пересекает какое окно и через какие порты».
+     * @param {string} windowId
+     * @param {Object} state
+     * @returns {Object<string, Object>}
+     */
+    getProxyIndexForWindowV14: (windowId, state) => {
+        const list = HierarchyUtils.getLinksCrossingWindows(state)[windowId] || [];
+        const byLink = {};
+        list.forEach(entry => { byLink[entry.link.id] = entry; });
+        return byLink;
+    },
+
+    /**
+     * v14 (Фаза 4, доп.): дорожка, в которой хост порта СЕЙЧАС фактически
+     * отрисован — узел -> его собственный parentId; рамка -> кусок в её
+     * homeLaneId, либо первый непустой (см. §4.2 LANES_MODEL.md, та же
+     * эвристика, что и в getPortWorldPositionV14). Используется Lane.js/Link.js
+     * для решения «этот порт — в моей дорожке?» без дублирования эвристики.
+     * @param {string} portId
+     * @param {Object} state
+     * @returns {?string}
+     */
+    getPortHostOwnerId: (portId, state) => {
+        const port = state.ports && state.ports[portId];
+        if (!port) return null;
+        const node = state.nodes && state.nodes[port.nodeId];
+        if (node) return node.parentId || 'root';
+        const frame = state.frames && state.frames[port.nodeId];
+        if (!frame) return null;
+        const nodes = state.nodes || {};
+        const windows = state.windows || {};
+        const homeLaneId = frame.homeLaneId || 'root';
+        if (HierarchyUtils.fragmentRect(HierarchyUtils.windowsOfLane(homeLaneId, windows)[0], homeLaneId, frame.id, state)) return homeLaneId;
+        return (frame.members || []).map(mid => nodes[mid] && (nodes[mid].parentId || 'root')).find(Boolean) || null;
+    },
+
+    /**
+     * v14: печать состояния проекта в нотации §1 плана / §3 LANES_MODEL.md —
+     * ДЕРЕВО/ОКНА/РАМКИ/СВЯЗИ. Формат реализован как ЧЕТЫРЕ ПОСЛЕДОВАТЕЛЬНЫХ
+     * секции с заголовками (не визуальная 4-колоночная таблица из иллюстрации
+     * плана — та рассчитана на чтение человеком в чате, а не на устойчивый
+     * машинный парсинг; секции с заголовками несут ту же самую информацию и
+     * надёжно парсятся обратно `parseNotation`). Имена узлов/рамок,
+     * совпадающие у разных сущностей, разводятся суффиксом `#2`, `#3`...
+     * @param {Object} state { nodes, frames, windows, ports, links }
+     * @returns {string}
+     */
+    dumpNotation: (state) => {
+        const nodes = (state && state.nodes) || {};
+        const frames = (state && state.frames) || {};
+        const windows = (state && state.windows) || {};
+        const links = (state && state.links) || {};
+
+        const displayOf = {};
+        const used = {};
+        Object.keys(nodes).forEach(id => {
+            const n = nodes[id];
+            if (!n) return;
+            const base = n.name || id;
+            used[base] = (used[base] || 0) + 1;
+            displayOf[id] = used[base] === 1 ? base : `${base}#${used[base]}`;
+        });
+        const laneLabel = (ownerId) => {
+            if (ownerId === 'root') return 'Проект';
+            const hidden = false; // проставляется вызывающим контекстом окна ниже
+            return displayOf[ownerId] || ownerId;
+        };
+
+        // ДЕРЕВО: обход в порядке следования в словаре nodes, «мама раньше детей».
+        const byParent = HierarchyUtils.getChildrenByParent(nodes);
+        const treeLines = [];
+        const visit = (parentId) => {
+            (byParent[parentId] || []).forEach(n => {
+                const path = HierarchyUtils.getPath(n.id, nodes).map(id => displayOf[id] || id);
+                treeLines.push('/' + path.join('/'));
+                visit(n.id);
+            });
+        };
+        visit('root');
+
+        // ОКНА
+        const windowLines = Object.entries(windows).map(([wid, w]) => {
+            const lanes = (w.lanes || []).map(lid => ((w.hidden || []).includes(lid) ? '~' : '') + laneLabel(lid));
+            const frameLabel = w.frameId ? `${displayOf[w.frameId] || w.frameId} ⊂ ` : '';
+            return `${wid} = ${frameLabel}[${lanes.join(' | ')}]`;
+        });
+
+        // РАМКИ
+        const frameLines = Object.entries(frames).map(([fid, f]) => {
+            const members = (f.members || []).map(mid => displayOf[mid] || mid);
+            return `${f.name || fid} = {${members.join(', ')}}`;
+        });
+
+        // СВЯЗИ
+        const linksList = Array.isArray(links) ? links : Object.values(links || {});
+        const linkLines = linksList.filter(Boolean).map(l => {
+            const sp = state.ports && state.ports[l.sourcePortId];
+            const tp = state.ports && state.ports[l.targetPortId];
+            const srcHost = sp && (displayOf[sp.nodeId] || (frames[sp.nodeId] && frames[sp.nodeId].name) || sp.nodeId);
+            const tgtHost = tp && (displayOf[tp.nodeId] || (frames[tp.nodeId] && frames[tp.nodeId].name) || tp.nodeId);
+            return `${srcHost}.${(sp && sp.name) || (sp && sp.id)} -> ${tgtHost}.${(tp && tp.name) || (tp && tp.id)}`;
+        });
+
+        return [
+            'ДЕРЕВО', ...treeLines, '',
+            'ОКНА', ...windowLines, '',
+            'РАМКИ', ...frameLines, '',
+            'СВЯЗИ', ...linkLines
+        ].join('\n');
+    },
+
+    /**
+     * v14: разбор текста в нотации (см. dumpNotation) в v14-фикстуру
+     * `{ nodes, frames, windows, ports, links }` — основной инструмент
+     * построения тестовых состояний с Фазы 2 (вместо разметки JSON руками).
+     * Требование к фикстурам: имена узлов уникальны В ПРЕДЕЛАХ короткой
+     * ссылки — коллизии разводятся явным суффиксом `#2` в ОКНА/РАМКИ/СВЯЗИ,
+     * симметрично тому, что генерирует dumpNotation.
+     * @param {string} text
+     * @returns {{nodes: Object, frames: Object, windows: Object, ports: Object, links: Object}}
+     */
+    parseNotation: (text) => {
+        const nodes = {};
+        const frames = {};
+        const windows = {};
+        const ports = {};
+        const links = {};
+        const idByDisplay = {};
+        const frameIdByDisplay = {};
+        const childCounters = {};
+        const GRID_X = 260, GRID_Y = 160, PER_ROW = 5;
+
+        const resolveNodeRef = (ref) => {
+            const trimmed = ref.trim();
+            if (idByDisplay[trimmed] !== undefined) return idByDisplay[trimmed];
+            throw new Error(`parseNotation: неизвестный узел «${trimmed}»`);
+        };
+        const resolveFrameRef = (ref) => {
+            const trimmed = ref.trim();
+            if (frameIdByDisplay[trimmed] !== undefined) return frameIdByDisplay[trimmed];
+            throw new Error(`parseNotation: неизвестная рамка «${trimmed}»`);
+        };
+
+        let section = null;
+        let linkCounter = 0;
+        let windowCounter = 0;
+        const WINDOW_GAP_Y = 800;
+
+        String(text || '').split('\n').forEach(rawLine => {
+            const line = rawLine.trim();
+            if (!line) return;
+            if (line === 'ДЕРЕВО' || line === 'ОКНА' || line === 'РАМКИ' || line === 'СВЯЗИ') { section = line; return; }
+
+            if (section === 'ДЕРЕВО') {
+                if (!line.startsWith('/')) return;
+                const segments = line.split('/').filter(Boolean);
+                let parentId = 'root';
+                let pathSoFar = '';
+                segments.forEach(seg => {
+                    pathSoFar += '/' + seg;
+                    if (idByDisplay[pathSoFar] === undefined) {
+                        let finalId = seg;
+                        let suffix = 2;
+                        while (nodes[finalId] && nodes[finalId].parentId !== parentId) {
+                            finalId = `${seg}#${suffix}`; suffix++;
+                        }
+                        if (!nodes[finalId]) {
+                            const idx = (childCounters[parentId] = (childCounters[parentId] || 0) + 1) - 1;
+                            nodes[finalId] = {
+                                id: finalId, name: seg, parentId,
+                                position: { x: (idx % PER_ROW) * GRID_X, y: Math.floor(idx / PER_ROW) * GRID_Y },
+                                size: { w: 200, h: 100 }
+                            };
+                        }
+                        idByDisplay[pathSoFar] = finalId;
+                        if (idByDisplay[seg] === undefined) idByDisplay[seg] = finalId;
+                        else if (idByDisplay[seg] !== finalId && idByDisplay[finalId] === undefined) idByDisplay[finalId] = finalId;
+                    }
+                    parentId = idByDisplay[pathSoFar];
+                });
+                return;
+            }
+
+            if (section === 'РАМКИ') {
+                const m = line.match(/^(.+?)\s*=\s*\{(.*)\}$/);
+                if (!m) return;
+                const [, frameName, membersRaw] = m;
+                const trimmedName = frameName.trim();
+                const members = membersRaw.split(',').map(s => s.trim()).filter(Boolean).map(resolveNodeRef);
+                frames[trimmedName] = {
+                    id: trimmedName, name: trimmedName, members,
+                    homeLaneId: members.length ? (nodes[members[0]].parentId || 'root') : 'root'
+                };
+                frameIdByDisplay[trimmedName] = trimmedName;
+                return;
+            }
+
+            if (section === 'ОКНА') {
+                const m = line.match(/^(\S+)\s*=\s*(?:([^\[⊂]+?)\s*⊂\s*)?\[(.*)\]$/u);
+                if (!m) return;
+                const [, windowId, frameRef, laneListRaw] = m;
+                const lanes = [];
+                const hidden = [];
+                laneListRaw.split('|').map(s => s.trim()).filter(Boolean).forEach(tok => {
+                    const isHidden = tok.startsWith('~');
+                    const label = isHidden ? tok.slice(1).trim() : tok;
+                    const ownerId = (label === 'Проект' || label === 'root') ? 'root' : resolveNodeRef(label);
+                    lanes.push(ownerId);
+                    if (isHidden) hidden.push(ownerId);
+                });
+                windows[windowId] = {
+                    id: windowId, lanes, hidden,
+                    frameId: frameRef ? resolveFrameRef(frameRef) : null,
+                    // Окна размещаются друг под другом (не накладываются) — сама
+                    // нотация геометрию не несёт, это только для тестов, которым
+                    // нужны различимые мировые прямоугольники окон.
+                    position: { x: 0, y: windowCounter++ * WINDOW_GAP_Y }, size: { w: 1000, h: 700 },
+                    camera: { offset: { x: 0, y: 0 }, zoom: 1 }, collapsed: false
+                };
+                return;
+            }
+
+            if (section === 'СВЯЗИ') {
+                const m = line.match(/^(.+?)\.(\S+)\s*(?:->|→)\s*(.+?)\.(\S+)$/);
+                if (!m) return;
+                const [, srcRef, srcPortName, tgtRef, tgtPortName] = m;
+                const srcNodeId = resolveNodeRef(srcRef);
+                const tgtNodeId = resolveNodeRef(tgtRef);
+                const srcPortId = `${srcNodeId}-${srcPortName}`;
+                const tgtPortId = `${tgtNodeId}-${tgtPortName}`;
+                if (!ports[srcPortId]) ports[srcPortId] = { id: srcPortId, nodeId: srcNodeId, type: 'output', edge: 'right', position: 0.5, name: srcPortName };
+                if (!ports[tgtPortId]) ports[tgtPortId] = { id: tgtPortId, nodeId: tgtNodeId, type: 'input', edge: 'left', position: 0.5, name: tgtPortName };
+                const linkId = `link-${++linkCounter}`;
+                links[linkId] = { id: linkId, sourcePortId: srcPortId, targetPortId: tgtPortId };
+                return;
+            }
+        });
+
+        return { nodes, frames, windows, ports, links };
+    }
+});
 
 if (typeof window !== 'undefined') window.HierarchyUtils = HierarchyUtils;
 if (typeof module !== 'undefined') module.exports = HierarchyUtils;

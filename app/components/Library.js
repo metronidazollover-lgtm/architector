@@ -1,38 +1,33 @@
+// v14 (Фаза 4): «Слои» -> «Рамки» (frames); группировка узлов — по дорожке
+// родителя (parentId), а не по владению слоем. Дерево (OutlinerTree) и клик
+// по узлу — единственное место, где реализовано «клик по узлу с детьми
+// открывает его дорожку» (§7.1.7 плана): здесь SET_SELECTED + CENTER_ON_ENTITY
+// (сам откроет дорожку узла, если она нигде не открыта) + OPEN_LANE для его
+// собственной дорожки, если у узла есть дети.
 function Library({ projectId }) {
     const { state, dispatch } = useStore();
-    const [objectTab, setObjectTab] = React.useState('layers');
+    const [objectTab, setObjectTab] = React.useState('tree');
+    const H = window.HierarchyUtils;
 
-    // v12: панель обозревателя живёт в стеке плашек (по одной на проект).
-    // Полное дерево показывается только для АКТИВНОГО проекта (его данные —
-    // в плоском виде state.*); для неактивного — заглушка с активацией по
-    // клику. Простая версия по решению владельца продукта, улучшим позже.
     const isActiveProject = !projectId || projectId === state.activeProjectId;
-
-    const { layers, nodes, ports, links, past, future, historyLogs } = state;
+    const { nodes, ports, links, past, future, historyLogs } = state;
+    const frames = state.frames || {};
     const activeTab = state.ui.libraryTab || 'objects';
 
     React.useEffect(() => {
         if (state.selectedIds && state.selectedIds.length > 0) {
             const selectedId = state.selectedIds[0];
-            if (layers && layers[selectedId]) {
-                setObjectTab('layers');
-            } else if (nodes && nodes[selectedId]) {
-                setObjectTab('nodes');
-            } else if (ports && ports[selectedId]) {
-                setObjectTab('ports');
-            } else {
-                const link = links ? links[selectedId] : null;
-                if (link) {
-                    setObjectTab('links');
-                }
-            }
+            if (frames && frames[selectedId]) setObjectTab('frames');
+            else if (nodes && nodes[selectedId]) setObjectTab('nodes');
+            else if (ports && ports[selectedId]) setObjectTab('ports');
+            else if (links && links[selectedId]) setObjectTab('links');
         }
-    }, [state.selectedIds, layers, nodes, ports, links]);
+    }, [state.selectedIds]);
 
     if (!isActiveProject) {
         return (
             <div
-                className="w-[350px] glass-panel rounded-xl border-[#444] shadow-2xl px-4 py-3 text-sm text-gray-400 cursor-pointer hover:text-white transition-colors"
+                className="w-[350px] panel rounded-xl shadow-2xl px-4 py-3 text-sm text-gray-400 cursor-pointer hover:text-white transition-colors"
                 onClick={() => dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId })}
                 data-file="components/Library.js"
             >
@@ -42,326 +37,119 @@ function Library({ projectId }) {
     }
 
     const handleSelect = (id) => {
+        const node = nodes[id];
         dispatch({ type: 'SET_SELECTED', payload: id });
         dispatch({ type: 'CENTER_ON_ENTITY', payload: id });
-    };
-
-    const getNodeHierarchyInfo = (entityId) => {
-        let level = 1;
-        if (!entityId || entityId === 'root') return { level: 0, parentNode: null };
-
-        const safeNodes = nodes || {};
-        const safeLayers = layers || {};
-        const safePorts = ports || {};
-        const safeLinks = Array.isArray(links) ? links.reduce((acc, l) => { if (l && l.id) acc[l.id] = l; return acc; }, {}) : (links || {});
-
-        let currentId = safeNodes[entityId]?.parentId || 
-                        safeLayers[entityId]?.parentId || 
-                        safePorts[entityId]?.nodeId || 
-                        safeLinks[entityId]?.context || null;
-        let parentNode = null;
-        const visited = new Set();
-        if (entityId) visited.add(entityId);
-        
-        while (currentId && currentId !== 'root' && !visited.has(currentId)) {
-            visited.add(currentId);
-            if (safeLayers[currentId]) {
-                currentId = safeLayers[currentId].parentId;
-            } else if (safeNodes[currentId]) {
-                if (!parentNode) parentNode = safeNodes[currentId];
-                level++;
-                currentId = safeNodes[currentId].parentId;
-            } else if (safePorts[currentId]) {
-                if (!parentNode && safeNodes[safePorts[currentId].nodeId]) parentNode = safeNodes[safePorts[currentId].nodeId];
-                level++;
-                currentId = safePorts[currentId].nodeId;
-            } else if (safeLinks[currentId]) {
-                level++;
-                currentId = safeLinks[currentId].context;
-            } else {
-                break;
+        if (node) {
+            const hasChildren = (H.getChildrenByParent(nodes)[id] || []).length > 0;
+            if (hasChildren) {
+                dispatch({ type: 'OPEN_LANE', payload: { ownerId: id } });
+                dispatch({ type: 'SET_ACTIVE_LANE', payload: id });
             }
         }
-        return { level, parentNode };
     };
 
-    const ItemRow = ({ id, icon, color, title, subtitle, hidden, onToggleHide, level = 1, parentNode = null }) => {
-        const isSelected = state.selectedIds && state.selectedIds.includes(id);
-        
-        const handleParentClick = (e) => {
-            e.stopPropagation();
-            if (parentNode) handleSelect(parentNode.id);
-        };
+    const laneLabel = (ownerId) => (ownerId === 'root' ? 'Главный холст' : ((nodes[ownerId] && nodes[ownerId].name) || ownerId));
 
+    const ItemRow = ({ id, icon, color, name, subtitle, isHidden, onToggleHidden, depth }) => {
+        const isSelected = (state.selectedIds || []).includes(id);
         return (
-            <div 
-                className={`group flex items-center justify-between px-3 py-2 cursor-pointer border-b border-[#333]/50 transition-colors
-                ${isSelected ? 'bg-[var(--accent-blue)]/10 border-[var(--accent-blue)]/30' : 'hover:bg-white/5'} ${hidden ? 'opacity-50' : ''}`}
+            <div
+                className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-xs ${isSelected ? 'bg-[var(--accent-blue)]/30' : 'hover:bg-white/5'}`}
+                style={{ paddingLeft: 8 + (depth || 0) * 12 }}
                 onClick={() => handleSelect(id)}
             >
-                <div className="flex items-center gap-2 overflow-hidden flex-1" style={{ paddingLeft: `${(level - 1) * 12}px` }}>
-                    {parentNode && (
-                        <div 
-                            className="w-3 h-3 rounded-[2px] shrink-0 border border-white/20 cursor-pointer hover:scale-110 transition-transform flex items-center justify-center shadow-sm"
-                            style={{ backgroundColor: parentNode.color || '#333' }}
-                            onClick={handleParentClick}
-                            title={`Родитель: ${parentNode.name}`}
-                        >
-                            <div className="icon-arrow-up text-[8px] text-white/70"></div>
-                        </div>
-                    )}
-                    
-                    {level > 1 && (
-                        <span className="text-[9px] font-mono bg-black/40 text-gray-400 px-1 py-0.5 rounded shrink-0">L{level}</span>
-                    )}
-
-                    {color ? (
-                        <div className="w-3 h-3 rounded-[3px] shrink-0 border border-white/10" style={{ backgroundColor: color }}></div>
-                    ) : (
-                        <div className={`${icon} text-gray-400 shrink-0 text-sm ${isSelected ? 'text-[var(--accent-blue)]' : ''}`}></div>
-                    )}
-                    <div className="flex flex-col overflow-hidden">
-                        <span className={`text-sm truncate ${isSelected ? 'text-[var(--accent-blue)] font-medium' : 'text-gray-200'} ${hidden ? 'line-through' : ''}`}>
-                            {title}
-                        </span>
-                        {subtitle && <span className="text-[10px] text-gray-500 truncate">{subtitle}</span>}
-                    </div>
-                </div>
-                {onToggleHide ? (
-                    <button 
-                        className={`transition-opacity text-sm p-1 rounded hover:bg-white/10 ${hidden ? 'opacity-100 text-gray-500' : 'opacity-0 group-hover:opacity-100 text-gray-400'} ${isSelected ? 'opacity-100 text-[var(--accent-blue)]' : ''}`}
-                        onClick={(e) => { e.stopPropagation(); onToggleHide(id); }}
-                        title={hidden ? "Показать" : "Скрыть"}
-                    >
-                        <div className={hidden ? "icon-eye-off" : "icon-eye"}></div>
+                {color ? <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: color }} /> : <div className={`${icon} w-3 h-3 shrink-0 text-gray-400`} />}
+                <span className={`truncate flex-1 ${isHidden ? 'line-through text-gray-500' : ''}`}>{name}</span>
+                {subtitle && <span className="text-gray-500 text-[10px] shrink-0">{subtitle}</span>}
+                {onToggleHidden && (
+                    <button onClick={(e) => { e.stopPropagation(); onToggleHidden(); }} title={isHidden ? 'Показать' : 'Скрыть'}>
+                        <div className={`${isHidden ? 'icon-eye-off' : 'icon-eye'} w-3 h-3 text-gray-400`} />
                     </button>
-                ) : (
-                    <div className={`icon-eye text-gray-500 text-sm opacity-0 group-hover:opacity-100 transition-opacity ${isSelected ? 'opacity-100 text-[var(--accent-blue)]' : ''}`}></div>
                 )}
             </div>
         );
     };
 
-    // Группировка узлов по СЛОЯМ (слой = логическая группа на своём холсте).
-    // Поле node.group — легаси, в интерфейсе больше не используется.
-    const nodesArray = Object.values(nodes);
-    const groupedNodes = nodesArray.reduce((acc, node) => {
-        const layer = node.parentId && node.parentId !== 'root' && layers ? layers[node.parentId] : null;
-        const g = layer ? (layer.name || layer.id) : 'Вне слоёв';
-        if (!acc[g]) acc[g] = [];
-        acc[g].push(node);
-        return acc;
-    }, {});
-
     const renderContent = () => {
-        if (activeTab === 'objects') {
+        if (activeTab === 'history') {
             return (
-                <div className="flex flex-col flex-1 overflow-hidden">
-                    <div className="flex px-2 py-1.5 gap-1 border-b border-[#333]/50 bg-[#1a1a1a]/50 shrink-0 overflow-x-auto no-scrollbar">
-                        <button
-                            className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'tree' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
-                            onClick={() => setObjectTab('tree')}
-                            title="Иерархия всего проекта: клик — показать, двойной клик — войти, drag-and-drop — перевложить"
-                        >
-                            Дерево
-                        </button>
-                        <button
-                            className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'layers' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
-                            onClick={() => setObjectTab('layers')}
-                        >
-                            Слои ({(layers && Object.keys(layers).length) || 0})
-                        </button>
-                        <button 
-                            className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'nodes' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
-                            onClick={() => setObjectTab('nodes')}
-                        >
-                            Узлы ({Object.keys(nodes).length})
-                        </button>
-                        <button 
-                            className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'ports' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
-                            onClick={() => setObjectTab('ports')}
-                        >
-                            Порты ({Object.keys(ports).length})
-                        </button>
-                        <button 
-                            className={`px-2 py-1 text-[11px] font-semibold rounded transition-colors whitespace-nowrap ${objectTab === 'links' ? 'bg-[var(--accent-blue)]/20 text-[var(--accent-blue)]' : 'text-gray-500 hover:bg-white/5'}`}
-                            onClick={() => setObjectTab('links')}
-                        >
-                            Связи ({links ? Object.keys(links).length : 0})
-                        </button>
-                    </div>
-                    <div className="flex flex-col overflow-y-auto no-scrollbar pb-2 flex-1">
-                        {objectTab === 'tree' && <OutlinerTree onSelect={handleSelect} />}
-
-                        {objectTab === 'layers' && (
-                            <div className="flex flex-col">
-                                {(!layers || Object.keys(layers).length === 0) && <div className="text-gray-600 italic px-4 py-3 text-sm">Нет слоев</div>}
-                                
-                                {layers && Object.values(layers).map(layer => (
-                                    <ItemRow 
-                                        key={layer.id} 
-                                        id={layer.id} 
-                                        icon="icon-layers" 
-                                        color={layer.color}
-                                        title={layer.name}
-                                    />
-                                ))}
-                            </div>
-                        )}
-
-                        {objectTab === 'nodes' && (
-                            <div className="flex flex-col">
-                                {Object.keys(nodes).length === 0 && <div className="text-gray-600 italic px-4 py-3 text-sm">Нет узлов</div>}
-                                
-                                {Object.entries(groupedNodes).map(([groupName, groupNodes]) => (
-                                    <div key={groupName} className="flex flex-col">
-                                        <div 
-                                            className="px-3 py-1.5 bg-[#1a1a1a] text-[10px] uppercase text-gray-500 hover:text-white cursor-pointer font-semibold border-b border-[#333]/50 sticky top-0 backdrop-blur-md z-10 transition-colors flex items-center justify-between group"
-                                            onClick={() => dispatch({ type: 'SET_MULTI_SELECTED', payload: groupNodes.map(n => n.id) })}
-                                            title="Выделить все узлы этого слоя"
-                                        >
-                                            <span>{groupName}</span>
-                                            <div className="icon-scan text-xs opacity-0 group-hover:opacity-100 transition-opacity text-[var(--accent-blue)]"></div>
-                                        </div>
-                                        {groupNodes.map(node => {
-                                            const { level, parentNode } = getNodeHierarchyInfo(node.id);
-                                            return (
-                                                <ItemRow 
-                                                    key={node.id} 
-                                                    id={node.id} 
-                                                    color={node.color} 
-                                                    title={node.name}
-                                                    hidden={node.hidden}
-                                                    onToggleHide={(id) => dispatch({ 
-                                                        type: 'UPDATE_NODE', 
-                                                        payload: { id, updates: { hidden: !node.hidden }, skipHistory: true } 
-                                                    })}
-                                                    level={level}
-                                                    parentNode={parentNode}
-                                                />
-                                            );
-                                        })}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-
-                        {objectTab === 'ports' && (
-                            <div className="flex flex-col">
-                                {Object.keys(ports).length === 0 && <div className="text-gray-600 italic px-4 py-3 text-sm">Нет портов</div>}
-                                {Object.values(ports).map(port => {
-                                    const pNode = nodes[port.nodeId];
-                                    let level = 1;
-                                    let parentNode = pNode;
-                                    if (pNode) {
-                                        const info = getNodeHierarchyInfo(pNode.id);
-                                        level = info.level + 1;
-                                    }
-                                    return (
-                                        <ItemRow 
-                                            key={port.id} 
-                                            id={port.id} 
-                                            icon={port.type === 'input' ? 'icon-circle-arrow-down' : 'icon-circle-arrow-up'} 
-                                            title={port.name || (port.type === 'input' ? 'Вход' : 'Выход')}
-                                            subtitle={`Узел: ${pNode?.name || port.nodeId}`}
-                                            level={level}
-                                            parentNode={parentNode}
-                                        />
-                                    );
-                                })}
-                            </div>
-                        )}
-
-                        {objectTab === 'links' && (
-                            <div className="flex flex-col">
-                                {(!links || Object.keys(links).length === 0) && <div className="text-gray-600 italic px-4 py-3 text-sm">Нет связей</div>}
-                                {links && Object.values(links).map(link => {
-                                    if (!link) return null;
-                                    let level = 1;
-                                    let parentNode = null;
-                                    if (link.context && link.context !== 'root') {
-                                        const info = getNodeHierarchyInfo(link.context);
-                                        level = info.level;
-                                        if (nodes[link.context]) {
-                                            level++;
-                                            parentNode = nodes[link.context];
-                                        }
-                                    }
-                                    return (
-                                        <ItemRow 
-                                            key={link.id} 
-                                            id={link.id} 
-                                            icon="icon-git-commit" 
-                                            title={link.name || `Связь ${link.id.split('-')[1]}`} 
-                                            level={level}
-                                            parentNode={parentNode}
-                                        />
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </div>
+                <div className="flex-1 overflow-y-auto custom-scrollbar p-2 flex flex-col gap-1">
+                    <div className="text-xs text-gray-500 pl-2 py-1">— Начало —</div>
+                    {(historyLogs || []).map((log, i) => (
+                        <div key={i} className={`text-xs pl-2 py-1 border-l-2 ${i === historyLogs.length - 1 ? 'border-[var(--accent-blue)] text-white' : 'border-white/10 text-gray-400'}`}>
+                            {log}
+                        </div>
+                    ))}
                 </div>
             );
         }
 
         return (
-            <div className="flex flex-col overflow-y-auto flex-1 p-2 gap-1 no-scrollbar relative min-h-[200px]">
-                <div className="absolute left-[19px] top-4 bottom-4 w-px bg-[#333] z-0"></div>
-                
-                <div className="flex items-center gap-3 px-2 py-1.5 z-10">
-                    <div className="w-2.5 h-2.5 rounded-full border-[2px] border-gray-500 bg-[#1f1f1f] shrink-0"></div>
-                    <span className="text-gray-500 text-sm italic">Начало</span>
+            <div className="flex flex-col h-full">
+                <div className="flex text-[11px] border-b border-white/10 shrink-0 overflow-x-auto no-scrollbar">
+                    {[
+                        ['tree', 'Дерево'],
+                        ['frames', `Рамки (${Object.keys(frames).length})`],
+                        ['nodes', `Узлы (${Object.keys(nodes).length})`],
+                        ['ports', `Порты (${Object.keys(ports).length})`],
+                        ['links', `Связи (${Object.keys(links).length})`]
+                    ].map(([id, label]) => (
+                        <button
+                            key={id}
+                            className={`px-2.5 py-1.5 whitespace-nowrap ${objectTab === id ? 'text-white border-b-2 border-[var(--accent-blue)]' : 'text-gray-500 hover:text-gray-300'}`}
+                            onClick={() => setObjectTab(id)}
+                        >{label}</button>
+                    ))}
                 </div>
-
-                {historyLogs.map((log, i) => {
-                    const isLast = i === historyLogs.length - 1;
-                    return (
-                        <div key={i} className={`flex items-center gap-3 px-2 py-2 rounded-lg z-10 transition-colors ${isLast ? 'bg-[var(--accent-blue)]/10' : 'hover:bg-white/5'}`}>
-                            <div className={`w-2.5 h-2.5 rounded-full border-[2px] shrink-0 ${isLast ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)]' : 'border-gray-400 bg-[#1f1f1f]'}`}></div>
-                            <span className={`text-sm ${isLast ? 'text-[var(--accent-blue)] font-medium' : 'text-gray-300'}`}>
-                                {log}
-                            </span>
-                        </div>
-                    );
-                })}
+                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                    {objectTab === 'tree' && <OutlinerTree onSelect={handleSelect} />}
+                    {objectTab === 'frames' && Object.values(frames).map(f => (
+                        <ItemRow key={f.id} id={f.id} color={f.color || '#0284c7'} name={f.name || f.id} subtitle={`${(f.members || []).length}`} />
+                    ))}
+                    {objectTab === 'nodes' && Object.values(nodes).map(n => (
+                        <ItemRow key={n.id} id={n.id} color={n.color} name={n.name} subtitle={laneLabel(n.parentId || 'root')} isHidden={n.hidden}
+                            onToggleHidden={() => dispatch({ type: 'UPDATE_NODE', payload: { id: n.id, updates: { hidden: !n.hidden } } })} />
+                    ))}
+                    {objectTab === 'ports' && Object.values(ports).map(p => (
+                        <ItemRow key={p.id} id={p.id} icon="icon-circle" name={p.name || p.id} subtitle={p.type} />
+                    ))}
+                    {objectTab === 'links' && Object.values(links).map(l => (
+                        <ItemRow key={l.id} id={l.id} icon="icon-git-commit-horizontal" name={l.name || l.id} />
+                    ))}
+                </div>
             </div>
         );
     };
 
     return (
-        // Панель рендерится ВНУТРИ стека плашек (Canvas) сразу под плашкой
-        // своего проекта — позиционирование задаёт родитель, плашки ниже
-        // съезжают вниз автоматически (flex-колонка).
-        <div className="w-[350px] glass-panel rounded-xl flex flex-col max-h-[55vh] shadow-2xl overflow-hidden border-[#444] transition-all duration-300 shrink-0" data-file="components/Library.js">
-            <div className="p-3 border-b border-[#333] flex items-center gap-4 bg-[#1f1f1f]">
-                <button 
-                    className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'objects' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
+        <div className="w-[350px] panel rounded-xl shadow-2xl max-h-[55vh] shrink-0 flex flex-col overflow-hidden" data-file="components/Library.js">
+            <div className="flex items-center border-b border-white/10 shrink-0">
+                <button
+                    className={`flex-1 px-3 py-2 text-xs font-medium ${activeTab === 'objects' ? 'text-white bg-white/5' : 'text-gray-500 hover:text-gray-300'}`}
                     onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'objects' })}
-                >
-                    Объекты
-                </button>
-                <button 
-                    className={`text-sm font-semibold transition-colors pb-1 border-b-2 ${activeTab === 'history' ? 'text-gray-100 border-[var(--accent-blue)]' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
+                >Объекты</button>
+                <button
+                    className={`flex-1 px-3 py-2 text-xs font-medium flex items-center justify-center gap-1.5 ${activeTab === 'history' ? 'text-white bg-white/5' : 'text-gray-500 hover:text-gray-300'}`}
                     onClick={() => dispatch({ type: 'SET_LIBRARY_TAB', payload: 'history' })}
                 >
                     История
-                </button>
-                
-                {activeTab === 'history' && (
-                    <div className="ml-auto flex gap-1">
-                        <button 
-                            className={`p-1 rounded text-sm transition-colors ${past.length === 0 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-white/10 hover:text-white'}`}
-                            onClick={() => dispatch({ type: 'UNDO' })}
+                    {activeTab === 'history' && (
+                        <button
+                            className={`ml-1 ${past.length === 0 ? 'opacity-30 cursor-not-allowed' : 'hover:text-white'}`}
                             disabled={past.length === 0}
-                            title="Шаг назад"
+                            onClick={(e) => { e.stopPropagation(); dispatch({ type: 'UNDO' }); }}
+                            title="Отменить"
                         >
-                            <div className="icon-undo-2"></div>
+                            <div className="icon-undo-2 w-3.5 h-3.5" />
                         </button>
-                    </div>
-                )}
+                    )}
+                </button>
             </div>
             {renderContent()}
         </div>
     );
 }
+
+if (typeof window !== 'undefined') window.Library = Library;
+if (typeof module !== 'undefined') module.exports = Library;

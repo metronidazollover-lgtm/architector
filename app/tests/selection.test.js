@@ -9,25 +9,25 @@ global.HierarchyUtils = HierarchyUtils;
 const H = HierarchyUtils;
 
 const {
-    defaultState, reducer, multiReducer, wrapFlatToMulti,
+    defaultState, reducer, multiReducer, wrapFlatToMulti, migrateToV13, migrateToV14,
     getSelectionClass, toggleSelectionWithClass, isContainerSelectionId,
     windowSelectionId, projectSelectionId
 } = require('../store/reducer.js');
 
 const { generateFlatProject } = require('./fixtures/generate.js');
 
-/** Мультисостояние с одним проектом и заданным числом уровней. */
-const makeMulti = (levels = 3) => wrapFlatToMulti(
+/** v14-мультисостояние с одним проектом: сцена в N уровней проходит через
+ * ПОЛНУЮ цепочку миграций, как и живая загрузка (getInitialMultiState). */
+const makeMulti = (levels = 3) => migrateToV14(migrateToV13(wrapFlatToMulti(
     generateFlatProject({ nodes: levels * 3, levels, portsPerNode: 1, linkRatio: 1, seed: 42 })
-);
+)));
 
 test('адресация: класс выделения различает контейнеры и сущности', () => {
     assert.equal(getSelectionClass([]), 'empty');
     assert.equal(getSelectionClass(['node-1', 'layer-2']), 'entities');
     assert.equal(getSelectionClass([windowSelectionId({ id: 'w1' })]), 'containers');
     assert.equal(getSelectionClass([projectSelectionId('p1')]), 'containers');
-    // Легаси-формы: selectedIds персистится, старые значения обязаны распознаваться
-    assert.equal(getSelectionClass(['level-window-2']), 'containers');
+    // Легаси-литерал: selectedIds персистится, старое значение обязано распознаваться
     assert.equal(getSelectionClass(['project']), 'containers');
     assert.equal(isContainerSelectionId('node-1'), false);
 });
@@ -90,38 +90,24 @@ test('инвариант: изоляция не переживает удале�
     assert.equal(H.isContainerIsolationActive(m.containerIsolation), false, 'изоляция снята автоматически');
 });
 
-test('массовое удаление окон: сверху вниз, один шаг Undo на проект', () => {
-    let m = makeMulti(4); // уровни 0..3
+test('v14 массовое удаление окон: один шаг Undo на проект, проект не удаляется целиком', () => {
+    let m = makeMulti(4);
     const pid = m.activeProjectId;
-    const wins = Object.values(m.projects[pid].levelWindows);
-    assert.equal(wins.length, 4);
+    const wins = Object.values(m.projects[pid].windows);
+    assert.ok(wins.length >= 2, 'миграция дала хотя бы два окна для этой фикстуры');
 
-    const w1 = wins.find(w => w.levelIndex === 1);
-    const w2 = wins.find(w => w.levelIndex === 2);
+    const [w1, w2] = wins;
     const pastBefore = m.projects[pid].past.length;
 
     m = { ...m, selectedIds: [windowSelectionId(w1), windowSelectionId(w2)] };
     m = multiReducer(m, { type: 'DELETE_SELECTED' });
 
     const after = m.projects[pid];
-    assert.equal(Object.keys(after.levelWindows).length, 2, 'удалены оба выбранных уровня');
+    assert.equal(after.windows[w1.id], undefined, 'первое выбранное окно закрыто');
+    assert.equal(after.windows[w2.id], undefined, 'второе выбранное окно закрыто');
     assert.equal(after.past.length, pastBefore + 1, 'вся пачка — РОВНО один шаг истории');
     assert.deepEqual(m.selectedIds, [], 'выделение сброшено');
-});
-
-test('массовое удаление: Главный холст и уровень удаляются клавишей Delete', () => {
-    let m = makeMulti(3);
-    const pid = m.activeProjectId;
-    const wins = Object.values(m.projects[pid].levelWindows);
-    const root = wins.find(w => w.levelIndex === 0);
-    const w2 = wins.find(w => w.levelIndex === 2);
-
-    m = { ...m, selectedIds: [windowSelectionId(root), windowSelectionId(w2)] };
-    m = multiReducer(m, { type: 'DELETE_SELECTED' });
-
-    const levels = Object.values(m.projects[pid].levelWindows).map(w => w.levelIndex).sort();
-    assert.ok(levels.includes(0), 'Уровень 1 стал Главным холстом (индекс 0)');
-    assert.equal(levels.length, 1, 'удалены уровень 0 и уровень 2, остался бывший уровень 1');
+    assert.ok(m.projects[pid], 'проект НЕ удалён — закрытие окон в v14 меняет только вид, не структуру');
 });
 
 test('массовое удаление проектов: удаляются целиком, изоляция чистится', () => {

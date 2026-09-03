@@ -44,70 +44,13 @@ const baseState = () => ({
     }
 });
 
-test('рябь: перенос ПРЕДКА внутри слоя меняет локальную позицию потомка', () => {
-    // Узел лежит в слое, слой переезжает — запись самого узла не менялась,
-    // но его позиция внутри уровня обязана измениться.
-    const s0 = {
-        ...baseState(),
-        layers: { 'lay': { id: 'lay', name: 'Слой', parentId: 'root', position: { x: 100, y: 100 }, size: { w: 500, h: 400 } } }
-    };
-    s0.nodes['inLayer'] = { id: 'inLayer', name: 'В слое', parentId: 'lay', position: { x: 5, y: 5 }, size: { w: 200, h: 100 } };
-
-    const before = H.getLocalPosition('inLayer', s0.nodes, s0.layers);
-    assert.deepEqual(before, { x: 105, y: 105 });
-
-    const s1 = { ...s0, layers: { ...s0.layers, lay: { ...s0.layers.lay, position: { x: 300, y: 100 } } } };
-    const after = H.getLocalPosition('inLayer', s1.nodes, s1.layers);
-
-    assert.notDeepEqual(after, before, 'потомок обязан увидеть переезд слоя');
-    assert.deepEqual(after, { x: 305, y: 105 });
-});
-
-test('рябь: смена владельца у середины меняет УРОВЕНЬ внука', () => {
-    const s0 = baseState();
-    assert.equal(H.getEntityLevel('leaf', s0.nodes, s0.layers), 2);
-
-    // mid переезжает к другому владельцу на L0 — запись leaf не тронута
-    const s1 = patchNode(s0, 'mid', { ownerId: 'stranger' });
-    assert.equal(H.getEntityLevel('leaf', s1.nodes, s1.layers), 2, 'уровень тот же, владелец другой');
-
-    // mid становится сиротой на L0 — внук поднимается на L1
-    const s2 = patchNode(s0, 'mid', { ownerId: null, homeLevel: 0 });
-    assert.equal(H.getEntityLevel('leaf', s2.nodes, s2.layers), 1, 'внук обязан подняться следом за серединой');
-});
-
-test('рябь: удаление владельца ре-якорит ветку и сохраняет уровень внука', () => {
-    const s0 = baseState();
-    const s1 = reducer({ ...s0, selectedIds: ['mid'] }, { type: 'DELETE_SELECTED' });
-
-    assert.equal(s1.nodes['mid'], undefined);
-    assert.equal(s1.nodes['leaf'].ownerId, 'anc', 'внук связался с дедом');
-    assert.equal(H.getEntityLevel('leaf', s1.nodes, s1.layers), 2, 'уровень внука не изменился');
-});
-
-test('рябь: связь через поколение (ownerGap) учитывается в уровне', () => {
-    const s0 = baseState();
-    const s1 = patchNode(s0, 'leaf', { ownerId: 'anc', ownerGap: 2 });
-    assert.equal(H.getEntityLevel('leaf', s1.nodes, s1.layers), 2, 'дистанция в два уровня сохраняет положение внука');
-
-    const s2 = patchNode(s1, 'leaf', { ownerGap: 3 });
-    assert.equal(H.getEntityLevel('leaf', s2.nodes, s2.layers), 3, 'изменение дистанции меняет уровень');
-});
-
-test('рябь: «глаз» Главного холста меняет видимость сущностей на ВСЕХ уровнях', () => {
-    const s0 = baseState();
-    assert.equal(H.isEntityVisible('leaf', s0), true);
-
-    // Изолируем ветку постороннего узла: вся ветка anc → mid → leaf гаснет
-    const s1 = { ...s0, levelHideNeighbors: { 0: true }, levelFocusParentId: { 0: ['stranger'] } };
-    assert.equal(H.isEntityVisible('stranger', s1), true, 'сам фокус виден');
-    assert.equal(H.isEntityVisible('leaf', s1), false, 'внук чужой ветки скрыт с уровня 2');
-    assert.equal(H.isEntityVisible('anc', s1), false, 'предок чужой ветки тоже скрыт');
-
-    // Переключаем фокус на нашу ветку — внук снова виден
-    const s2 = { ...s1, levelFocusParentId: { 0: ['anc'] } };
-    assert.equal(H.isEntityVisible('leaf', s2), true, 'внук виден через предка в фокусе');
-});
+// v14 (Фаза 6): «перенос ПРЕДКА внутри слоя», «смена владельца у середины»,
+// «связь через поколение (ownerGap)» и «глаз Главного холста» удалены вместе
+// с проверяемыми функциями (getLocalPosition/getEntityLevel/isEntityVisible) —
+// слои-координатные-контейнеры, ownerId/ownerGap и «глаз» веток не существуют
+// в v14 (см. census Фазы 6). Реактивность v14-геометрии (кэш дорожки/окна
+// инвалидируется по смене поколения nodes/windows) покрыта в других файлах —
+// coords.test.js («v14 Кэш координат инвалидируется...»).
 
 test('рябь: выделение узла подсвечивает связанный порт на ДРУГОМ конце сети', () => {
     // Порт p-anc связан с портом узла leaf. Выделение leaf обязано дойти до
@@ -126,26 +69,8 @@ test('рябь: выделение узла подсвечивает связа�
     assert.equal(connected, true, 'подсветка сети доходит до дальнего порта');
 });
 
-test('рябь: перенос узла на другой уровень меняет состав межуровневых связей окон', () => {
-    const s0 = baseState();
-    const byLevel0 = H.getCrossLinksByLevel(s0);
-    // Связь leaf(L2) → anc(L0) межуровневая: попадает и в 0, и в 2
-    assert.equal((byLevel0[0] || []).length, 1);
-    assert.equal((byLevel0[2] || []).length, 1);
-
-    // Поднимаем leaf на уровень предка — связь становится внутриуровневой
-    const s1 = patchNode(s0, 'leaf', { ownerId: null, homeLevel: 0 });
-    const byLevel1 = H.getCrossLinksByLevel(s1);
-    assert.equal((byLevel1[0] || []).length, 0, 'межуровневых связей у уровня 0 не осталось');
-    assert.equal((byLevel1[2] || []).length, 0, 'и у уровня 2 тоже');
-});
-
-test('кэш индексов не переживает изменение состояния (иначе рябь потеряется)', () => {
-    const s0 = baseState();
-    const idx0 = H.getCrossLinksByLevel(s0);
-    assert.equal(H.getCrossLinksByLevel(s0), idx0, 'в пределах поколения — тот же объект');
-
-    // Сменилось поколение узлов — индекс обязан пересчитаться
-    const s1 = patchNode(s0, 'leaf', { position: { x: 999, y: 999 } });
-    assert.notEqual(H.getCrossLinksByLevel(s1), idx0, 'после изменения — новый расчёт');
-});
+// v14 (Фаза 6): «перенос узла на другой уровень...» и «кэш индексов не
+// переживает изменение состояния» удалены вместе с getCrossLinksByLevel
+// (межуровневые связи по глубине — v13-only). Тот же принцип кэша «по
+// ссылке на словарь» для v14-геометрии — coords.test.js, «v14 Кэш координат
+// инвалидируется...».

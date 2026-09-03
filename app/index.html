@@ -17,13 +17,38 @@
     <style type="text/tailwindcss">
     @layer theme {
         :root {
-            --bg-color: #0f1115;
-            --panel-bg: rgba(26, 26, 26, 0.85);
+            /* PLAN_UI_STYLE_MINI.md — единый визуальный язык: токены, не литералы.
+               Ни один компонент не должен задавать цвет/радиус/тень напрямую. */
+            --bg: #0f1115;
+            --panel: #171a21;
+            --panel-2: #1d212b;
+            --line: #2b3140;
+            --line-2: #3a4256;
+            --text: #e3e7ef;
+            --muted: #8b95a8;
+            --accent: #4f8cff;
+            --ok: #3ccf8e;
+            --warn: #e0a84a;
+            --bad: #ef5d6b;
+            --lane-a: rgba(255, 255, 255, .02);
+            --lane-b: rgba(255, 255, 255, .06);
+            --font: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --mono: 'JetBrains Mono', monospace;
+            --r-win: 8px;
+            --r-card: 6px;
+            --r-chip: 3px;
+            --shadow-win: 0 12px 40px rgba(0, 0, 0, .45);
+            --shadow-card: 0 2px 6px rgba(0, 0, 0, .35);
+
+            /* Легаси-алиасы старых имён — снимаются по ходу пп. 2-4 плана, когда
+               соответствующие компоненты переходят на токены выше напрямую. */
+            --bg-color: var(--bg);
+            --panel-bg: var(--panel);
             --grid-color: rgba(255, 255, 255, 0.05);
-            --accent-blue: #007AFF;
-            --border-color: #2a2a2a;
-            --text-main: #e0e0e0;
-            --text-muted: #888888;
+            --accent-blue: var(--accent);
+            --border-color: var(--line);
+            --text-main: var(--text);
+            --text-muted: var(--muted);
         }
     }
 
@@ -40,13 +65,15 @@
     }
 
     @layer components {
-        .glass-panel {
-            background: var(--panel-bg);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid var(--border-color);
+        /* PLAN_UI_STYLE_MINI.md §3: единый стиль контейнера (окно/панель/тулбар/
+           FAB) — сплошной фон токеном, без размытия (заменяет .glass-panel). */
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--line-2);
+            border-radius: var(--r-win);
+            box-shadow: var(--shadow-win);
         }
-        
+
         .btn {
             @apply px-3 py-1.5 rounded text-sm transition-colors duration-200 flex items-center justify-center gap-2 cursor-pointer;
             background: rgba(255, 255, 255, 0.05);
@@ -62,12 +89,16 @@
             color: white;
         }
         .btn-primary:hover {
-            background: #0066d6;
+            background: color-mix(in srgb, var(--accent) 85%, black);
         }
 
         .input-field {
-            @apply w-full bg-black/50 border border-[#333] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--accent-blue)] transition-colors;
+            @apply w-full bg-black/50 border rounded px-3 py-1.5 text-sm focus:outline-none transition-colors;
+            border-color: var(--line);
             color: var(--text-main);
+        }
+        .input-field:focus {
+            border-color: var(--accent);
         }
     }
     
@@ -109,17 +140,17 @@
     <style>
     @keyframes parent-glow-pulse {
         0%, 100% {
-            box-shadow: 0 0 15px color-mix(in srgb, var(--parent-pulse-color, #007AFF) 20%, transparent) !important;
-            border-color: color-mix(in srgb, var(--parent-pulse-color, #007AFF) 40%, transparent) !important;
+            box-shadow: 0 0 15px color-mix(in srgb, var(--parent-pulse-color, #4f8cff) 20%, transparent) !important;
+            border-color: color-mix(in srgb, var(--parent-pulse-color, #4f8cff) 40%, transparent) !important;
         }
         50% {
-            box-shadow: 0 0 35px color-mix(in srgb, var(--parent-pulse-color, #007AFF) 70%, transparent) !important;
-            border-color: var(--parent-pulse-color, #007AFF) !important;
+            box-shadow: 0 0 35px color-mix(in srgb, var(--parent-pulse-color, #4f8cff) 70%, transparent) !important;
+            border-color: var(--parent-pulse-color, #4f8cff) !important;
         }
     }
     .animate-parent-pulse {
         animation: parent-glow-pulse 2s infinite ease-in-out !important;
-        outline: 2px solid color-mix(in srgb, var(--parent-pulse-color, #007AFF) 50%, transparent) !important;
+        outline: 2px solid color-mix(in srgb, var(--parent-pulse-color, #4f8cff) 50%, transparent) !important;
         outline-offset: 4px !important;
     }
 
@@ -137,23 +168,26 @@
 </head>
 <body>
     <div id="root"></div>
-    <script type="text/babel" src="utils/geometry.js?v=10.35"></script>
-    <script type="text/babel" src="utils/hierarchy.js?v=10.42"></script>
-    <script type="text/babel" src="store/reducer.js?v=10.50"></script>
+    <script type="text/babel" src="utils/geometry.js?v=14.1"></script>
+    <script type="text/babel" src="utils/hierarchy.js?v=14.1"></script>
+    <script type="text/babel" src="store/reducer.js?v=14.1"></script>
     <script type="text/babel" src="store/engine.js?v=10.33"></script>
     <script type="text/babel" src="store/Store.js?v=10.33"></script>
-    <script type="text/babel" src="components/Layer.js?v=10.39"></script>
-    <script type="text/babel" src="components/Link.js?v=10.33"></script>
-    <script type="text/babel" src="components/Port.js?v=10.34"></script>
-    <script type="text/babel" src="components/NodePreview.js?v=10.33"></script>
-    <script type="text/babel" src="components/OutlinerTree.js?v=10.35"></script>
-    <script type="text/babel" src="components/AIAgentNodeContent.js?v=10.36"></script>
-    <script type="text/babel" src="components/Node.js?v=10.37"></script>
-    <script type="text/babel" src="components/LevelWindow.js?v=10.39"></script>
-    <script type="text/babel" src="components/Canvas.js?v=10.37"></script>
-    <script type="text/babel" src="components/ContextActionBar.js?v=10.39"></script>
-    <script type="text/babel" src="components/Toolbar.js?v=10.34"></script>
-    <script type="text/babel" src="components/Library.js?v=10.33"></script>
-    <script type="text/babel" src="app.js?v=10.33"></script>
+    <!-- v14: Frame.js/Lane.js/LaneWindow.js заменяют бывшие Layer.js/LevelWindow.js
+         (Дорожки/Окна/Рамки, см. docs/LANES_MODEL.md) — старые файлы удалены в Фазе 6. -->
+    <script type="text/babel" src="components/Frame.js?v=14.1"></script>
+    <script type="text/babel" src="components/Link.js?v=14.1"></script>
+    <script type="text/babel" src="components/Port.js?v=14.1"></script>
+    <script type="text/babel" src="components/NodePreview.js?v=14.1"></script>
+    <script type="text/babel" src="components/OutlinerTree.js?v=14.1"></script>
+    <script type="text/babel" src="components/AIAgentNodeContent.js?v=14.1"></script>
+    <script type="text/babel" src="components/Node.js?v=14.1"></script>
+    <script type="text/babel" src="components/Lane.js?v=14.1"></script>
+    <script type="text/babel" src="components/LaneWindow.js?v=14.1"></script>
+    <script type="text/babel" src="components/Canvas.js?v=14.1"></script>
+    <script type="text/babel" src="components/ContextActionBar.js?v=14.1"></script>
+    <script type="text/babel" src="components/Toolbar.js?v=14.1"></script>
+    <script type="text/babel" src="components/Library.js?v=14.1"></script>
+    <script type="text/babel" src="app.js?v=14.1"></script>
 </body>
 </html>

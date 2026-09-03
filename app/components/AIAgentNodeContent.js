@@ -130,32 +130,14 @@ function AIAgentNodeContent({ nodeId }) {
         if (validCount > 0) {
             report += `✅ *Применено ${validCount} экшенов к холсту.* Отменить всё разом — Ctrl+Z.`;
 
+            // v14: дорожка не имеет собственного размера (ширина — константа
+            // LANE_W/ROOT_LANE_W), поэтому «подогнать слой под содержимое»
+            // после пакета команд больше не нужно — остаётся только разложить
+            // затронутые окна по колонкам глубины, чтобы новые узлы/окна не
+            // громоздились друг на друге.
             setTimeout(() => {
                 if (!mountedRef.current) return;
-                const latestState = stateRef.current;
-                const affectedLayerIds = new Set();
-                actionsList.forEach(a => {
-                    if (a && a.payload) {
-                        if (a.type === 'ADD_LAYER') affectedLayerIds.add(a.payload.id);
-                        if (a.type === 'ADD_NODE' && a.payload.parentId && a.payload.parentId !== 'root') {
-                            affectedLayerIds.add(a.payload.parentId);
-                        }
-                    }
-                });
-
-                affectedLayerIds.forEach(lId => {
-                    const layer = latestState.layers ? latestState.layers[lId] : null;
-                    if (layer) {
-                        const layerNodes = Object.values(latestState.nodes || {}).filter(n => n && n.parentId === lId);
-                        if (layerNodes.length > 0 && window.GeometryUtils && window.GeometryUtils.getSmartPlacement) {
-                            const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, layer, latestState.nodes, latestState.layers);
-                            dispatch({ type: 'UPDATE_LAYER', payload: { id: lId, updates: { size: newLayerSize }, skipHistory: true } });
-                            dispatch({ type: 'MASS_UPDATE', payload: { ids: layerNodes.map(n => n.id), updatesById, skipHistory: true } });
-                        }
-                    }
-                });
-
-                dispatch({ type: 'ALIGN_LAYERS', payload: { contextId: 'root' } });
+                dispatch({ type: 'ALIGN_WINDOWS' });
             }, 50);
         }
         if (invalidCount > 0) {
@@ -182,18 +164,18 @@ function AIAgentNodeContent({ nodeId }) {
     // Валидация JSON-экшенов перед вызовом dispatch
     const validateAndSanitizeAction = (action, currentState = state, batchActions = []) => {
         const SUPPORTED_ACTION_TYPES = new Set([
-            'ADD_LAYER', 'ADD_NODE', 'ADD_PORT', 'ADD_LINK',
-            'UPDATE_NODE', 'UPDATE_LAYER', 'UPDATE_PORT', 'UPDATE_LINK',
-            'REPARENT_ENTITY', 'ALIGN_LAYERS',
-            'REMOVE_NODE', 'REMOVE_LAYER', 'REMOVE_PORT', 'REMOVE_LINK',
+            'ADD_FRAME', 'ADD_NODE', 'ADD_PORT', 'ADD_LINK',
+            'UPDATE_NODE', 'UPDATE_FRAME', 'UPDATE_PORT', 'UPDATE_LINK',
+            'REPARENT_ENTITY', 'ALIGN_WINDOWS',
+            'REMOVE_NODE', 'REMOVE_FRAME', 'REMOVE_PORT', 'REMOVE_LINK',
             'MASS_UPDATE',
-            // v13: уровни и вложенность (используются системным промптом ассистента)
-            'CREATE_NESTED_NODE', 'FOCUS_CHILDREN_OF_NODE',
-            'CLEAR_LEVEL_WINDOW', 'REMOVE_LEVEL_WINDOW', 'REMOVE_ROOT_CANVAS', 'CLEAR_PROJECT'
+            // v14: узлы, дорожки, окна, рамки (используются системным промптом ассистента)
+            'CREATE_NESTED_NODE', 'OPEN_LANE', 'CLOSE_LANE', 'CLOSE_WINDOW',
+            'FRAME_ADD_MEMBERS', 'FRAME_REMOVE_MEMBERS', 'CLEAR_PROJECT'
         ]);
 
         // Экшены, у которых payload — просто строка-идентификатор
-        const STRING_PAYLOAD_TYPES = new Set(['REMOVE_NODE', 'REMOVE_LAYER', 'REMOVE_PORT', 'REMOVE_LINK']);
+        const STRING_PAYLOAD_TYPES = new Set(['REMOVE_NODE', 'REMOVE_FRAME', 'REMOVE_PORT', 'REMOVE_LINK']);
 
         if (!action || typeof action !== 'object' || typeof action.type !== 'string') {
             return { valid: false, reason: 'Экшен должен быть объектом с типом string' };
@@ -477,10 +459,8 @@ function AIAgentNodeContent({ nodeId }) {
             if (isLocalMode) {
                 const addNestedChildren = (parentId) => {
                     Object.values(state.nodes).forEach(n => {
-                        // Структурный ребёнок: ownerId (ещё не мигрированные v11-узлы)
-                        // ИЛИ parentId напрямую на узел (v13) — n.parentId === parentId
-                        // здесь безопасно, т.к. parentId всегда id УЗЛА (родство), а не слоя.
-                        if ((n.ownerId === parentId || n.parentId === parentId) && !connectedNodes.has(n)) {
+                        // v14: единственная структура родства — parentId на узел.
+                        if (n.parentId === parentId && !connectedNodes.has(n)) {
                             connectedNodes.add(n);
                             addNestedChildren(n.id);
                         }
@@ -490,26 +470,31 @@ function AIAgentNodeContent({ nodeId }) {
                 initialNodes.forEach(n => addNestedChildren(n.id));
             }
 
-            // v13: в сводку входят структурный родитель и уровень иерархии
+            // v14: агент получает состояние в НОТАЦИИ (§1 плана / §3
+            // LANES_MODEL.md), а не сырым JSON — ДЕРЕВО/ОКНА/РАМКИ/СВЯЗИ.
+            // В локальном режиме нотация строится из урезанного среза
+            // {nodes, frames, ports, links, windows}, содержащего только
+            // подключённые узлы (и их предков по parentId, иначе ДЕРЕВО
+            // потеряло бы промежуточные звенья пути).
             const H = window.HierarchyUtils;
-            const describeNode = (n) => ({
-                id: n.id,
-                name: n.name,
-                parentNodeId: n.ownerId || ((n.parentId && state.nodes[n.parentId]) ? n.parentId : null),
-                layerId: (n.parentId && n.parentId !== 'root' && state.layers[n.parentId]) ? n.parentId : null,
-                level: H ? H.getEntityLevel(n.id, state.nodes, state.layers, state.levelWindows) : 0,
-                type: n.type || 'default'
-            });
-            const nodesSummary = (isLocalMode ? Array.from(connectedNodes) : Object.values(state.nodes)).map(describeNode);
-
-            // Сводка уровней проекта: номер, имя окна, количество узлов
-            const levelsSummary = Object.values(state.levelWindows || {})
-                .sort((a, b) => a.levelIndex - b.levelIndex)
-                .map(w => {
-                    const count = Object.keys(state.nodes || {}).filter(id =>
-                        (H ? H.getEntityLevel(id, state.nodes, state.layers, state.levelWindows) : 0) === w.levelIndex).length;
-                    return `L${w.levelIndex} «${w.name || (w.levelIndex === 0 ? 'Главный холст' : 'Уровень ' + w.levelIndex)}» — узлов: ${count}`;
-                }).join('; ');
+            const notationState = (() => {
+                if (!isLocalMode) return state;
+                const scopedNodes = {};
+                connectedNodes.forEach(n => { scopedNodes[n.id] = n; });
+                // Достраиваем цепочку предков, иначе HierarchyUtils.getPath
+                // оборвётся на первом отсутствующем звене.
+                Object.values(state.nodes).forEach(n => {
+                    if (scopedNodes[n.id]) {
+                        let cur = n;
+                        while (cur && cur.parentId && cur.parentId !== 'root' && state.nodes[cur.parentId] && !scopedNodes[cur.parentId]) {
+                            scopedNodes[cur.parentId] = state.nodes[cur.parentId];
+                            cur = state.nodes[cur.parentId];
+                        }
+                    }
+                });
+                return { nodes: scopedNodes, frames: state.frames, ports: state.ports, links: state.links, windows: state.windows };
+            })();
+            const notation = (H && H.dumpNotation) ? H.dumpNotation(notationState) : '(нотация недоступна)';
 
             const connectedNodesArray = Array.from(connectedNodes).slice(0, 15);
             let contextStr = '';
@@ -526,22 +511,20 @@ function AIAgentNodeContent({ nodeId }) {
 
             let aiResponse = '';
 
-            let systemPrompt = `Вы — ИИ-ассистент (Copilot) для визуального редактора иерархических графов Architector (модель данных v13: пространственные окна уровней, единый источник родства parentId).
+            let systemPrompt = `Вы — ИИ-ассистент (Copilot) для визуального редактора иерархических графов Architector (модель данных v14: Дорожки/Окна/Рамки, единственная структура родства — parentId узла).
 
 УСТРОЙСТВО ИЕРАРХИИ (важно для понимания проекта):
-- Каждый уровень иерархии — отдельное окно-холст: L0 «Главный холст» (корневые родители), L1 (их дети), L2 (внуки) и глубже.
-- Родство выражается ЕДИНСТВЕННЫМ полем parentId: "root" (корень своего уровня), ID слоя (группировка — координата, уровень не меняется) или ID узла (структурный шаг — сущность живёт на СЛЕДУЮЩЕМ уровне, level родителя + 1).
-- Поле level в сводке узлов — готовый номер уровня каждого узла, вычислен автоматически по цепочке parentId.
-- Сирота-якорь: узел/слой без структурного родителя-узла, явно привязанный к уровню N через REPARENT_ENTITY (targetLevelIndex: N) — глава независимой ветки на этом уровне, его дети (если есть) — на N+1.
-- В сводке узлов ниже поле parentNodeId (не путать с сырым parentId!) содержит id структурного родителя-узла (null, если узел корневой или лежит только в слое); отдельно layerId — id слоя-контейнера, если узел визуально сгруппирован в слое.
-
-Уровни проекта: ${levelsSummary || 'только Главный холст (пусто)'}
+- Дорожка (lane) — внутренность одного узла (или корня проекта): вертикальная колонка с его прямыми детьми. Не хранится как сущность — производная от parentId.
+- Окно (window) — набор дорожек, положенных рядом на холсте; чисто обзорное состояние, узел без открытой дорожки родителя просто не показан.
+- Рамка (frame) — множество узлов из любых дорожек (замена прежних «слоёв»), не влияет на родство.
+- Родство — ЕДИНСТВЕННОЕ поле parentId: "root" (прямой потомок корня) либо id узла-родителя. Глубина узла = длина цепочки parentId до "root" (прямые дети корня — глубина 1).
+- Ниже — состояние проекта в НОТАЦИИ (не JSON): секции ДЕРЕВО (путь каждого узла по parentId), ОКНА (какие дорожки сейчас открыты и где), РАМКИ (членство), СВЯЗИ (порт -> порт).
 
 Текущее состояние холста:
 ${contextStr}
 
-Доступный список узлов (id, name, parentNodeId — структурный родитель, layerId — слой-контейнер, level — уровень, type):
-${JSON.stringify(nodesSummary)}
+Состояние проекта (нотация):
+${notation}
 
 `;
 
@@ -549,39 +532,35 @@ ${JSON.stringify(nodesSummary)}
                 systemPrompt += `ВЫ РАБОТАЕТЕ В РЕЖИМЕ АГЕНТА И МОЖЕТЕ НАПРЯМУЮ РЕДАКТИРОВАТЬ И СТРОИТЬ ХОЛСТ!
 
 ПОЛНАЯ ИНСТРУКЦИЯ И ПОДДЕРЖИВАЕМЫЕ JSON-ЭКШЕНЫ:
-Если пользователь просит СОЗДАТЬ, ИЗМЕНИТЬ, УДАЛИТЬ или ПОГРУЗИТЬСЯ в структуры (слои, узлы, порты, связи, уровни), вы ОБЯЗАНЫ приложить в самом конце своего ответа один блок кода в формате JSON с массивом экшенов:
+Если пользователь просит СОЗДАТЬ, ИЗМЕНИТЬ, УДАЛИТЬ или ПОГРУЗИТЬСЯ в структуры (узлы, порты, связи, рамки), вы ОБЯЗАНЫ приложить в самом конце своего ответа один блок кода в формате JSON с массивом экшенов:
 
 \`\`\`json
 [
-  { "type": "ADD_LAYER", "payload": { "id": "layer-1-ui", "name": "1. UI Layer", "content": "Описание слоя", "color": "#0284c7", "position": {"x": 60, "y": 80}, "size": {"w": 650, "h": 450}, "parentId": "root" } },
-  { "type": "ADD_NODE", "payload": { "id": "node-1", "name": "Canvas Viewport", "content": "Интерактивный холст", "color": "#0f172a", "position": {"x": 90, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle", "mediaUrl": "https://...", "mediaHeight": 70 } },
-  { "type": "ADD_NODE", "payload": { "id": "node-2", "name": "Store Provider", "content": "Хранилище состояния", "color": "#0f172a", "position": {"x": 370, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle" } },
+  { "type": "ADD_NODE", "payload": { "id": "node-1", "name": "Canvas Viewport", "content": "Интерактивный холст", "color": "#0f172a", "position": {"x": 90, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "root", "shape": "rectangle" } },
+  { "type": "ADD_NODE", "payload": { "id": "node-2", "name": "Store Provider", "content": "Хранилище состояния", "color": "#0f172a", "position": {"x": 370, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "root", "shape": "rectangle" } },
   { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "node-1", "id": "node-sub-1", "name": "Sub-Component" } },
-  { "type": "ADD_NODE", "payload": { "id": "node-sub-2", "name": "Второй ребёнок", "content": "Брат node-sub-1", "color": "#0284c7", "position": {"x": 380, "y": 120}, "size": {"w": 250, "h": 120}, "parentId": "node-1", "shape": "rectangle" } },
   { "type": "ADD_PORT", "payload": { "id": "port-1-out", "nodeId": "node-1", "type": "output", "edge": "right", "position": 0.5, "name": "Events Out", "color": "#38bdf8" } },
   { "type": "ADD_PORT", "payload": { "id": "port-2-in", "nodeId": "node-2", "type": "input", "edge": "left", "position": 0.5, "name": "Actions In", "color": "#0284c7" } },
   { "type": "ADD_LINK", "payload": { "id": "link-1-to-2", "sourcePortId": "port-1-out", "targetPortId": "port-2-in", "name": "Redux Dispatch", "linkStyle": "orthogonal", "color": "#38bdf8" } },
-  { "type": "ADD_PORT", "payload": { "id": "port-layer-1-out", "nodeId": "layer-1-ui", "type": "output", "edge": "right", "position": 0.5, "name": "Layer Out", "color": "#38bdf8" } },
+  { "type": "ADD_FRAME", "payload": { "members": ["node-1", "node-2"], "name": "UI Layer", "color": "#0284c7" } },
   { "type": "UPDATE_NODE", "payload": { "id": "node-1", "updates": { "color": "#HEX", "name": "Новое имя" } } },
   { "type": "REMOVE_NODE", "payload": "node-2" }
 ]
 \`\`\`
-(В примере выше \`port-layer-1-out\` — порт, поставленный на СЛОЙ \`layer-1-ui\` через тот же \`ADD_PORT\` с \`nodeId\` = id слоя; такой порт можно связать \`ADD_LINK\`'ом с портом другого слоя или узла ровно так же, как порты узлов.)
 
-СТРОГИЕ ПРАВИЛА И ИНВАРИАНТЫ (модель v11):
+СТРОГИЕ ПРАВИЛА И ИНВАРИАНТЫ (модель v14):
 1. ФОРМА УЗЛОВ (shape): все узлы СТРОГО прямоугольные (shape: "rectangle").
-2. ИЕРАРХИЯ РОДСТВА — через parentId, ЕДИНСТВЕННОЕ поле родства:
-   - Корневой узел (уровень 0, Главный холст): parentId = "root" или ID слоя.
-   - Ребёнок узла X (порождает следующий уровень): ЛУЧШИЙ способ — { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "X", "id": "...", "name": "..." } } — узел сам попадёт на следующий уровень с автоматическим размещением, окно уровня создастся при необходимости.
-   - Альтернатива (когда нужна точная позиция): ADD_NODE с "parentId": "X" (id узла-родителя напрямую) — position тогда задаётся в координатах ХОЛСТА УРОВНЯ ребёнка (не внутри родителя!): x: 60..900, y: 80..600, братьев разносите сеткой с шагом ~280 по x.
-   - parentId может быть "root", ID слоя (группировка на ТОМ ЖЕ уровне) ИЛИ ID узла (следующий уровень) — все три варианта равноправны.
-3. ПОЗИЦИИ: локальны холсту уровня, на котором живёт узел. Узлы одного родителя (братья) лежат на одном уровне рядом друг с другом.
-4. ОБЯЗАТЕЛЬНОЕ СОЗДАНИЕ ПОРТОВ (ADD_PORT): для каждого узла создавайте порты на его гранях! Порт можно поставить и на СЛОЙ — тем же ADD_PORT, где nodeId = id слоя (поле называется nodeId по историческим причинам, но принимает id узла ИЛИ слоя). Слой — полноправный участник графа связей наравне с узлом.
-5. СВЯЗИ СОЕДИНЯЮТ ТОЛЬКО ПОРТЫ (ADD_LINK): sourcePortId и targetPortId содержат СТРОГО ID портов, независимо от того, узлу или слою эти порты принадлежат. Допустимы любые комбинации: Узел↔Узел, Слой↔Слой, Узел↔Слой. Связи между узлами/слоями разных уровней допустимы (рисуются пунктиром через прокси-порты на рамках окон).
-6. УДАЛЕНИЕ И ОЧИСТКА: REMOVE_NODE каскадно удаляет узел со всеми его потомками (вся ветка по parentId). Экшены уровней: CLEAR_LEVEL_WINDOW { "index": N } — очистить уровень N: удаляются ТОЛЬКО его сущности, потомки на нижних уровнях выживают на своих местах (пере-якорятся на ближайшего живого предка; без живых предков потомок становится независимым сиротой-якорем на своём уровне, сохранив свою ветку); REMOVE_LEVEL_WINDOW { "index": N } — удалить уровень N (включая Главный холст index: 0): его сущности удаляются, потомки и уровни ниже поднимаются на один (Уровень 1 становится Главным холстом); REMOVE_ROOT_CANVAS {} — удалить Главный холст (аналог REMOVE_LEVEL_WINDOW { "index": 0 }); CLEAR_PROJECT {} — полная очистка содержимого ВСЕХ уровней (окна и настройки остаются); REMOVE_PROJECT { "id": "..." } — удалить проект целиком.
-7. ФОКУСИРОВКА: FOCUS_CHILDREN_OF_NODE { "parentId": "X" } — показать детей узла X на следующем уровне.
-8. ПЕРЕНОС МЕЖДУ КОНТЕЙНЕРАМИ И УРОВНЯМИ: REPARENT_ENTITY { "id": "n1", "targetParentId": "layer-x" } (или "ids": [...] для нескольких) — перенести узел(ы)/слой(и) в любой контейнер: id слоя (группировка, уровень наследуется от слоя), id узла (переезд на следующий уровень, вложение в узел) или "root". Вместо targetParentId можно указать "targetLevelIndex": N — перенос на пустой холст уровня N (без явного родителя узел станет сиротой-якорем на этом уровне). По умолчанию переносится вся ветка потомков вместе с узлом (mode не указывайте — используется "deep").
-9. НЕЗАВИСИМЫЕ ВЕТКИ: чтобы создать узел на уровне N без родителя, используйте REPARENT_ENTITY с "targetLevelIndex": N сразу после создания узла на Главном холсте — он станет сиротой-якорем на нужном уровне.
+2. ИЕРАРХИЯ РОДСТВА — через parentId, ЕДИНСТВЕННОЕ поле родства, значение — "root" ИЛИ id узла-родителя (id рамки/окна как parentId НЕДОПУСТИМ):
+   - Корневой узел: parentId = "root".
+   - Ребёнок узла X: ЛУЧШИЙ способ — { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "X", "id": "...", "name": "..." } } — узел сам попадёт в дорожку X с автоматическим размещением, дорожка X откроется в окне при необходимости.
+   - Альтернатива (когда нужна точная позиция): ADD_NODE с "parentId": "X" — но дорожка X должна быть уже открыта, иначе результат не будет виден на холсте (используйте CREATE_NESTED_NODE, если не уверены).
+3. ПОЗИЦИИ: локальны ДОРОЖКЕ РОДИТЕЛЯ (не мировому холсту). Узлы одного родителя (братья) лежат в одной дорожке рядом друг с другом, разносите сеткой с шагом ~280 по x.
+4. ОБЯЗАТЕЛЬНОЕ СОЗДАНИЕ ПОРТОВ (ADD_PORT): для каждого узла создавайте порты на его гранях. Порт можно поставить и на РАМКУ — тем же ADD_PORT, где nodeId = id рамки (поле называется nodeId по историческим причинам, принимает id узла ИЛИ рамки); такой порт физически рисуется на первом «куске» рамки.
+5. СВЯЗИ СОЕДИНЯЮТ ТОЛЬКО ПОРТЫ (ADD_LINK): sourcePortId/targetPortId — строго id портов. Связи между узлами разных дорожек/окон допустимы.
+6. УДАЛЕНИЕ И ОЧИСТКА: REMOVE_NODE каскадно удаляет узел со всеми его потомками (вся ветка по parentId); REMOVE_FRAME { "id": "..." } удаляет только рамку — узлы остаются нетронутыми; CLEAR_PROJECT {} — полная очистка ВСЕХ узлов/рамок/связей проекта; REMOVE_PROJECT { "id": "..." } — удалить проект целиком.
+7. ДОРОЖКИ И ОКНА: OPEN_LANE { "ownerId": "X" } — открыть дорожку узла X (или "root") в новом окне, если она нигде не открыта; CLOSE_LANE { "windowId": "...", "ownerId": "X" } — закрыть дорожку X в конкретном окне (данные не удаляются); CLOSE_WINDOW { "windowId": "..." } — закрыть окно целиком (обзор, не данные).
+8. РАМКИ: ADD_FRAME { "members": [...] } — создать рамку сразу с этими узлами (пустой массив — заготовка без членов); FRAME_ADD_MEMBERS / FRAME_REMOVE_MEMBERS { "frameId": "...", "ids": [...] } — изменить членство.
+9. ПЕРЕНОС МЕЖДУ ДОРОЖКАМИ: REPARENT_ENTITY { "id": "n1", "targetParentId": "X" } (или "ids": [...] для нескольких) — перенести узел(ы) в дорожку узла X или "root" (targetParentId — ТОЛЬКО id узла или "root", id рамки/окна недопустим). По умолчанию переносится вся ветка потомков вместе с узлом (mode не указывайте — используется "deep").
 10. ЛИМИТ ПАКЕТА: не более ${MAX_AI_BATCH_SIZE} команд в одном ответе — всё сверх этого числа отбрасывается. Если задача крупнее, выполните её частями: выдайте первую порцию и предложите продолжить следующим сообщением. Весь пакет применяется одним шагом истории и отменяется одним Ctrl+Z.
 11. ПОДТВЕРЖДЕНИЕ: по умолчанию пользователь видит список ваших команд и подтверждает их вручную. Формулируйте пояснение так, чтобы по нему было понятно, что именно изменится на холсте, — особенно для удаляющих команд.
 12. Выдайте короткий вежливый пояснительный текстовый ответ, а в самом конце — ТОЛЬКО один блок \`\`\`json ... \`\`\`.`;
@@ -749,7 +728,7 @@ ${JSON.stringify(nodesSummary)}
                             applyActionBatch(actions, cleanAiText);
                             return;
                         } else {
-                            const DESTRUCTIVE_TYPES = new Set(['CLEAR_PROJECT', 'CLEAR_LEVEL_WINDOW', 'REMOVE_LEVEL_WINDOW', 'REMOVE_ROOT_CANVAS', 'REMOVE_LAYER', 'REMOVE_NODE']);
+                            const DESTRUCTIVE_TYPES = new Set(['CLEAR_PROJECT', 'REMOVE_FRAME', 'REMOVE_NODE']);
                             setPendingBatch({
                                 actions,
                                 cleanAiText,
@@ -812,7 +791,7 @@ ${JSON.stringify(nodesSummary)}
             onMouseDown={e => e.stopPropagation()}
             data-file="components/AIAgentNodeContent.js"
         >
-            <div className="px-3 py-2 border-b border-[#333] flex items-center justify-between bg-black/40 text-xs shrink-0">
+            <div className="px-3 py-2 border-b border-[var(--line)] flex items-center justify-between bg-black/40 text-xs shrink-0">
                 <div className="flex gap-4 items-center">
                     <button
                         className={`font-semibold transition-colors pb-1 border-b-2 ${tab === 'chat' ? 'text-purple-400 border-purple-400' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
@@ -845,7 +824,7 @@ ${JSON.stringify(nodesSummary)}
                             {/* Выпадающий список сохраненных диалогов узла */}
                             {currentSessions && currentSessions.length > 1 && (
                                 <select
-                                    className="bg-black/60 border border-[#444] text-purple-300 text-[10px] rounded px-1 py-0.5 max-w-[110px] truncate cursor-pointer font-medium"
+                                    className="bg-black/60 border border-[var(--line)] text-purple-300 text-[10px] rounded px-1 py-0.5 max-w-[110px] truncate cursor-pointer font-medium"
                                     value={activeSessionId}
                                     onChange={(e) => dispatch({ type: 'SWITCH_AI_SESSION', payload: { nodeId, sessionId: e.target.value } })}
                                     title="Переключить сохраненный диалог"
@@ -890,7 +869,7 @@ ${JSON.stringify(nodesSummary)}
                     <div className="flex flex-col gap-1.5">
                         <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Провайдер ИИ</label>
                         <select
-                            className="input-field border-[#444] focus:border-purple-500 cursor-pointer bg-black/50 text-xs"
+                            className="input-field focus:border-purple-500 cursor-pointer bg-black/50 text-xs"
                             value={currentProvider}
                             onChange={(e) => {
                                 const newProv = e.target.value;
@@ -915,7 +894,7 @@ ${JSON.stringify(nodesSummary)}
                         <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Base URL (Опционально)</label>
                         <input
                             type="text"
-                            className="input-field border-[#444] focus:border-purple-500 text-xs"
+                            className="input-field focus:border-purple-500 text-xs"
                             placeholder={currentProvider === 'grok' ? 'https://api.x.ai/v1' : currentProvider === 'google' ? 'https://generativelanguage.googleapis.com/v1beta/openai' : currentProvider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com'}
                             value={aiAgentSettings.baseUrl || ''}
                             onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { baseUrl: e.target.value } })}
@@ -947,7 +926,7 @@ ${JSON.stringify(nodesSummary)}
                         </div>
                         <input
                             type="password"
-                            className="input-field border-[#444] focus:border-purple-500 text-xs"
+                            className="input-field focus:border-purple-500 text-xs"
                             placeholder={currentProvider === 'grok' ? 'xai-...' : currentProvider === 'google' ? 'AIzaSy...' : 'sk-...'}
                             value={aiAgentSettings.apiKey || ''}
                             onChange={(e) => {
@@ -981,7 +960,7 @@ ${JSON.stringify(nodesSummary)}
 
                         {/* Выпадающий список действительно доступных моделей на этом ключе */}
                         <select
-                            className="input-field border-[#444] focus:border-purple-500 cursor-pointer bg-black/50 text-xs"
+                            className="input-field focus:border-purple-500 cursor-pointer bg-black/50 text-xs"
                             value={aiAgentSettings.model || ''}
                             onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { model: e.target.value } })}
                         >
@@ -993,7 +972,7 @@ ${JSON.stringify(nodesSummary)}
                         {/* Текстовое поле прямого ввода на случай кастомных имен */}
                         <input
                             type="text"
-                            className="input-field border-[#444] focus:border-purple-500 text-xs font-mono mt-1"
+                            className="input-field focus:border-purple-500 text-xs font-mono mt-1"
                             placeholder="Или введите имя модели вручную..."
                             value={aiAgentSettings.model || ''}
                             onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { model: e.target.value } })}
@@ -1060,7 +1039,7 @@ ${JSON.stringify(nodesSummary)}
                         {chatHistory.map((msg, i) => (
                             <div key={i} className={`group flex flex-col max-w-[95%] ${msg.role === 'user' ? 'self-end items-end' : 'self-start items-start'}`}>
                                 <div className={`flex items-start gap-1.5 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-                                    <div className={`px-2.5 py-1.5 rounded-lg text-xs whitespace-pre-wrap break-words select-text cursor-text ${msg.role === 'user' ? 'bg-purple-600 text-white' : 'bg-[#2a2a2a] border border-[#444] text-gray-200'}`}>
+                                    <div className={`px-2.5 py-1.5 rounded-lg text-xs whitespace-pre-wrap break-words select-text cursor-text ${msg.role === 'user' ? 'bg-purple-600 text-white' : 'bg-[var(--panel-2)] border border-[var(--line)] text-gray-200'}`}>
                                         {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
                                     </div>
                                     <button
@@ -1076,12 +1055,12 @@ ${JSON.stringify(nodesSummary)}
                                     </button>
                                 </div>
                                 {msg.media && (
-                                    <img src={msg.media} alt="Attached" className="mt-1 max-w-full h-auto rounded border border-[#444] max-h-[100px] object-contain" />
+                                    <img src={msg.media} alt="Attached" className="mt-1 max-w-full h-auto rounded border border-[var(--line)] max-h-[100px] object-contain" />
                                 )}
                             </div>
                         ))}
                         {isLoading && (
-                            <div className="self-start px-2 py-1.5 rounded-lg bg-[#2a2a2a] border border-[#444] flex items-center gap-1.5">
+                            <div className="self-start px-2 py-1.5 rounded-lg bg-[var(--panel-2)] border border-[var(--line)] flex items-center gap-1.5">
                                 <div className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse"></div>
                                 <div className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse delay-75"></div>
                                 <div className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse delay-150"></div>
@@ -1090,7 +1069,7 @@ ${JSON.stringify(nodesSummary)}
                         <div ref={chatEndRef} />
                     </div>
 
-                    <div className="p-2 pb-2.5 border-t border-[#333] bg-black/40 flex flex-col gap-1.5 shrink-0 rounded-b-lg">
+                    <div className="p-2 pb-2.5 border-t border-[var(--line)] bg-black/40 flex flex-col gap-1.5 shrink-0 rounded-b-lg">
                         {/* Интерактивная карточка запроса на подтверждение экшенов */}
                         {pendingBatch && (
                             <div className="p-2 rounded bg-purple-950/90 border border-purple-500/70 flex flex-col gap-1.5 shadow-lg">
@@ -1136,11 +1115,11 @@ ${JSON.stringify(nodesSummary)}
                         )}
 
                         {/* Панель оперативного переключения Режима, Подтверждения и Контекста */}
-                        <div className="flex items-center justify-between pb-1 border-b border-[#333]/60 text-[10px] gap-1 flex-wrap">
+                        <div className="flex items-center justify-between pb-1 border-b border-[var(--line)]/60 text-[10px] gap-1 flex-wrap">
                             {/* 1. Режим: Agent / Chat */}
                             <div className="flex items-center gap-1">
                                 <span className="text-gray-400 font-semibold uppercase text-[9px]">Режим:</span>
-                                <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
+                                <div className="flex bg-black/60 p-0.5 rounded border border-[var(--line)]">
                                     <button
                                         type="button"
                                         className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${(!aiAgentSettings.mode || aiAgentSettings.mode === 'agent') ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
@@ -1163,7 +1142,7 @@ ${JSON.stringify(nodesSummary)}
                             {/* 2. Подтверждение: Спрашивать / Без подтверждения (Авто) */}
                             <div className="flex items-center gap-1">
                                 <span className="text-gray-400 font-semibold uppercase text-[9px]">Правки:</span>
-                                <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
+                                <div className="flex bg-black/60 p-0.5 rounded border border-[var(--line)]">
                                     <button
                                         type="button"
                                         className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${(!aiAgentSettings.confirmMode || aiAgentSettings.confirmMode === 'ask') ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
@@ -1186,7 +1165,7 @@ ${JSON.stringify(nodesSummary)}
                             {/* 3. Контекст: Глобально / Локально */}
                             <div className="flex items-center gap-1">
                                 <span className="text-gray-400 font-semibold uppercase text-[9px]">Контекст:</span>
-                                <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
+                                <div className="flex bg-black/60 p-0.5 rounded border border-[var(--line)]">
                                     <button
                                         type="button"
                                         className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${(!aiAgentSettings.contextMode || aiAgentSettings.contextMode === 'global') ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
@@ -1234,7 +1213,7 @@ ${JSON.stringify(nodesSummary)}
                                 <div className="icon-paperclip text-sm"></div>
                             </button>
                             <textarea
-                                className="input-field border-[#444] focus:border-purple-500 min-h-[100px] max-h-[180px] py-2 text-xs resize-none"
+                                className="input-field focus:border-purple-500 min-h-[100px] max-h-[180px] py-2 text-xs resize-none"
                                 placeholder="Задайте вопрос..."
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
@@ -1260,7 +1239,7 @@ ${JSON.stringify(nodesSummary)}
             {showKeyManager && (
                 <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2" onMouseDown={(e) => { e.stopPropagation(); setShowKeyManager(false); }}>
                     <div className="bg-[#1a1a2e] border border-purple-500/30 rounded-xl w-full max-w-xs max-h-[95%] flex flex-col overflow-hidden shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#333] bg-black/40">
+                        <div className="flex items-center justify-between px-3 py-2.5 border-b border-[var(--line)] bg-black/40">
                             <span className="text-xs font-semibold text-purple-300 flex items-center gap-1.5">
                                 <div className="icon-key text-xs"></div>
                                 Менеджер ключей
@@ -1273,7 +1252,7 @@ ${JSON.stringify(nodesSummary)}
                             {savedKeys.length === 0 ? (
                                 <div className="text-center text-gray-500 text-[11px] py-5">Нет сохранённых ключей.<br/>Добавьте ключ ниже.</div>
                             ) : savedKeys.map(k => (
-                                <div key={k.id} className="flex items-center gap-1.5 p-2 rounded-lg bg-black/40 border border-[#333] hover:border-purple-500/40 transition-colors group">
+                                <div key={k.id} className="flex items-center gap-1.5 p-2 rounded-lg bg-black/40 border border-[var(--line)] hover:border-purple-500/40 transition-colors group">
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-1">
                                             <span className="text-[11px] font-semibold text-gray-200 truncate">{k.label}</span>
@@ -1288,17 +1267,17 @@ ${JSON.stringify(nodesSummary)}
                                 </div>
                             ))}
                         </div>
-                        <div className="p-2.5 border-t border-[#333] bg-black/30 space-y-1.5">
+                        <div className="p-2.5 border-t border-[var(--line)] bg-black/30 space-y-1.5">
                             <div className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider">Сохранить новый ключ</div>
-                            <input type="text" className="input-field border-[#444] focus:border-purple-500 text-xs w-full" placeholder="Название (напр. OpenAI Work)" value={kmForm.label} onChange={(e) => setKmForm(f => ({...f, label: e.target.value}))} onMouseDown={(e) => e.stopPropagation()} />
+                            <input type="text" className="input-field focus:border-purple-500 text-xs w-full" placeholder="Название (напр. OpenAI Work)" value={kmForm.label} onChange={(e) => setKmForm(f => ({...f, label: e.target.value}))} onMouseDown={(e) => e.stopPropagation()} />
                             <div className="flex gap-1.5">
-                                <select className="input-field border-[#444] focus:border-purple-500 text-[10px] flex-1 cursor-pointer bg-black/50" value={kmForm.provider} onChange={(e) => setKmForm(f => ({...f, provider: e.target.value}))} onMouseDown={(e) => e.stopPropagation()}>
+                                <select className="input-field focus:border-purple-500 text-[10px] flex-1 cursor-pointer bg-black/50" value={kmForm.provider} onChange={(e) => setKmForm(f => ({...f, provider: e.target.value}))} onMouseDown={(e) => e.stopPropagation()}>
                                     <option value="openai">OpenAI</option>
                                     <option value="anthropic">Anthropic</option>
                                     <option value="google">Google</option>
                                     <option value="grok">Grok</option>
                                 </select>
-                                <input type="password" className="input-field border-[#444] focus:border-purple-500 text-xs flex-[2]" placeholder="sk-..." value={kmForm.key} onChange={(e) => { const val = e.target.value; const detected = detectProviderByKey(val); setKmForm(f => ({...f, key: val, provider: detected || f.provider })); }} onMouseDown={(e) => e.stopPropagation()} />
+                                <input type="password" className="input-field focus:border-purple-500 text-xs flex-[2]" placeholder="sk-..." value={kmForm.key} onChange={(e) => { const val = e.target.value; const detected = detectProviderByKey(val); setKmForm(f => ({...f, key: val, provider: detected || f.provider })); }} onMouseDown={(e) => e.stopPropagation()} />
                             </div>
                             <button className="w-full btn bg-purple-600/40 hover:bg-purple-600/60 border-purple-500/40 text-purple-200 text-[11px] py-1.5 rounded font-semibold transition-colors" onClick={() => {
                                 if (!kmForm.label.trim() || !kmForm.key.trim()) return;

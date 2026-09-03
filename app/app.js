@@ -15,8 +15,8 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-[#0f1115] text-white">
-          <div className="text-center glass-panel p-8 rounded-lg">
+        <div className="min-h-screen flex items-center justify-center bg-[var(--bg)] text-white">
+          <div className="text-center panel p-8 rounded-lg">
             <h1 className="text-2xl font-bold mb-4 flex items-center justify-center gap-2">
               <span className="icon-triangle-alert text-red-500"></span> Системная ошибка
             </h1>

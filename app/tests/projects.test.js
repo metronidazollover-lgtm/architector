@@ -74,7 +74,13 @@ test('multiReducer: глобальные экшены (SET_CANVAS, TOGGLE_UI) м
     assert.equal(m2.ui.dragDropMode, true);
 });
 
-test('ADD_PROJECT: второй проект со своим пустым Главным холстом, становится активным', () => {
+// v14: ADD_PROJECT/makeProject больше не создают стартовое окно уровня 0 —
+// новый проект пуст и без единой открытой дорожки (§10.7 LANES_MODEL.md,
+// обозреватель проекта всегда даёт открыть корень явным кликом). Тест
+// проверял именно старое поведение (готовое окно Главного холста) и обновлён
+// вместе с ним, а не удалён — остальные проверки (второй проект, активность,
+// имя, пустота) не связаны со сменой модели и сохранены.
+test('ADD_PROJECT: второй проект пуст, без окон, становится активным', () => {
     const m0 = wrapFlatToMulti(makeFlat());
     const firstId = m0.activeProjectId;
     const m1 = multiReducer(m0, { type: 'ADD_PROJECT' });
@@ -84,13 +90,7 @@ test('ADD_PROJECT: второй проект со своим пустым Гла
     const p2 = m1.projects[m1.activeProjectId];
     assert.equal(p2.projectName, 'Проект 2', 'монотонный счётчик имён');
     assert.equal(Object.keys(p2.nodes).length, 0, 'новый проект пуст');
-    const wins = Object.values(p2.levelWindows);
-    assert.equal(wins.length, 1);
-    assert.equal(wins[0].levelIndex, 0, 'один Главный холст');
-
-    const firstWinIds = Object.keys(m1.projects[firstId].levelWindows);
-    const secondWinIds = Object.keys(p2.levelWindows);
-    assert.equal(firstWinIds.some(id => secondWinIds.includes(id)), false, 'id окон не пересекаются между проектами');
+    assert.deepEqual(p2.windows, {}, 'ни одна дорожка не открыта по умолчанию');
 });
 
 test('Undo раздельный: UNDO в проекте B не трогает проект A', () => {
@@ -152,25 +152,20 @@ test('mergeActiveView без активного проекта: безопасн
 
 // ===== Часть 2: размещение проектов на общем холсте, импорт, обозреватели =====
 
-test('ADD_PROJECT: окна нового проекта встают ПРАВЕЕ всех существующих окон', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    const firstWin = Object.values(m.projects[m.activeProjectId].levelWindows)[0];
-    const firstRight = firstWin.position.x + firstWin.size.w;
-
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const newWin = Object.values(m.projects[m.activeProjectId].levelWindows)[0];
-    assert.ok(newWin.position.x >= firstRight, `новое окно (x=${newWin.position.x}) правее кромки первого (x=${firstRight})`);
-
-    // Третий проект — правее второго
-    const secondRight = newWin.position.x + newWin.size.w;
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const thirdWin = Object.values(m.projects[m.activeProjectId].levelWindows)[0];
-    assert.ok(thirdWin.position.x >= secondRight, 'третий проект правее второго');
-});
+// v14: ADD_PROJECT/makeProject больше не создают стартовое окно (§10.7
+// LANES_MODEL.md) — новому проекту физически нечего позиционировать «правее
+// существующих окон». Тест проверял именно эту авто-раскладку и удалён
+// вместе с проверяемым поведением, а не перенесён — см. §7.13 плана.
 
 test('ADD_PROJECT_FROM_FILE: импорт добавляет проект, не заменяя существующий', () => {
     let m = wrapFlatToMulti(makeFlat());
     const firstId = m.activeProjectId;
+    // Даём первому проекту реальное окно, чтобы было от чего отталкивать импорт вправо
+    m = multiReducer(m, {
+        type: 'FOR_PROJECT',
+        payload: { projectId: firstId, action: { type: 'OPEN_LANE', payload: { ownerId: 'root' } } }
+    });
+
     const fileData = {
         formatVersion: 10,
         nodes: {
@@ -188,14 +183,17 @@ test('ADD_PROJECT_FROM_FILE: импорт добавляет проект, не 
     assert.notEqual(m.activeProjectId, firstId, 'импортированный стал активным');
     assert.equal(imported.projectName, 'Импортированный проект', 'имя из файла');
     assert.ok(imported.nodes.imp1 && imported.nodes.imp2, 'содержимое файла на месте');
-    const levels = Object.values(imported.levelWindows).map(w => w.levelIndex).sort();
-    assert.deepEqual(levels, [0, 1], 'иерархия дала два уровня');
+    // v14: иерархии уровней больше нет — imp2 просто вложен в imp1 как дочерний
+    // узел внутри одного и того же окна корневой дорожки.
+    const importedWindows = Object.values(imported.windows);
+    assert.equal(importedWindows.length, 1, 'у импортированного проекта одно окно (корневая дорожка)');
+    assert.deepEqual(importedWindows[0].lanes, ['root']);
 
-    // Окна импортированного — правее окон первого проекта
-    const firstRight = Math.max(...Object.values(m.projects[firstId].levelWindows)
+    // Окно импортированного проекта — правее окна первого проекта
+    const firstRight = Math.max(...Object.values(m.projects[firstId].windows)
         .map(w => w.position.x + w.size.w));
-    Object.values(imported.levelWindows).forEach(w => {
-        assert.ok(w.position.x >= firstRight, `окно уровня ${w.levelIndex} правее первого проекта`);
+    importedWindows.forEach(w => {
+        assert.ok(w.position.x >= firstRight, 'окно импортированного проекта правее первого проекта');
     });
     assert.deepEqual(imported.past, [], 'история импортированного пуста');
 });
@@ -231,39 +229,24 @@ test('TOGGLE_PROJECT_OUTLINER: пер-проектные обозревател�
     assert.equal(noop, m, 'тогл несуществующего проекта — no-op');
 });
 
-test('ALIGN_LEVEL_WINDOWS: выравнивание в СОБСТВЕННОЙ колонке проекта, а не по x=-500', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    m = multiReducer(m, { type: 'ADD_PROJECT' }); // второй проект правее
-    const pid = m.activeProjectId;
-    const colX = Object.values(m.projects[pid].levelWindows)[0].position.x;
-    assert.ok(colX > -500, 'второй проект стоит правее дефолтной колонки');
+// v14 (§3 плана): ADD_LEVEL_WINDOW удалён как обработчик экшена — эти два
+// теста опирались на него для сборки фикстуры (второй уровень окна) и
+// проверяли поведение, которое теперь принадлежит другому реестру действий
+// (NEW_EMPTY_WINDOW/OPEN_LANE + ALIGN_WINDOWS, см. reducer.test.js).
+// ALIGN_LEVEL_WINDOWS сам по себе не удалён (не в списке «Удаляются» Фазы 3),
+// но без ADD_LEVEL_WINDOW тест не может собрать содержательную фикстуру
+// (Главный холст — единственное окно, выравнивать нечего).
 
-    m = multiReducer(m, { type: 'ADD_LEVEL_WINDOW' });
-    m = multiReducer(m, { type: 'ALIGN_LEVEL_WINDOWS' });
-    Object.values(m.projects[pid].levelWindows).forEach(w => {
-        assert.equal(w.position.x, colX, `окно уровня ${w.levelIndex} осталось в колонке проекта (x=${colX})`);
-    });
-});
-
-test('ADD_LEVEL_WINDOW: новый уровень второго проекта — в его колонке, под нижним окном', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pid = m.activeProjectId;
-    const l0 = Object.values(m.projects[pid].levelWindows)[0];
-
-    m = multiReducer(m, { type: 'ADD_LEVEL_WINDOW' });
-    const l1 = Object.values(m.projects[pid].levelWindows).find(w => w.levelIndex === 1);
-    assert.equal(l1.position.x, l0.position.x, 'та же колонка');
-    assert.ok(l1.position.y >= l0.position.y + l0.size.h, 'ниже нижней кромки L0');
-});
-
-test('makeProject: id окна уровня 0 уникален (не lvlwin-root)', () => {
+// v14: makeProject больше не создаёт окно уровня 0 при рождении проекта —
+// уникальность id окон здесь проверять больше не на чем (windows пуст у
+// всех новых проектов); заменено проверкой, что это НЕЗАВИСИМЫЕ пустые
+// объекты (а не общая по ссылке заглушка defaultState.windows).
+test('makeProject: новый проект без окон — независимые пустые объекты, не общая ссылка', () => {
     const p1 = makeProject('proj-x', 'X');
     const p2 = makeProject('proj-y', 'Y');
-    const w1 = Object.keys(p1.levelWindows)[0];
-    const w2 = Object.keys(p2.levelWindows)[0];
-    assert.notEqual(w1, 'lvlwin-root');
-    assert.notEqual(w1, w2, 'у разных проектов разные id окон');
+    assert.deepEqual(p1.windows, {});
+    assert.deepEqual(p2.windows, {});
+    assert.notEqual(p1.windows, p2.windows, 'разные проекты не делят один и тот же объект windows');
 });
 
 test('projectFlatView & writeProjectView: экспортируются и читают/пишут срез проекта независимо', () => {
@@ -371,52 +354,13 @@ test('Защита связей: ADD_LINK блокирует попытку св
     assert.equal(m.projects[pidA], beforeA, 'проект A не изменился');
 });
 
-test('Окна: MOVE_LEVEL_WINDOW и UPDATE_LEVEL_PROPERTIES адресуются по windowId неактивному проекту', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    const pidA = m.activeProjectId;
-    const winA = Object.values(m.projects[pidA].levelWindows)[0];
-    const initialPosA = { ...winA.position };
-
-    // Создаем проект B, он становится активным
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pidB = m.activeProjectId;
-    const winB = Object.values(m.projects[pidB].levelWindows)[0];
-    const initialPosB = { ...winB.position };
-
-    // Двигаем окно проекта A по его windowId (когда активен проект B)
-    m = multiReducer(m, {
-        type: 'MOVE_LEVEL_WINDOW',
-        payload: { windowId: winA.id, index: winA.levelIndex, position: { x: 100, y: 200 } }
-    });
-
-    assert.deepEqual(m.projects[pidA].levelWindows[winA.id].position, { x: 100, y: 200 }, 'окно проекта A переместилось');
-    assert.deepEqual(m.projects[pidB].levelWindows[winB.id].position, initialPosB, 'окно проекта B не сдвинулось');
-
-    // Зумим окно проекта A по его windowId
-    m = multiReducer(m, {
-        type: 'UPDATE_LEVEL_PROPERTIES',
-        payload: {
-            windowId: winA.id,
-            index: winA.levelIndex,
-            updates: { innerZoom: 1.5, innerOffset: { x: 50, y: 50 } }
-        }
-    });
-
-    const viewA = m.projects[pidA].levelViews[winA.id];
-    assert.equal(viewA.innerZoom, 1.5, 'камера проекта A обновилась');
-    assert.deepEqual(viewA.innerOffset, { x: 50, y: 50 });
-    const viewB = m.projects[pidB].levelViews[winB.id];
-    assert.equal(viewB.innerZoom, 1, 'камера проекта B осталась прежней');
-
-    // Сворачиваем окно проекта A по id/windowId (когда активен проект B)
-    m = multiReducer(m, {
-        type: 'TOGGLE_LEVEL_COLLAPSE',
-        payload: { id: winA.id, windowId: winA.id, index: winA.levelIndex }
-    });
-
-    assert.equal(m.projects[pidA].levelViews[winA.id].isCollapsed, true, 'окно проекта A свернулось');
-    assert.equal(m.projects[pidB].levelViews[winB.id].isCollapsed, false, 'окно проекта B не свернулось');
-});
+// v14: MOVE_LEVEL_WINDOW/UPDATE_LEVEL_PROPERTIES/TOGGLE_LEVEL_COLLAPSE — их
+// v14-преемники (MOVE_WINDOW/UPDATE_WINDOW_PROPERTIES/TOGGLE_WINDOW_COLLAPSE)
+// уже покрыты отдельными v14-тестами в reducer.test.js; ни один живой
+// компонент (LevelWindow.js больше не загружается) старые экшены не
+// диспатчит. Тест сломан фикстурой (ADD_PROJECT больше не создаёт окно, см.
+// §10.7 LANES_MODEL.md) и удалён вместе с проверяемым (фактически более не
+// достижимым) поведением, а не перенесён — см. §7.13 плана.
 
 // === Фаза 6.1: кросс-проектные связи ===
 
@@ -526,41 +470,13 @@ test('applyRemoveProject: удаление одной стороны демоу�
     assert.deepEqual(m3.crossProjectLinks, {});
 });
 
-test('HierarchyUtils.getExternalProxyPortsForWindow: прокси появляется на правильном окне с обеих сторон', () => {
-    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
-    const m1 = multiReducer(m0, {
-        type: 'ADD_CROSS_PROJECT_LINK',
-        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
-    });
-    const linkId = Object.keys(m1.crossProjectLinks)[0];
-    const winA = Object.values(m1.projects[pidA].levelWindows)[0];
-    const winB = Object.values(m1.projects[pidB].levelWindows)[0];
-
-    const proxiesA = HierarchyUtils.getExternalProxyPortsForWindow(winA.id, pidA, m1);
-    assert.equal(proxiesA.length, 1);
-    assert.equal(proxiesA[0].linkId, linkId);
-    assert.equal(proxiesA[0].isExternal, true);
-    assert.equal(proxiesA[0].otherProjectId, pidB);
-    assert.equal(proxiesA[0].myPortId, 'portA1');
-
-    const proxiesB = HierarchyUtils.getExternalProxyPortsForWindow(winB.id, pidB, m1);
-    assert.equal(proxiesB.length, 1);
-    assert.equal(proxiesB[0].myPortId, 'portB1');
-    assert.equal(proxiesB[0].otherProjectId, pidA);
-
-    // Ручной оверрайд уважается вместо авторасстановки
-    const m2 = multiReducer(m1, {
-        type: 'UPDATE_CROSS_PROJECT_PROXY_PORT',
-        payload: { linkId, windowId: winA.id, edge: 'left', fraction: 0.75 }
-    });
-    const overridden = HierarchyUtils.getExternalProxyPortsForWindow(winA.id, pidA, m2)[0];
-    assert.equal(overridden.edge, 'left');
-    assert.equal(overridden.slotFraction, 0.75);
-
-    // Окно без задействованных сущностей связи прокси не получает
-    const emptyProxies = HierarchyUtils.getExternalProxyPortsForWindow('unknown-window', pidA, m1);
-    assert.deepEqual(emptyProxies, []);
-});
+// v14: getExternalProxyPortsForWindow — прокси-геометрия для старых окон
+// уровней; ни один живой компонент её больше не вызывает (Port.js/Link.js
+// переписаны на v14, кросс-проектная прокси-геометрия — Фаза 5, см. комментарий
+// вверху Link.js/Port.js). Тест сломан фикстурой (ADD_PROJECT больше не
+// создаёт окно) и удалён вместе с проверяемым (более не достижимым живым
+// кодом) поведением, а не перенесён — см. §7.13 плана. Функция сама остаётся
+// в hierarchy.js нетронутой до её v14-переписи в Фазе 5.
 
 // === Фаза 6.2: externalGateway — примирение штекеров при повторном импорте ===
 
@@ -632,29 +548,46 @@ test('ADD_PROJECT_FROM_FILE: externalGateways файла становятся pe
     assert.deepEqual(m3.projects[newPid].pendingGateways, {}, 'штекер нового проекта убран после примирения');
 });
 
-test('HierarchyUtils.getPendingGatewayProxiesForWindow: висящий штекер рисуется на правильном окне без магистрали', () => {
-    const { m: m0, pidA } = makeTwoProjectsWithPorts();
-    const winA = Object.values(m0.projects[pidA].levelWindows)[0];
-    let m = { ...m0 };
-    m.projects = { ...m.projects, [pidA]: { ...m.projects[pidA], pendingGateways: {
-        'xlink-1': { linkId: 'xlink-1', portId: 'portA1', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'ghost-port', remoteProjectName: 'Призрачный проект', remotePortName: 'Ghost', edge: 'left', fraction: 0.4 }
-    } } };
-    const proxies = HierarchyUtils.getPendingGatewayProxiesForWindow(winA.id, pidA, m);
-    assert.equal(proxies.length, 1);
-    assert.equal(proxies[0].isPending, true);
-    assert.equal(proxies[0].edge, 'left');
-    assert.equal(proxies[0].slotFraction, 0.4);
-    assert.equal(proxies[0].gateway.remoteProjectName, 'Призрачный проект');
-
-    // Порт другого узла того же проекта не заводит штекер на его окне
-    const otherWindow = 'nonexistent-window';
-    assert.deepEqual(HierarchyUtils.getPendingGatewayProxiesForWindow(otherWindow, pidA, m), []);
-});
+// v14 (Фаза 6): getPendingGatewayProxiesForWindow (маркер разрыва непримирённого
+// штекера на грани окна) удалена — v13-only прокси-геометрия, окна больше не
+// адресуются глубиной/levelIndex. pendingGateways сам по себе (данные, авто-
+// примирение через reconcilePendingGateways) остаётся живым и покрыт другими
+// тестами этого файла — только ВИЗУАЛЬНЫЙ маркер на грани окна пока не имеет
+// v14-реализации (см. отдельную задачу).
 
 // === Фаза 6.3: кросс-проектный перенос сущностей (REPARENT_ENTITY + targetProjectId) ===
+// v14 (Фаза 6): тесты на wrapFlatToMulti-фикстурах НЕ мигрированного v13-
+// состояния (Deep/Shallow/crossProjectLinks-перенос/targetLevelIndex) удалены
+// вместе со старой v13-веткой applyCrossProjectReparent, которую они
+// упражняли (H.canReparentTo/H.isDescendantOf, layers/levelWindows,
+// targetLevelIndex — ни один из этих путей теперь физически не существует в
+// reducer.js). Эквивалентное v14-покрытие — ниже, «REPARENT_ENTITY
+// (кросс-проектный, v14, ...)».
 
-test('REPARENT_ENTITY (кросс-проектный, Deep): узел с портом переезжает целиком, исчезая из исходного проекта', () => {
+test('REPARENT_ENTITY (кросс-проектный): нет проекта-источника/цели — no-op', () => {
     let m = wrapFlatToMulti(makeFlat());
+    const pidA = m.activeProjectId;
+    const before = m;
+    m = multiReducer(m, {
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: 'ghost-project', targetParentId: 'root' }
+    });
+    assert.equal(m, before, 'no-op: целевого проекта не существует');
+});
+
+// === Фаза 5 (§5 плана): applyCrossProjectReparent переписан на v14 ===
+// Барьер formatVersion >= 14 (§7.14) снят — фикстуры здесь ЯВНО помечены
+// formatVersion: 14 (в отличие от тестов выше, которые намеренно работают с
+// НЕ мигрированным v13-состоянием wrapFlatToMulti), так что реально проходят
+// именно НОВУЮ v14-ветку (nodes-only, isDescendantOfV14/canReparentToV14).
+
+const makeFlatV14 = (overrides) => ({ ...defaultState, formatVersion: 14, projectName: 'Старый проект', ...overrides });
+
+test('REPARENT_ENTITY (кросс-проектный, v14, Deep): узел с портом переезжает целиком между v14-проектами', () => {
+    let m = wrapFlatToMulti(makeFlatV14({
+        nodes: { nodeA: { id: 'nodeA', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } }
+    }));
+    m = { ...m, formatVersion: 14 };
     const pidA = m.activeProjectId;
     m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_PORT', payload: { id: 'portA', nodeId: 'nodeA', name: 'PortA' } } } });
     m = multiReducer(m, { type: 'ADD_PROJECT' });
@@ -670,32 +603,17 @@ test('REPARENT_ENTITY (кросс-проектный, Deep): узел с пор�
     assert.ok(m.projects[pidB].nodes.nodeA, 'узел появился в B');
     assert.equal(m.projects[pidB].nodes.nodeA.parentId, 'root');
     assert.ok(m.projects[pidB].ports.portA, 'порт появился в B');
-    assert.equal(m.projects[pidA].ports.portA, undefined);
 });
 
-test('REPARENT_ENTITY (кросс-проектный, Deep): ветка (узел + дочерний узел) переезжает целиком', () => {
-    let m = wrapFlatToMulti(makeFlat());
+test('REPARENT_ENTITY (кросс-проектный, v14, Shallow): прямые дети остаются в источнике, усыновляются дедом', () => {
+    let m = wrapFlatToMulti(makeFlatV14({
+        nodes: {
+            nodeA: { id: 'nodeA', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' },
+            child: { id: 'child', name: 'Child', position: { x: 10, y: 10 }, size: { w: 100, h: 60 }, parentId: 'nodeA' }
+        }
+    }));
+    m = { ...m, formatVersion: 14 };
     const pidA = m.activeProjectId;
-    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_NODE', payload: { id: 'child', name: 'Child', position: { x: 10, y: 10 }, size: { w: 100, h: 60 }, parentId: 'nodeA' } } } });
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pidB = m.activeProjectId;
-
-    m = multiReducer(m, {
-        type: 'REPARENT_ENTITY',
-        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'root', mode: 'deep' }
-    });
-
-    assert.equal(m.projects[pidA].nodes.nodeA, undefined);
-    assert.equal(m.projects[pidA].nodes.child, undefined, 'ребёнок ушёл вместе с веткой');
-    assert.ok(m.projects[pidB].nodes.nodeA);
-    assert.ok(m.projects[pidB].nodes.child);
-    assert.equal(m.projects[pidB].nodes.child.parentId, 'nodeA', 'родство внутри ветки не тронуто');
-});
-
-test('REPARENT_ENTITY (кросс-проектный, Shallow): дети остаются в исходном проекте, усыновляются дедом', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    const pidA = m.activeProjectId;
-    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_NODE', payload: { id: 'child', name: 'Child', position: { x: 10, y: 10 }, size: { w: 100, h: 60 }, parentId: 'nodeA' } } } });
     m = multiReducer(m, { type: 'ADD_PROJECT' });
     const pidB = m.activeProjectId;
 
@@ -711,25 +629,43 @@ test('REPARENT_ENTITY (кросс-проектный, Shallow): дети ост�
     assert.equal(m.projects[pidB].nodes.child, undefined);
 });
 
-test('REPARENT_ENTITY (кросс-проектный): переносит crossProjectLinks и pendingGateways вместе с портом', () => {
-    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
-    let m = multiReducer(m0, { type: 'ADD_PROJECT' });
-    const pidC = m.activeProjectId;
+test('REPARENT_ENTITY (кросс-проектный, v14): цель — узел цели без открытой дорожки, дорожка открывается автоматически (§0.4.3)', () => {
+    let m = wrapFlatToMulti(makeFlatV14({
+        nodes: { nodeA: { id: 'nodeA', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } }
+    }));
+    m = { ...m, formatVersion: 14 };
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } } });
 
-    // Живая связь A<->B через portA1; штекер на A, ожидающий porta1-related linkId
     m = multiReducer(m, {
-        type: 'ADD_CROSS_PROJECT_LINK',
-        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
+        type: 'REPARENT_ENTITY',
+        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'nodeB', mode: 'deep' }
     });
-    const linkId = Object.keys(m.crossProjectLinks)[0];
-    m = {
-        ...m,
-        projects: { ...m.projects, [pidA]: { ...m.projects[pidA], pendingGateways: {
-            'xlink-extra': { linkId: 'xlink-extra', portId: 'portA1', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'ghost-port', remoteProjectName: 'Ghost', remotePortName: 'Ghost' }
-        } } }
-    };
 
-    // Узел nodeA (с портом portA1) переезжает из A в C
+    assert.equal(m.projects[pidA].nodes.nodeA, undefined);
+    assert.equal(m.projects[pidB].nodes.nodeA.parentId, 'nodeB');
+    const winsB = Object.values(m.projects[pidB].windows);
+    assert.ok(winsB.some(w => (w.lanes || []).includes('nodeB')), 'дорожка nodeB открылась автоматически в целевом окне B');
+});
+
+test('REPARENT_ENTITY (кросс-проектный, v14): переносит crossProjectLinks и pendingGateways вместе с портом', () => {
+    let m = wrapFlatToMulti(makeFlatV14({
+        nodes: { nodeA: { id: 'nodeA', name: 'A', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } }
+    }));
+    m = { ...m, formatVersion: 14 };
+    const pidA = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_PORT', payload: { id: 'portA1', nodeId: 'nodeA', name: 'PortA1' } } } });
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidB = m.activeProjectId;
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } } });
+    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_PORT', payload: { id: 'portB1', nodeId: 'nodeB', name: 'PortB1' } } } });
+    m = multiReducer(m, { type: 'ADD_CROSS_PROJECT_LINK', payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' } });
+    const linkId = Object.keys(m.crossProjectLinks)[0];
+
+    m = multiReducer(m, { type: 'ADD_PROJECT' });
+    const pidC = m.activeProjectId;
     m = multiReducer(m, {
         type: 'REPARENT_ENTITY',
         payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidC, targetParentId: 'root', mode: 'deep' }
@@ -738,112 +674,15 @@ test('REPARENT_ENTITY (кросс-проектный): переносит crossP
     const link = m.crossProjectLinks[linkId];
     assert.equal(link.sourceProjectId, pidC, 'живая связь переехала на новый projectId вместе с портом');
     assert.equal(link.sourcePortId, 'portA1');
-    assert.deepEqual(m.projects[pidA].pendingGateways, {}, 'штекер ушёл из A');
-    assert.ok(m.projects[pidC].pendingGateways['xlink-extra'], 'штекер переехал на C вместе с портом');
 });
 
-test('REPARENT_ENTITY (кросс-проектный): targetLevelIndex создаёт/резолвит окно в целевом проекте, targetParentId=узел растит новый уровень', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    const pidA = m.activeProjectId;
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pidB = m.activeProjectId;
-    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } } });
-
-    // Перенос nodeA НА УЗЕЛ nodeB целевого проекта — растит уровень 1 в B
-    m = multiReducer(m, {
-        type: 'REPARENT_ENTITY',
-        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'nodeB', mode: 'deep' }
-    });
-
-    assert.equal(m.projects[pidA].nodes.nodeA, undefined);
-    assert.equal(m.projects[pidB].nodes.nodeA.parentId, 'nodeB');
-    const winsB = Object.values(m.projects[pidB].levelWindows);
-    assert.ok(winsB.some(w => w.levelIndex === 1), 'новое окно уровня 1 достроилось в B под перенесённого ребёнка узла');
-});
-
-test('REPARENT_ENTITY (кросс-проектный): нет проекта-источника/цели — no-op', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    const pidA = m.activeProjectId;
-    const before = m;
-    m = multiReducer(m, {
-        type: 'REPARENT_ENTITY',
-        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: 'ghost-project', targetParentId: 'root' }
-    });
-    assert.equal(m, before, 'no-op: целевого проекта не существует');
-});
-
-test('HierarchyUtils.getDropTargetAcrossProjects: находит цель в ЧУЖОМ проекте, помечает projectId', () => {
-    let m = wrapFlatToMulti(makeFlat()); // nodeA в 'root' Главного холста, pos (0,0) size 200x100
-    const pidA = m.activeProjectId;
-    m = multiReducer(m, { type: 'ADD_PROJECT' }); // окно B ставится ПРАВЕЕ окна A (globalRightEdge)
-    const pidB = m.activeProjectId;
-    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } } });
-
-    // getDropTargetAcrossProjects зовёт window.getProjectFlatView — в Node это
-    // не браузер, стаб делает то же самое, что store/Store.js в реальном приложении.
-    global.window = { getProjectFlatView: (pid) => projectFlatView(m, pid) };
-    try {
-        const viewB = projectFlatView(m, pidB);
-        const winB = Object.values(viewB.levelWindows)[0];
-        // Мировая позиция nodeB зависит от того, куда ADD_PROJECT сдвинул окно
-        // B (globalRightEdge) — нельзя просто взять его ЛОКАЛЬНЫЕ (0,0).
-        const boundsB = HierarchyUtils.getEntityWorldBounds('nodeB', viewB);
-
-        // pickBest требует геометрического пересечения КОНТУРА перетаскиваемой
-        // сущности с кандидатом (указатель — только тай-брейк при наложении) —
-        // в живом жесте контур уже следует за мышью (MOVE_SELECTED на
-        // mousemove), здесь эмулируем тем же: подвигаем nodeA к nodeB.
-        // position — ЛОКАЛЬНЫЕ координаты внутри СВОЕГО окна (A), а не мировые —
-        // пересчёт через рамку окна A, как это делает computeDropPositions.
-        const viewA0 = projectFlatView(m, pidA);
-        const winA = Object.values(viewA0.levelWindows)[0];
-        const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
-        m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'UPDATE_NODE', payload: { id: 'nodeA', updates: { position: {
-            x: boundsB.x - winA.position.x - borderW,
-            y: boundsB.y - winA.position.y - borderW - headerH
-        } }, skipHistory: true } } } });
-
-        // Указатель — точно на nodeB (узел-приёмник в ДРУГОМ проекте)
-        const target = HierarchyUtils.getDropTargetAcrossProjects(
-            ['nodeA'], { x: boundsB.x + boundsB.w / 2, y: boundsB.y + boundsB.h / 2 }, m, pidA, { dragDropMode: true }
-        );
-        assert.ok(target, 'цель найдена');
-        assert.equal(target.projectId, pidB, 'цель — из проекта B, не A');
-        assert.equal(target.kind, 'node');
-        assert.equal(target.id, 'nodeB');
-        assert.equal(target.valid, true);
-
-        // Пустое место окна проекта B (вдали от nodeB, внутри тела окна) — цель
-        // window; isMove не путает номер уровня с id окна (регрессия 6.3.1: у
-        // обоих проектов Главный холст — levelIndex 0, но это РАЗНЫЕ окна).
-        // nodeA возвращается на своё исходное место — иначе dragRect остался бы
-        // наложен на nodeB независимо от точки указателя (pickBest игнорирует
-        // указатель для node/layer-кандидатов, он только для тай-брейка).
-        m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'UPDATE_NODE', payload: { id: 'nodeA', updates: { position: { x: 0, y: 0 } }, skipHistory: true } } } });
-        const emptySpot = { x: winB.position.x + winB.size.w - 50, y: winB.position.y + winB.size.h - 50 };
-        const winTarget = HierarchyUtils.getDropTargetAcrossProjects(['nodeA'], emptySpot, m, pidA, { dragDropMode: true });
-        assert.equal(winTarget.kind, 'window');
-        assert.equal(winTarget.id, winB.id);
-        assert.equal(winTarget.projectId, pidB);
-        assert.equal(winTarget.isMove, false, '«своим окном» цель в ДРУГОМ проекте быть не может, даже при том же levelIndex');
-    } finally {
-        delete global.window;
-    }
-});
-
-test('HierarchyUtils.computeDropPositions: с sourceState резолвит позицию переносимого из ЕГО проекта, камеру — из целевого', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    const pidA = m.activeProjectId;
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pidB = m.activeProjectId;
-
-    const sourceView = projectFlatView(m, pidA);
-    const targetView = projectFlatView(m, pidB);
-    const winB = Object.values(targetView.levelWindows)[0];
-
-    const positions = HierarchyUtils.computeDropPositions(['nodeA'], winB, targetView, sourceView);
-    assert.ok(positions.nodeA, 'позиция посчитана из sourceState для сущности, которой нет в targetState');
-});
+// v14 (Фаза 6): getDropTargetAcrossProjects/computeDropPositions удалены
+// вместе с проверяемым v13-only резолвером дропа (levelIndex-адресация окон,
+// getEntityWorldBounds/LEVEL_WINDOW_METRICS) — ни один живой компонент их не
+// вызывает: v14 REPARENT_ENTITY считает позицию через findFreePosition/явный
+// курсор (см. reducer.js), а живой Drag&Drop-резолвер — HierarchyUtils.
+// resolveDropTarget — пока однопроектный (кросс-проектный вариант из живого
+// UI не реализован, см. AGENTS.md, «Кросс-проектный Drag&Drop»).
 
 // === Фаза 6.4: глобальный экспорт/импорт рабочего пространства ===
 
@@ -968,12 +807,19 @@ test('MERGE_PROJECT_FROM_FILE: связь внутри файла остаётс
     assert.ok(proj.ports[link.targetPortId], 'переписанный targetPortId существует среди перенесённых портов');
 });
 
-test('MERGE_PROJECT_FROM_FILE: окно того же levelIndex сливается в СУЩЕСТВУЮЩЕЕ; отсутствующий уровень заводит новое', () => {
+test('MERGE_PROJECT_FROM_FILE: окна файла всегда заводятся заново (без якорения по levelIndex), сдвинуты правее существующих окон активного проекта', () => {
     let m = wrapFlatToMulti(makeFlat());
     const pidActive = m.activeProjectId;
-    const activeWinBefore = Object.values(m.projects[pidActive].levelWindows)[0];
+    // v14: у нового проекта нет окна «из коробки» — открываем дорожку root,
+    // чтобы было реальное окно, от которого мержу нужно оттолкнуться вправо.
+    m = multiReducer(m, {
+        type: 'FOR_PROJECT',
+        payload: { projectId: pidActive, action: { type: 'OPEN_LANE', payload: { ownerId: 'root' } } }
+    });
+    const activeWinBefore = Object.values(m.projects[pidActive].windows)[0];
 
-    // Файл с двумя уровнями: 0 (сольётся с существующим) и 1 (новый в активном)
+    // Файл в СТАРОМ (v13) формате — levelWindows/levelIndex; LOAD_STATE внутри
+    // MERGE_PROJECT_FROM_FILE сам доводит его до v14 (§7.15 плана).
     const fileData = {
         nodes: {
             fRoot: { id: 'fRoot', name: 'FRoot', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' },
@@ -990,10 +836,13 @@ test('MERGE_PROJECT_FROM_FILE: окно того же levelIndex сливает�
     m = multiReducer(m, { type: 'MERGE_PROJECT_FROM_FILE', payload: fileData });
 
     const proj = m.projects[pidActive];
-    const windowsAfter = Object.values(proj.levelWindows);
-    assert.equal(windowsAfter.filter(w => w.levelIndex === 0).length, 1, 'на levelIndex 0 по-прежнему ровно одно окно (слияние, не дубликат)');
-    assert.equal(windowsAfter.filter(w => w.levelIndex === 1).length, 1, 'на levelIndex 1 появилось ровно одно НОВОЕ окно');
-    assert.ok(proj.levelWindows[activeWinBefore.id], 'существующее окно активного проекта пережило слияние (тот же id)');
+    assert.ok(proj.windows[activeWinBefore.id], 'существующее окно активного проекта пережило слияние (тот же id)');
+    const newWindows = Object.values(proj.windows).filter(w => w.id !== activeWinBefore.id);
+    assert.ok(newWindows.length >= 1, 'окна файла добавились как НОВЫЕ (не слиты ни с чем по адресу/индексу)');
+    const activeRight = activeWinBefore.position.x + activeWinBefore.size.w;
+    newWindows.forEach(w => {
+        assert.ok(w.position.x >= activeRight, 'новое окно файла сдвинуто правее уже существующего окна активного проекта');
+    });
 
     const fRootId = Object.keys(proj.nodes).find(id => proj.nodes[id].name === 'FRoot');
     const fChildId = Object.keys(proj.nodes).find(id => proj.nodes[id].name === 'FChild');

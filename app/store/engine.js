@@ -129,6 +129,42 @@ const shallowEqual = (a, b) => {
     return true;
 };
 
+/**
+ * Как shallowEqual, но для полей, которые сами являются объектом или массивом,
+ * сравнение уходит на один уровень глубже (тоже через shallowEqual). Нужен
+ * селекторам, чьи производные срезы содержат несколько вычисляемых
+ * массивов/объектов внутри одного результата (см. Lane.js: computeLaneDerived
+ * строит childIds/frameIdsHere/linkIdsHere через .map()/.filter() заново на
+ * каждый вызов — обычный shallowEqual сравнивает эти поля по Object.is и
+ * всегда видит «изменение», хотя набор id тот же самый, и Lane перерисовывался
+ * на любой dispatch независимо от того, затронут ли он эту дорожку).
+ * @param {any} a
+ * @param {any} b
+ * @returns {boolean}
+ */
+const deepShallowEqual = (a, b) => {
+    if (Object.is(a, b)) return true;
+    if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+
+    const aIsArr = Array.isArray(a);
+    if (aIsArr !== Array.isArray(b)) return false;
+    if (aIsArr) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (!shallowEqual(a[i], b[i])) return false;
+        return true;
+    }
+
+    const ka = Object.keys(a);
+    const kb = Object.keys(b);
+    if (ka.length !== kb.length) return false;
+    for (let i = 0; i < ka.length; i++) {
+        const k = ka[i];
+        if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+        if (!shallowEqual(a[k], b[k])) return false;
+    }
+    return true;
+};
+
 // === Профилирование рендеров ===
 // Включается из консоли: window.__ARCH_PROFILE__ = true. Нужен, чтобы
 // «стало быстрее» подтверждалось числом перерисовок, а не ощущением.
@@ -146,7 +182,7 @@ const getRenderStats = () => ({ ..._renderCounters });
 /** Обнулить счётчики (перед замеряемым сценарием). */
 const resetRenderStats = () => { Object.keys(_renderCounters).forEach(k => { delete _renderCounters[k]; }); };
 
-const StoreEngine = { createStore, createSelectorCache, shallowEqual, profileRender, getRenderStats, resetRenderStats };
+const StoreEngine = { createStore, createSelectorCache, shallowEqual, deepShallowEqual, profileRender, getRenderStats, resetRenderStats };
 if (typeof window !== 'undefined') {
     window.StoreEngine = StoreEngine;
     window.__archRenderStats = getRenderStats;
