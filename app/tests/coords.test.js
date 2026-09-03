@@ -222,3 +222,67 @@ test('CENTER_ON_ENTITY: подводит камеру ОКНА, а не толь
     assert.equal(Math.round(cx), Math.round(win.position.x + borderW + viewportW / 2));
     assert.equal(Math.round(cy), Math.round(win.position.y + borderW + headerH + viewportH / 2));
 });
+
+// =============================================================================
+// v14 (Фаза 2, §7.12 плана): координатное ядро окно+дорожка вместо
+// рамка-окна-уровня+камера. Тесты выше (v13, getWorldTransform/getLinkEndpoints)
+// не трогаются — они проверяют функции, которые продолжает вызывать живой
+// v13-путь вплоть до конца Фазы 4. Фикстуры v14 строятся через parseNotation.
+// =============================================================================
+
+test('v14 getWorldTransformV14: рамка окна, шапка, панорама и масштаб камеры учтены ровно один раз', () => {
+    const state = HierarchyUtils.parseNotation(['ДЕРЕВО', '/A', 'ОКНА', 'W1 = [Проект]'].join('\n'));
+    state.windows.W1 = {
+        ...state.windows.W1,
+        position: { x: 100, y: 200 },
+        camera: { offset: { x: 50, y: 60 }, zoom: 2 }
+    };
+    const t = HierarchyUtils.getWorldTransformV14('A', state);
+    const { headerH, borderW } = HierarchyUtils.WINDOW_METRICS;
+    // A — в дорожке root, локальная позиция (0,0) (первый ребёнок root в раскладке parseNotation)
+    assert.equal(t.x, 100 + borderW + 50 + 0 * 2);
+    assert.equal(t.y, 200 + headerH + 60 + 0 * 2);
+    assert.equal(t.scale, 2);
+});
+
+test('v14 getNodeWorldRect: габариты узла масштабируются камерой окна', () => {
+    const state = HierarchyUtils.parseNotation(['ДЕРЕВО', '/A', 'ОКНА', 'W1 = [Проект]'].join('\n'));
+    state.windows.W1 = { ...state.windows.W1, camera: { offset: { x: 0, y: 0 }, zoom: 1.5 } };
+    const rect = HierarchyUtils.nodeWorldRect('A', state);
+    assert.equal(rect.w, state.nodes.A.size.w * 1.5);
+    assert.equal(rect.h, state.nodes.A.size.h * 1.5);
+});
+
+test('v14 getPortWorldPositionV14: точка порта = мировая точка узла плюс смещение по грани, с учётом зума окна', () => {
+    const state = HierarchyUtils.parseNotation([
+        'ДЕРЕВО', '/A', '/Б', 'ОКНА', 'W1 = [Проект]', 'СВЯЗИ', 'A.out -> Б.in'
+    ].join('\n'));
+    state.windows.W1 = { ...state.windows.W1, camera: { offset: { x: 0, y: 0 }, zoom: 2 } };
+    const nodeT = HierarchyUtils.getWorldTransformV14('A', state);
+    const pos = HierarchyUtils.getPortWorldPositionV14('A-out', state);
+    const port = state.ports['A-out'];
+    const rel = GeometryUtils.getPortRelativePosition(port, state.nodes.A);
+    assert.equal(pos.x, nodeT.x + rel.x * nodeT.scale);
+    assert.equal(pos.y, nodeT.y + rel.y * nodeT.scale);
+});
+
+test('v14 Кэш координат инвалидируется при изменении камеры окна (getDepth/laneRect читают свежий словарь)', () => {
+    const text = ['ДЕРЕВО', '/A', '/A/A1', 'ОКНА', 'W1 = [Проект]', 'W2 = [A]'].join('\n');
+    const state1 = HierarchyUtils.parseNotation(text);
+    const rect1 = HierarchyUtils.nodeRectInWindow(state1.windows.W2, 'A1', state1);
+
+    const movedWin = { ...state1.windows.W2, position: { x: 900, y: 900 } };
+    const state2 = { ...state1, windows: { ...state1.windows, W2: movedWin } };
+    const rect2 = HierarchyUtils.nodeRectInWindow(state2.windows.W2, 'A1', state2);
+
+    assert.notDeepEqual(rect1, rect2, 'новый объект окна — новый мировой прямоугольник, не залипший кэш');
+});
+
+test('v14 Содержимое дорожки попадает внутрь рамки своего окна (fixtures на реальном demo_project не нужны — нотация достаточна)', () => {
+    const text = ['ДЕРЕВО', '/A', '/A/A1', 'ОКНА', 'W1 = [Проект]', 'W2 = [A]'].join('\n');
+    const state = HierarchyUtils.parseNotation(text);
+    const winRect = { x: state.windows.W2.position.x, y: state.windows.W2.position.y, ...state.windows.W2.size };
+    const nodeRect = HierarchyUtils.nodeRectInWindow(state.windows.W2, 'A1', state);
+    assert.ok(nodeRect.x >= winRect.x && nodeRect.x + nodeRect.w <= winRect.x + winRect.w);
+    assert.ok(nodeRect.y >= winRect.y && nodeRect.y + nodeRect.h <= winRect.y + winRect.h);
+});
