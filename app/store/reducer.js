@@ -2017,10 +2017,6 @@ const reducer = (state, action) => {
                 : `Перевложено элементов: ${validIds.length}`, p.historySnapshot || null);
 
             const newNodes = { ...state.nodes };
-            // Унаследованные ownerId/ownerGap/homeLevel (ещё не мигрированная
-            // v11-сущность) сбрасываются — REPARENT_ENTITY — точка полного
-            // перехода на чистый v14 parentId.
-            const stripLegacy = (e) => { const { ownerId, ownerGap, homeLevel, ...rest } = e; return rest; };
 
             const rectsIn = (parentId) => (H.getChildrenByParent(state.nodes)[parentId] || [])
                 .map(n => ({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }));
@@ -2039,7 +2035,7 @@ const reducer = (state, action) => {
                         directChildren.forEach(child => {
                             const pos = G.findFreePosition(child.size, child.position, siblingRects);
                             siblingRects.push({ x: pos.x, y: pos.y, w: (child.size && child.size.w) || 200, h: (child.size && child.size.h) || 100 });
-                            newNodes[child.id] = stripLegacy({ ...newNodes[child.id], parentId: oldParentId, position: pos });
+                            newNodes[child.id] = { ...newNodes[child.id], parentId: oldParentId, position: pos };
                         });
                     }
                 }
@@ -2057,7 +2053,7 @@ const reducer = (state, action) => {
                     position = G.findFreePosition(entity.size, entity.position, rectsIn(targetParentId));
                 }
 
-                newNodes[eid] = stripLegacy({ ...newNodes[eid], parentId: targetParentId, position });
+                newNodes[eid] = { ...newNodes[eid], parentId: targetParentId, position };
             });
 
             // Дроп на карточку узла, у которого нет открытой дорожки — она
@@ -3191,14 +3187,7 @@ const applyCrossProjectReparent = (m, p) => {
     const sourceView = projectFlatView(m, sourceProjectId);
     const targetView = projectFlatView(m, targetProjectId);
 
-    // v14 (§7.14/§7.15 плана, переписано в Фазе 5): барьер снят — живые
-    // проекты после подключения migrateToV14 всегда v14-формы (nodes/frames/
-    // windows, без layers/levelWindows), так что этой веткой идёт КАЖДЫЙ
-    // реальный вызов. Только рамки/узлы v11-фикстур тестов, собранные
-    // wrapFlatToMulti НАПРЯМУЮ (без migrateToV13/migrateToV14) — намеренно
-    // остаются на v13-логике ниже, см. комментарий у теста
-    // getDropTargetAcrossProjects в projects.test.js.
-    if ((m.formatVersion || 0) >= FORMAT_VERSION_V14) {
+    {
         const targetParentId = p.targetParentId !== undefined ? p.targetParentId : p.newParentId;
         if (!targetParentId) return m;
 
@@ -3230,7 +3219,6 @@ const applyCrossProjectReparent = (m, p) => {
         const tgtLinks = { ...targetView.links };
         const movedPortIds = new Set();
 
-        const stripLegacy = (e) => { const { ownerId, ownerGap, homeLevel, ...rest } = e; return rest; };
         const rectsIn = (nodesDict, containerId) => Object.values(nodesDict)
             .filter(n => n && n.parentId === containerId)
             .map(n => ({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }));
@@ -3255,7 +3243,7 @@ const applyCrossProjectReparent = (m, p) => {
                     directChildren.forEach(child => {
                         const pos = G.findFreePosition(child.size, child.position, siblingRects);
                         siblingRects.push({ x: pos.x, y: pos.y, w: (child.size && child.size.w) || 200, h: (child.size && child.size.h) || 100 });
-                        srcNodes[child.id] = stripLegacy({ ...child, parentId: oldParentId, position: pos });
+                        srcNodes[child.id] = { ...child, parentId: oldParentId, position: pos };
                     });
                 }
             }
@@ -3272,7 +3260,7 @@ const applyCrossProjectReparent = (m, p) => {
             const branchIds = collectSubtree(eid);
             branchIds.forEach(id => {
                 const e = srcNodes[id];
-                const moved = id === eid ? stripLegacy({ ...e, parentId: targetParentId, position }) : stripLegacy(e);
+                const moved = id === eid ? { ...e, parentId: targetParentId, position } : e;
                 tgtNodes[id] = moved;
                 delete srcNodes[id];
 
@@ -3310,151 +3298,6 @@ const applyCrossProjectReparent = (m, p) => {
         next = relocateCrossProjectGateways(next, sourceProjectId, targetProjectId, movedPortIds);
         return pruneContainerIsolation(next);
     }
-
-    const mode = p.mode === 'shallow' ? 'shallow' : 'deep';
-    let targetParentId = p.targetParentId !== undefined ? p.targetParentId : p.newParentId;
-    if (targetParentId === undefined && typeof p.targetLevelIndex === 'number') {
-        const win = resolveWindow(targetView, p.targetLevelIndex);
-        targetParentId = win ? win.id : (p.targetLevelIndex === 0 ? 'root' : undefined);
-    }
-    if (!targetParentId) return m;
-
-    const getEntity = (eid) => (sourceView.nodes && sourceView.nodes[eid]) || (sourceView.layers && sourceView.layers[eid]);
-
-    const rawIds = Array.isArray(p.ids) ? p.ids : (p.id ? [p.id] : []);
-    const requestedIds = rawIds.filter(eid => getEntity(eid));
-    if (requestedIds.length === 0) return m;
-
-    // «Только верхние» — как в однопроектном REPARENT_ENTITY: у кого в этом
-    // же наборе есть предок по цепочке parentId, тот переедет вместе с ним.
-    const topIds = requestedIds.filter(eid => !requestedIds.some(other =>
-        other !== eid && H.isDescendantOf(eid, other, sourceView.nodes, sourceView.layers)));
-
-    // canReparentTo: существование сущности — в SOURCE (entityDicts), цели и
-    // цикл — в TARGET; цикл геометрически невозможен между двумя разными
-    // проектами (canReparentTo сама это распознаёт по разным словарям).
-    // «Уже там» (entity.parentId === targetParentId) для cross-project не
-    // проверяется — совпадение строк id между двумя проектами ничего не значит.
-    const validIds = topIds.filter(eid => {
-        const entity = getEntity(eid);
-        if (!entity) return false;
-        return H.canReparentTo(eid, targetParentId, targetView.nodes, targetView.layers, targetView.levelWindows,
-            { nodes: sourceView.nodes, layers: sourceView.layers }).ok;
-    });
-    if (validIds.length === 0) return m;
-
-    const srcNodes = { ...sourceView.nodes };
-    const srcLayers = { ...sourceView.layers };
-    const srcPorts = { ...sourceView.ports };
-    const srcLinks = { ...sourceView.links };
-    const tgtNodes = { ...targetView.nodes };
-    const tgtLayers = { ...targetView.layers };
-    const tgtPorts = { ...targetView.ports };
-    const tgtLinks = { ...targetView.links };
-    const movedPortIds = new Set();
-
-    const stripLegacy = (e) => { const { ownerId, ownerGap, homeLevel, ...rest } = e; return rest; };
-    const rectsIn = (nodesDict, layersDict, containerId) => {
-        const rects = [];
-        Object.values(nodesDict).forEach(n => { if (n && n.parentId === containerId) rects.push({ x: n.position.x, y: n.position.y, w: (n.size && n.size.w) || 200, h: (n.size && n.size.h) || 100 }); });
-        Object.values(layersDict).forEach(l => { if (l && l.parentId === containerId) rects.push({ x: l.position.x, y: l.position.y, w: (l.size && l.size.w) || 600, h: (l.size && l.size.h) || 400 }); });
-        return rects;
-    };
-    // Ветка = сущность + всё, что остаётся привязано к ней по parentId-цепочке
-    // ПОСЛЕ возможного Shallow-всплытия прямых детей (см. ниже) — тот же обход,
-    // что и рекурсивный поиск потомков в DELETE_SELECTED, но по живым id.
-    const collectSubtree = (rootId) => {
-        const ids = new Set([rootId]);
-        let changed = true;
-        while (changed) {
-            changed = false;
-            Object.values(srcNodes).forEach(n => { if (n && ids.has(n.parentId) && !ids.has(n.id)) { ids.add(n.id); changed = true; } });
-            Object.values(srcLayers).forEach(l => { if (l && ids.has(l.parentId) && !ids.has(l.id)) { ids.add(l.id); changed = true; } });
-        }
-        return ids;
-    };
-
-    validIds.forEach(eid => {
-        const entity = getEntity(eid);
-        const oldParentId = entity.parentId;
-
-        if (mode === 'shallow') {
-            // Прямые дети переносимой сущности усыновляются её ПРЕЖНИМ
-            // родителем ВНУТРИ исходного проекта — раньше, чем верхняя
-            // сущность вообще успевает уехать (findFreePosition предотвращает
-            // наложение всплывающих детей на то, что уже стоит у деда).
-            const directChildren = [
-                ...Object.values(srcNodes).filter(n => n && n.parentId === eid),
-                ...Object.values(srcLayers).filter(l => l && l.parentId === eid)
-            ];
-            if (directChildren.length > 0) {
-                const siblingRects = rectsIn(srcNodes, srcLayers, oldParentId);
-                directChildren.forEach(child => {
-                    const pos = G.findFreePosition(child.size, child.position, siblingRects);
-                    siblingRects.push({ x: pos.x, y: pos.y, w: (child.size && child.size.w) || 200, h: (child.size && child.size.h) || 100 });
-                    const updated = stripLegacy({ ...child, parentId: oldParentId, position: pos });
-                    if (srcNodes[child.id]) srcNodes[child.id] = updated; else srcLayers[child.id] = updated;
-                });
-            }
-        }
-
-        // Позиция ВЕРХНЕЙ сущности ветки в целевом проекте: явная (drop под
-        // курсором) либо findFreePosition на корне targetParentId — в другом
-        // проекте совпадение мировых координат ничего не значит, экономить
-        // на toRelativePosition (как делает внутрипроектный путь) незачем.
-        let position;
-        if (p.positionsById && p.positionsById[eid]) {
-            position = p.positionsById[eid];
-        } else if (validIds.length === 1 && p.position) {
-            position = p.position;
-        } else {
-            position = G.findFreePosition(entity.size, entity.position, rectsIn(tgtNodes, tgtLayers, targetParentId));
-        }
-
-        const branchIds = collectSubtree(eid);
-        branchIds.forEach(id => {
-            const isNode = !!srcNodes[id];
-            const dict = isNode ? srcNodes : srcLayers;
-            const e = dict[id];
-            const moved = id === eid ? stripLegacy({ ...e, parentId: targetParentId, position }) : stripLegacy(e);
-            if (isNode) { tgtNodes[id] = moved; delete srcNodes[id]; }
-            else { tgtLayers[id] = moved; delete srcLayers[id]; }
-
-            Object.keys(srcPorts).forEach(portId => {
-                const port = srcPorts[portId];
-                if (port && port.nodeId === id) {
-                    tgtPorts[portId] = port;
-                    delete srcPorts[portId];
-                    movedPortIds.add(portId);
-                }
-            });
-        });
-    });
-
-    // Связи, у которых ОБА порта теперь в целевом проекте, переезжают целиком;
-    // связи, у которых порты после переноса разошлись по разным проектам,
-    // стали бы битыми (обычная links-запись не умеет адресовать чужой
-    // проект — для этого есть отдельная crossProjectLinks, Фаза 6.1) и
-    // удаляются, как раньше в этом случае поступал TRANSFER_NODE.
-    Object.keys(srcLinks).forEach(linkId => {
-        const link = srcLinks[linkId];
-        if (!link) return;
-        const sMoved = movedPortIds.has(link.sourcePortId);
-        const tMoved = movedPortIds.has(link.targetPortId);
-        if (sMoved && tMoved) { tgtLinks[linkId] = link; delete srcLinks[linkId]; }
-        else if (sMoved || tMoved) { delete srcLinks[linkId]; }
-    });
-
-    const targetNormalized = normalizeLevelWindows(targetView.levelWindows, tgtNodes, tgtLayers, targetView.levelViews);
-
-    let next = writeProjectView(m, sourceProjectId, { ...sourceView, nodes: srcNodes, layers: srcLayers, ports: srcPorts, links: srcLinks });
-    next = writeProjectView(next, targetProjectId, {
-        ...targetView, nodes: tgtNodes, layers: tgtLayers, ports: tgtPorts, links: tgtLinks,
-        levelWindows: targetNormalized.levelWindows, levelViews: targetNormalized.levelViews
-    });
-
-    next = relocateCrossProjectGateways(next, sourceProjectId, targetProjectId, movedPortIds);
-    return pruneContainerIsolation(next);
 };
 
 const multiReducer = (m, action) => {

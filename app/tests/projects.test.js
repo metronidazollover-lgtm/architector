@@ -568,114 +568,13 @@ test('HierarchyUtils.getPendingGatewayProxiesForWindow: висящий штек�
 });
 
 // === Фаза 6.3: кросс-проектный перенос сущностей (REPARENT_ENTITY + targetProjectId) ===
-
-test('REPARENT_ENTITY (кросс-проектный, Deep): узел с портом переезжает целиком, исчезая из исходного проекта', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    const pidA = m.activeProjectId;
-    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_PORT', payload: { id: 'portA', nodeId: 'nodeA', name: 'PortA' } } } });
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pidB = m.activeProjectId;
-
-    m = multiReducer(m, {
-        type: 'REPARENT_ENTITY',
-        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'root', mode: 'deep' }
-    });
-
-    assert.equal(m.projects[pidA].nodes.nodeA, undefined, 'узел ушёл из A');
-    assert.equal(m.projects[pidA].ports.portA, undefined, 'порт ушёл вместе с узлом');
-    assert.ok(m.projects[pidB].nodes.nodeA, 'узел появился в B');
-    assert.equal(m.projects[pidB].nodes.nodeA.parentId, 'root');
-    assert.ok(m.projects[pidB].ports.portA, 'порт появился в B');
-    assert.equal(m.projects[pidA].ports.portA, undefined);
-});
-
-test('REPARENT_ENTITY (кросс-проектный, Deep): ветка (узел + дочерний узел) переезжает целиком', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    const pidA = m.activeProjectId;
-    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_NODE', payload: { id: 'child', name: 'Child', position: { x: 10, y: 10 }, size: { w: 100, h: 60 }, parentId: 'nodeA' } } } });
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pidB = m.activeProjectId;
-
-    m = multiReducer(m, {
-        type: 'REPARENT_ENTITY',
-        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'root', mode: 'deep' }
-    });
-
-    assert.equal(m.projects[pidA].nodes.nodeA, undefined);
-    assert.equal(m.projects[pidA].nodes.child, undefined, 'ребёнок ушёл вместе с веткой');
-    assert.ok(m.projects[pidB].nodes.nodeA);
-    assert.ok(m.projects[pidB].nodes.child);
-    assert.equal(m.projects[pidB].nodes.child.parentId, 'nodeA', 'родство внутри ветки не тронуто');
-});
-
-test('REPARENT_ENTITY (кросс-проектный, Shallow): дети остаются в исходном проекте, усыновляются дедом', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    const pidA = m.activeProjectId;
-    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidA, action: { type: 'ADD_NODE', payload: { id: 'child', name: 'Child', position: { x: 10, y: 10 }, size: { w: 100, h: 60 }, parentId: 'nodeA' } } } });
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pidB = m.activeProjectId;
-
-    m = multiReducer(m, {
-        type: 'REPARENT_ENTITY',
-        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'root', mode: 'shallow' }
-    });
-
-    assert.equal(m.projects[pidA].nodes.nodeA, undefined, 'сама сущность уехала');
-    assert.ok(m.projects[pidA].nodes.child, 'ребёнок остался в A');
-    assert.equal(m.projects[pidA].nodes.child.parentId, 'root', 'усыновлён дедом (root)');
-    assert.ok(m.projects[pidB].nodes.nodeA, 'сущность появилась в B без детей');
-    assert.equal(m.projects[pidB].nodes.child, undefined);
-});
-
-test('REPARENT_ENTITY (кросс-проектный): переносит crossProjectLinks и pendingGateways вместе с портом', () => {
-    const { m: m0, pidA, pidB } = makeTwoProjectsWithPorts();
-    let m = multiReducer(m0, { type: 'ADD_PROJECT' });
-    const pidC = m.activeProjectId;
-
-    // Живая связь A<->B через portA1; штекер на A, ожидающий porta1-related linkId
-    m = multiReducer(m, {
-        type: 'ADD_CROSS_PROJECT_LINK',
-        payload: { sourceProjectId: pidA, sourcePortId: 'portA1', targetProjectId: pidB, targetPortId: 'portB1' }
-    });
-    const linkId = Object.keys(m.crossProjectLinks)[0];
-    m = {
-        ...m,
-        projects: { ...m.projects, [pidA]: { ...m.projects[pidA], pendingGateways: {
-            'xlink-extra': { linkId: 'xlink-extra', portId: 'portA1', direction: 'out', remoteProjectId: 'ghost', remotePortId: 'ghost-port', remoteProjectName: 'Ghost', remotePortName: 'Ghost' }
-        } } }
-    };
-
-    // Узел nodeA (с портом portA1) переезжает из A в C
-    m = multiReducer(m, {
-        type: 'REPARENT_ENTITY',
-        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidC, targetParentId: 'root', mode: 'deep' }
-    });
-
-    const link = m.crossProjectLinks[linkId];
-    assert.equal(link.sourceProjectId, pidC, 'живая связь переехала на новый projectId вместе с портом');
-    assert.equal(link.sourcePortId, 'portA1');
-    assert.deepEqual(m.projects[pidA].pendingGateways, {}, 'штекер ушёл из A');
-    assert.ok(m.projects[pidC].pendingGateways['xlink-extra'], 'штекер переехал на C вместе с портом');
-});
-
-test('REPARENT_ENTITY (кросс-проектный): targetLevelIndex создаёт/резолвит окно в целевом проекте, targetParentId=узел растит новый уровень', () => {
-    let m = wrapFlatToMulti(makeFlat());
-    const pidA = m.activeProjectId;
-    m = multiReducer(m, { type: 'ADD_PROJECT' });
-    const pidB = m.activeProjectId;
-    m = multiReducer(m, { type: 'FOR_PROJECT', payload: { projectId: pidB, action: { type: 'ADD_NODE', payload: { id: 'nodeB', name: 'B', position: { x: 0, y: 0 }, size: { w: 200, h: 100 }, parentId: 'root' } } } });
-
-    // Перенос nodeA НА УЗЕЛ nodeB целевого проекта — растит уровень 1 в B
-    m = multiReducer(m, {
-        type: 'REPARENT_ENTITY',
-        payload: { ids: ['nodeA'], sourceProjectId: pidA, targetProjectId: pidB, targetParentId: 'nodeB', mode: 'deep' }
-    });
-
-    assert.equal(m.projects[pidA].nodes.nodeA, undefined);
-    assert.equal(m.projects[pidB].nodes.nodeA.parentId, 'nodeB');
-    const winsB = Object.values(m.projects[pidB].levelWindows);
-    assert.ok(winsB.some(w => w.levelIndex === 1), 'новое окно уровня 1 достроилось в B под перенесённого ребёнка узла');
-});
+// v14 (Фаза 6): тесты на wrapFlatToMulti-фикстурах НЕ мигрированного v13-
+// состояния (Deep/Shallow/crossProjectLinks-перенос/targetLevelIndex) удалены
+// вместе со старой v13-веткой applyCrossProjectReparent, которую они
+// упражняли (H.canReparentTo/H.isDescendantOf, layers/levelWindows,
+// targetLevelIndex — ни один из этих путей теперь физически не существует в
+// reducer.js). Эквивалентное v14-покрытие — ниже, «REPARENT_ENTITY
+// (кросс-проектный, v14, ...)».
 
 test('REPARENT_ENTITY (кросс-проектный): нет проекта-источника/цели — no-op', () => {
     let m = wrapFlatToMulti(makeFlat());
