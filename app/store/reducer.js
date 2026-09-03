@@ -1023,6 +1023,12 @@ const makeHistorySnapshot = (state, snapshotOverride = null) => ({
     ports: state.ports,
     links: state.links,
     levelWindows: state.levelWindows,
+    // v14 (Фаза 4): frames/windows заменяют layers/levelWindows — оба набора
+    // полей сосуществуют в снимке до конца перехода (см. §7.12), иначе Undo
+    // структурных действий над окнами/дорожками/рамками (OPEN_LANE, ADD_FRAME
+    // и т.д., «в истории» по §9.1/§7.6 плана) молча ничего не восстанавливал бы.
+    frames: state.frames,
+    windows: state.windows,
     projectName: state.projectName,
     projectColor: state.projectColor,
     projectFontFamily: state.projectFontFamily,
@@ -2114,6 +2120,8 @@ const reducer = (state, action) => {
                 ports: state.ports,
                 links: state.links,
                 levelWindows: state.levelWindows,
+                frames: state.frames,
+                windows: state.windows,
                 projectName: state.projectName,
                 projectColor: state.projectColor,
                 projectFontFamily: state.projectFontFamily,
@@ -2121,9 +2129,13 @@ const reducer = (state, action) => {
             };
             const newLogs = state.historyLogs.slice(0, state.historyLogs.length - 1);
 
-            // Камера окон живёт в state.levelViews вне истории, поэтому окна
-            // восстанавливаются как есть — ручная починка innerOffset/innerZoom не нужна.
+            // Камера окон живёт в state.levelViews/win.camera вне истории,
+            // поэтому окна восстанавливаются как есть — ручная починка
+            // innerOffset/innerZoom/camera не нужна.
             const restoredWindows = previous.levelWindows || state.levelWindows || {};
+            // v14: frames/windows — см. makeHistorySnapshot выше.
+            const restoredFrames = previous.frames || state.frames || {};
+            const restoredLaneWindows = previous.windows || state.windows || {};
 
             return {
                 ...state,
@@ -2132,6 +2144,8 @@ const reducer = (state, action) => {
                 ports: previous.ports || {},
                 links: previous.links || {},
                 levelWindows: restoredWindows,
+                frames: restoredFrames,
+                windows: restoredLaneWindows,
                 projectName: previous.projectName || state.projectName,
                 projectColor: previous.projectColor || state.projectColor,
                 projectFontFamily: previous.projectFontFamily || state.projectFontFamily,
@@ -2152,6 +2166,8 @@ const reducer = (state, action) => {
                 ports: state.ports,
                 links: state.links,
                 levelWindows: state.levelWindows,
+                frames: state.frames,
+                windows: state.windows,
                 projectName: state.projectName,
                 projectColor: state.projectColor,
                 projectFontFamily: state.projectFontFamily,
@@ -2160,6 +2176,8 @@ const reducer = (state, action) => {
 
             // См. UNDO: камера вне снапшота, окна восстанавливаются напрямую.
             const restoredWindows = next.levelWindows || state.levelWindows || {};
+            const restoredFrames = next.frames || state.frames || {};
+            const restoredLaneWindows = next.windows || state.windows || {};
 
             return {
                 ...state,
@@ -2168,6 +2186,8 @@ const reducer = (state, action) => {
                 ports: next.ports || {},
                 links: next.links || {},
                 levelWindows: restoredWindows,
+                frames: restoredFrames,
+                windows: restoredLaneWindows,
                 projectName: next.projectName || state.projectName,
                 projectColor: next.projectColor || state.projectColor,
                 projectFontFamily: next.projectFontFamily || state.projectFontFamily,

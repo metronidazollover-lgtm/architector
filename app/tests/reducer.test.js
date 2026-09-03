@@ -1096,6 +1096,34 @@ test('v14 ADD_FRAME: двойной режим — с выделением ср�
     assert.equal(s2.frames[id2].homeLaneId, null, 'без членов homeLaneId ждёт первого дропа');
 });
 
+test('v14 UNDO/REDO: восстанавливают frames и windows, не только nodes/layers (баг найден при написании Фазы 4)', () => {
+    // makeHistorySnapshot/UNDO/REDO перечисляли поля явным списком, куда
+    // frames/windows не попали при их введении в Фазе 1-3 — структурные
+    // действия над окнами/дорожками/рамками писали шаг в past (см. §9.1/§7.6
+    // плана), но Undo эти два словаря молча не трогал вообще.
+    const s0 = v14State();
+    const windowsBefore = s0.windows;
+
+    const s1 = reducer(s0, { type: 'ADD_FRAME', payload: { members: ['A1'], name: 'Тест' } });
+    const frameId = s1.selectedIds[0];
+    assert.ok(s1.frames[frameId], 'рамка создана');
+
+    const s2 = reducer(s1, { type: 'OPEN_LANE', payload: { ownerId: 'A2' } });
+    assert.ok(HierarchyUtils.windowsOfLane('A2', s2.windows).length > 0, 'дорожка A2 открылась');
+
+    const s3 = reducer(s2, { type: 'UNDO' });
+    assert.equal(s3.windows, windowsBefore, 'Undo вернул windows к состоянию до OPEN_LANE');
+    assert.ok(HierarchyUtils.windowsOfLane('A2', s3.windows).length === 0, 'дорожка A2 снова закрыта');
+
+    const s4 = reducer(s3, { type: 'UNDO' });
+    assert.equal(s4.frames[frameId], undefined, 'Undo вернул frames к состоянию до ADD_FRAME');
+
+    const s5 = reducer(s4, { type: 'REDO' });
+    assert.ok(s5.frames[frameId], 'Redo вернул рамку обратно');
+    const s6 = reducer(s5, { type: 'REDO' });
+    assert.ok(HierarchyUtils.windowsOfLane('A2', s6.windows).length > 0, 'Redo снова открыл дорожку A2');
+});
+
 test('v14 FRAME_ADD_MEMBERS: задаёт homeLaneId при первом добавлении в пустую рамку', () => {
     const s0 = reducer(v14State(), { type: 'ADD_FRAME', payload: {} });
     const frameId = s0.selectedIds[0];
