@@ -2774,6 +2774,30 @@ Object.assign(HierarchyUtils, {
     },
 
     /**
+     * v14 (Фаза 4, доп.): дорожка, в которой хост порта СЕЙЧАС фактически
+     * отрисован — узел -> его собственный parentId; рамка -> кусок в её
+     * homeLaneId, либо первый непустой (см. §4.2 LANES_MODEL.md, та же
+     * эвристика, что и в getPortWorldPositionV14). Используется Lane.js/Link.js
+     * для решения «этот порт — в моей дорожке?» без дублирования эвристики.
+     * @param {string} portId
+     * @param {Object} state
+     * @returns {?string}
+     */
+    getPortHostOwnerId: (portId, state) => {
+        const port = state.ports && state.ports[portId];
+        if (!port) return null;
+        const node = state.nodes && state.nodes[port.nodeId];
+        if (node) return node.parentId || 'root';
+        const frame = state.frames && state.frames[port.nodeId];
+        if (!frame) return null;
+        const nodes = state.nodes || {};
+        const windows = state.windows || {};
+        const homeLaneId = frame.homeLaneId || 'root';
+        if (HierarchyUtils.fragmentRect(HierarchyUtils.windowsOfLane(homeLaneId, windows)[0], homeLaneId, frame.id, state)) return homeLaneId;
+        return (frame.members || []).map(mid => nodes[mid] && (nodes[mid].parentId || 'root')).find(Boolean) || null;
+    },
+
+    /**
      * v14: печать состояния проекта в нотации §1 плана / §3 LANES_MODEL.md —
      * ДЕРЕВО/ОКНА/РАМКИ/СВЯЗИ. Формат реализован как ЧЕТЫРЕ ПОСЛЕДОВАТЕЛЬНЫХ
      * секции с заголовками (не визуальная 4-колоночная таблица из иллюстрации

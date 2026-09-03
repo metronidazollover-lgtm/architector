@@ -130,32 +130,14 @@ function AIAgentNodeContent({ nodeId }) {
         if (validCount > 0) {
             report += `✅ *Применено ${validCount} экшенов к холсту.* Отменить всё разом — Ctrl+Z.`;
 
+            // v14: дорожка не имеет собственного размера (ширина — константа
+            // LANE_W/ROOT_LANE_W), поэтому «подогнать слой под содержимое»
+            // после пакета команд больше не нужно — остаётся только разложить
+            // затронутые окна по колонкам глубины, чтобы новые узлы/окна не
+            // громоздились друг на друге.
             setTimeout(() => {
                 if (!mountedRef.current) return;
-                const latestState = stateRef.current;
-                const affectedLayerIds = new Set();
-                actionsList.forEach(a => {
-                    if (a && a.payload) {
-                        if (a.type === 'ADD_LAYER') affectedLayerIds.add(a.payload.id);
-                        if (a.type === 'ADD_NODE' && a.payload.parentId && a.payload.parentId !== 'root') {
-                            affectedLayerIds.add(a.payload.parentId);
-                        }
-                    }
-                });
-
-                affectedLayerIds.forEach(lId => {
-                    const layer = latestState.layers ? latestState.layers[lId] : null;
-                    if (layer) {
-                        const layerNodes = Object.values(latestState.nodes || {}).filter(n => n && n.parentId === lId);
-                        if (layerNodes.length > 0 && window.GeometryUtils && window.GeometryUtils.getSmartPlacement) {
-                            const { updatesById, newLayerSize } = window.GeometryUtils.getSmartPlacement(layerNodes, layer, latestState.nodes, latestState.layers);
-                            dispatch({ type: 'UPDATE_LAYER', payload: { id: lId, updates: { size: newLayerSize }, skipHistory: true } });
-                            dispatch({ type: 'MASS_UPDATE', payload: { ids: layerNodes.map(n => n.id), updatesById, skipHistory: true } });
-                        }
-                    }
-                });
-
-                dispatch({ type: 'ALIGN_LAYERS', payload: { contextId: 'root' } });
+                dispatch({ type: 'ALIGN_WINDOWS' });
             }, 50);
         }
         if (invalidCount > 0) {
@@ -182,18 +164,18 @@ function AIAgentNodeContent({ nodeId }) {
     // Валидация JSON-экшенов перед вызовом dispatch
     const validateAndSanitizeAction = (action, currentState = state, batchActions = []) => {
         const SUPPORTED_ACTION_TYPES = new Set([
-            'ADD_LAYER', 'ADD_NODE', 'ADD_PORT', 'ADD_LINK',
-            'UPDATE_NODE', 'UPDATE_LAYER', 'UPDATE_PORT', 'UPDATE_LINK',
-            'REPARENT_ENTITY', 'ALIGN_LAYERS',
-            'REMOVE_NODE', 'REMOVE_LAYER', 'REMOVE_PORT', 'REMOVE_LINK',
+            'ADD_FRAME', 'ADD_NODE', 'ADD_PORT', 'ADD_LINK',
+            'UPDATE_NODE', 'UPDATE_FRAME', 'UPDATE_PORT', 'UPDATE_LINK',
+            'REPARENT_ENTITY', 'ALIGN_WINDOWS',
+            'REMOVE_NODE', 'REMOVE_FRAME', 'REMOVE_PORT', 'REMOVE_LINK',
             'MASS_UPDATE',
-            // v13: уровни и вложенность (используются системным промптом ассистента)
-            'CREATE_NESTED_NODE', 'FOCUS_CHILDREN_OF_NODE',
-            'CLEAR_LEVEL_WINDOW', 'REMOVE_LEVEL_WINDOW', 'REMOVE_ROOT_CANVAS', 'CLEAR_PROJECT'
+            // v14: узлы, дорожки, окна, рамки (используются системным промптом ассистента)
+            'CREATE_NESTED_NODE', 'OPEN_LANE', 'CLOSE_LANE', 'CLOSE_WINDOW',
+            'FRAME_ADD_MEMBERS', 'FRAME_REMOVE_MEMBERS', 'CLEAR_PROJECT'
         ]);
 
         // Экшены, у которых payload — просто строка-идентификатор
-        const STRING_PAYLOAD_TYPES = new Set(['REMOVE_NODE', 'REMOVE_LAYER', 'REMOVE_PORT', 'REMOVE_LINK']);
+        const STRING_PAYLOAD_TYPES = new Set(['REMOVE_NODE', 'REMOVE_FRAME', 'REMOVE_PORT', 'REMOVE_LINK']);
 
         if (!action || typeof action !== 'object' || typeof action.type !== 'string') {
             return { valid: false, reason: 'Экшен должен быть объектом с типом string' };
@@ -477,10 +459,8 @@ function AIAgentNodeContent({ nodeId }) {
             if (isLocalMode) {
                 const addNestedChildren = (parentId) => {
                     Object.values(state.nodes).forEach(n => {
-                        // Структурный ребёнок: ownerId (ещё не мигрированные v11-узлы)
-                        // ИЛИ parentId напрямую на узел (v13) — n.parentId === parentId
-                        // здесь безопасно, т.к. parentId всегда id УЗЛА (родство), а не слоя.
-                        if ((n.ownerId === parentId || n.parentId === parentId) && !connectedNodes.has(n)) {
+                        // v14: единственная структура родства — parentId на узел.
+                        if (n.parentId === parentId && !connectedNodes.has(n)) {
                             connectedNodes.add(n);
                             addNestedChildren(n.id);
                         }
@@ -490,26 +470,31 @@ function AIAgentNodeContent({ nodeId }) {
                 initialNodes.forEach(n => addNestedChildren(n.id));
             }
 
-            // v13: в сводку входят структурный родитель и уровень иерархии
+            // v14: агент получает состояние в НОТАЦИИ (§1 плана / §3
+            // LANES_MODEL.md), а не сырым JSON — ДЕРЕВО/ОКНА/РАМКИ/СВЯЗИ.
+            // В локальном режиме нотация строится из урезанного среза
+            // {nodes, frames, ports, links, windows}, содержащего только
+            // подключённые узлы (и их предков по parentId, иначе ДЕРЕВО
+            // потеряло бы промежуточные звенья пути).
             const H = window.HierarchyUtils;
-            const describeNode = (n) => ({
-                id: n.id,
-                name: n.name,
-                parentNodeId: n.ownerId || ((n.parentId && state.nodes[n.parentId]) ? n.parentId : null),
-                layerId: (n.parentId && n.parentId !== 'root' && state.layers[n.parentId]) ? n.parentId : null,
-                level: H ? H.getEntityLevel(n.id, state.nodes, state.layers, state.levelWindows) : 0,
-                type: n.type || 'default'
-            });
-            const nodesSummary = (isLocalMode ? Array.from(connectedNodes) : Object.values(state.nodes)).map(describeNode);
-
-            // Сводка уровней проекта: номер, имя окна, количество узлов
-            const levelsSummary = Object.values(state.levelWindows || {})
-                .sort((a, b) => a.levelIndex - b.levelIndex)
-                .map(w => {
-                    const count = Object.keys(state.nodes || {}).filter(id =>
-                        (H ? H.getEntityLevel(id, state.nodes, state.layers, state.levelWindows) : 0) === w.levelIndex).length;
-                    return `L${w.levelIndex} «${w.name || (w.levelIndex === 0 ? 'Главный холст' : 'Уровень ' + w.levelIndex)}» — узлов: ${count}`;
-                }).join('; ');
+            const notationState = (() => {
+                if (!isLocalMode) return state;
+                const scopedNodes = {};
+                connectedNodes.forEach(n => { scopedNodes[n.id] = n; });
+                // Достраиваем цепочку предков, иначе HierarchyUtils.getPath
+                // оборвётся на первом отсутствующем звене.
+                Object.values(state.nodes).forEach(n => {
+                    if (scopedNodes[n.id]) {
+                        let cur = n;
+                        while (cur && cur.parentId && cur.parentId !== 'root' && state.nodes[cur.parentId] && !scopedNodes[cur.parentId]) {
+                            scopedNodes[cur.parentId] = state.nodes[cur.parentId];
+                            cur = state.nodes[cur.parentId];
+                        }
+                    }
+                });
+                return { nodes: scopedNodes, frames: state.frames, ports: state.ports, links: state.links, windows: state.windows };
+            })();
+            const notation = (H && H.dumpNotation) ? H.dumpNotation(notationState) : '(нотация недоступна)';
 
             const connectedNodesArray = Array.from(connectedNodes).slice(0, 15);
             let contextStr = '';
@@ -526,22 +511,20 @@ function AIAgentNodeContent({ nodeId }) {
 
             let aiResponse = '';
 
-            let systemPrompt = `Вы — ИИ-ассистент (Copilot) для визуального редактора иерархических графов Architector (модель данных v13: пространственные окна уровней, единый источник родства parentId).
+            let systemPrompt = `Вы — ИИ-ассистент (Copilot) для визуального редактора иерархических графов Architector (модель данных v14: Дорожки/Окна/Рамки, единственная структура родства — parentId узла).
 
 УСТРОЙСТВО ИЕРАРХИИ (важно для понимания проекта):
-- Каждый уровень иерархии — отдельное окно-холст: L0 «Главный холст» (корневые родители), L1 (их дети), L2 (внуки) и глубже.
-- Родство выражается ЕДИНСТВЕННЫМ полем parentId: "root" (корень своего уровня), ID слоя (группировка — координата, уровень не меняется) или ID узла (структурный шаг — сущность живёт на СЛЕДУЮЩЕМ уровне, level родителя + 1).
-- Поле level в сводке узлов — готовый номер уровня каждого узла, вычислен автоматически по цепочке parentId.
-- Сирота-якорь: узел/слой без структурного родителя-узла, явно привязанный к уровню N через REPARENT_ENTITY (targetLevelIndex: N) — глава независимой ветки на этом уровне, его дети (если есть) — на N+1.
-- В сводке узлов ниже поле parentNodeId (не путать с сырым parentId!) содержит id структурного родителя-узла (null, если узел корневой или лежит только в слое); отдельно layerId — id слоя-контейнера, если узел визуально сгруппирован в слое.
-
-Уровни проекта: ${levelsSummary || 'только Главный холст (пусто)'}
+- Дорожка (lane) — внутренность одного узла (или корня проекта): вертикальная колонка с его прямыми детьми. Не хранится как сущность — производная от parentId.
+- Окно (window) — набор дорожек, положенных рядом на холсте; чисто обзорное состояние, узел без открытой дорожки родителя просто не показан.
+- Рамка (frame) — множество узлов из любых дорожек (замена прежних «слоёв»), не влияет на родство.
+- Родство — ЕДИНСТВЕННОЕ поле parentId: "root" (прямой потомок корня) либо id узла-родителя. Глубина узла = длина цепочки parentId до "root" (прямые дети корня — глубина 1).
+- Ниже — состояние проекта в НОТАЦИИ (не JSON): секции ДЕРЕВО (путь каждого узла по parentId), ОКНА (какие дорожки сейчас открыты и где), РАМКИ (членство), СВЯЗИ (порт -> порт).
 
 Текущее состояние холста:
 ${contextStr}
 
-Доступный список узлов (id, name, parentNodeId — структурный родитель, layerId — слой-контейнер, level — уровень, type):
-${JSON.stringify(nodesSummary)}
+Состояние проекта (нотация):
+${notation}
 
 `;
 
@@ -549,39 +532,35 @@ ${JSON.stringify(nodesSummary)}
                 systemPrompt += `ВЫ РАБОТАЕТЕ В РЕЖИМЕ АГЕНТА И МОЖЕТЕ НАПРЯМУЮ РЕДАКТИРОВАТЬ И СТРОИТЬ ХОЛСТ!
 
 ПОЛНАЯ ИНСТРУКЦИЯ И ПОДДЕРЖИВАЕМЫЕ JSON-ЭКШЕНЫ:
-Если пользователь просит СОЗДАТЬ, ИЗМЕНИТЬ, УДАЛИТЬ или ПОГРУЗИТЬСЯ в структуры (слои, узлы, порты, связи, уровни), вы ОБЯЗАНЫ приложить в самом конце своего ответа один блок кода в формате JSON с массивом экшенов:
+Если пользователь просит СОЗДАТЬ, ИЗМЕНИТЬ, УДАЛИТЬ или ПОГРУЗИТЬСЯ в структуры (узлы, порты, связи, рамки), вы ОБЯЗАНЫ приложить в самом конце своего ответа один блок кода в формате JSON с массивом экшенов:
 
 \`\`\`json
 [
-  { "type": "ADD_LAYER", "payload": { "id": "layer-1-ui", "name": "1. UI Layer", "content": "Описание слоя", "color": "#0284c7", "position": {"x": 60, "y": 80}, "size": {"w": 650, "h": 450}, "parentId": "root" } },
-  { "type": "ADD_NODE", "payload": { "id": "node-1", "name": "Canvas Viewport", "content": "Интерактивный холст", "color": "#0f172a", "position": {"x": 90, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle", "mediaUrl": "https://...", "mediaHeight": 70 } },
-  { "type": "ADD_NODE", "payload": { "id": "node-2", "name": "Store Provider", "content": "Хранилище состояния", "color": "#0f172a", "position": {"x": 370, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "layer-1-ui", "shape": "rectangle" } },
+  { "type": "ADD_NODE", "payload": { "id": "node-1", "name": "Canvas Viewport", "content": "Интерактивный холст", "color": "#0f172a", "position": {"x": 90, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "root", "shape": "rectangle" } },
+  { "type": "ADD_NODE", "payload": { "id": "node-2", "name": "Store Provider", "content": "Хранилище состояния", "color": "#0f172a", "position": {"x": 370, "y": 160}, "size": {"w": 250, "h": 120}, "parentId": "root", "shape": "rectangle" } },
   { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "node-1", "id": "node-sub-1", "name": "Sub-Component" } },
-  { "type": "ADD_NODE", "payload": { "id": "node-sub-2", "name": "Второй ребёнок", "content": "Брат node-sub-1", "color": "#0284c7", "position": {"x": 380, "y": 120}, "size": {"w": 250, "h": 120}, "parentId": "node-1", "shape": "rectangle" } },
   { "type": "ADD_PORT", "payload": { "id": "port-1-out", "nodeId": "node-1", "type": "output", "edge": "right", "position": 0.5, "name": "Events Out", "color": "#38bdf8" } },
   { "type": "ADD_PORT", "payload": { "id": "port-2-in", "nodeId": "node-2", "type": "input", "edge": "left", "position": 0.5, "name": "Actions In", "color": "#0284c7" } },
   { "type": "ADD_LINK", "payload": { "id": "link-1-to-2", "sourcePortId": "port-1-out", "targetPortId": "port-2-in", "name": "Redux Dispatch", "linkStyle": "orthogonal", "color": "#38bdf8" } },
-  { "type": "ADD_PORT", "payload": { "id": "port-layer-1-out", "nodeId": "layer-1-ui", "type": "output", "edge": "right", "position": 0.5, "name": "Layer Out", "color": "#38bdf8" } },
+  { "type": "ADD_FRAME", "payload": { "members": ["node-1", "node-2"], "name": "UI Layer", "color": "#0284c7" } },
   { "type": "UPDATE_NODE", "payload": { "id": "node-1", "updates": { "color": "#HEX", "name": "Новое имя" } } },
   { "type": "REMOVE_NODE", "payload": "node-2" }
 ]
 \`\`\`
-(В примере выше \`port-layer-1-out\` — порт, поставленный на СЛОЙ \`layer-1-ui\` через тот же \`ADD_PORT\` с \`nodeId\` = id слоя; такой порт можно связать \`ADD_LINK\`'ом с портом другого слоя или узла ровно так же, как порты узлов.)
 
-СТРОГИЕ ПРАВИЛА И ИНВАРИАНТЫ (модель v11):
+СТРОГИЕ ПРАВИЛА И ИНВАРИАНТЫ (модель v14):
 1. ФОРМА УЗЛОВ (shape): все узлы СТРОГО прямоугольные (shape: "rectangle").
-2. ИЕРАРХИЯ РОДСТВА — через parentId, ЕДИНСТВЕННОЕ поле родства:
-   - Корневой узел (уровень 0, Главный холст): parentId = "root" или ID слоя.
-   - Ребёнок узла X (порождает следующий уровень): ЛУЧШИЙ способ — { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "X", "id": "...", "name": "..." } } — узел сам попадёт на следующий уровень с автоматическим размещением, окно уровня создастся при необходимости.
-   - Альтернатива (когда нужна точная позиция): ADD_NODE с "parentId": "X" (id узла-родителя напрямую) — position тогда задаётся в координатах ХОЛСТА УРОВНЯ ребёнка (не внутри родителя!): x: 60..900, y: 80..600, братьев разносите сеткой с шагом ~280 по x.
-   - parentId может быть "root", ID слоя (группировка на ТОМ ЖЕ уровне) ИЛИ ID узла (следующий уровень) — все три варианта равноправны.
-3. ПОЗИЦИИ: локальны холсту уровня, на котором живёт узел. Узлы одного родителя (братья) лежат на одном уровне рядом друг с другом.
-4. ОБЯЗАТЕЛЬНОЕ СОЗДАНИЕ ПОРТОВ (ADD_PORT): для каждого узла создавайте порты на его гранях! Порт можно поставить и на СЛОЙ — тем же ADD_PORT, где nodeId = id слоя (поле называется nodeId по историческим причинам, но принимает id узла ИЛИ слоя). Слой — полноправный участник графа связей наравне с узлом.
-5. СВЯЗИ СОЕДИНЯЮТ ТОЛЬКО ПОРТЫ (ADD_LINK): sourcePortId и targetPortId содержат СТРОГО ID портов, независимо от того, узлу или слою эти порты принадлежат. Допустимы любые комбинации: Узел↔Узел, Слой↔Слой, Узел↔Слой. Связи между узлами/слоями разных уровней допустимы (рисуются пунктиром через прокси-порты на рамках окон).
-6. УДАЛЕНИЕ И ОЧИСТКА: REMOVE_NODE каскадно удаляет узел со всеми его потомками (вся ветка по parentId). Экшены уровней: CLEAR_LEVEL_WINDOW { "index": N } — очистить уровень N: удаляются ТОЛЬКО его сущности, потомки на нижних уровнях выживают на своих местах (пере-якорятся на ближайшего живого предка; без живых предков потомок становится независимым сиротой-якорем на своём уровне, сохранив свою ветку); REMOVE_LEVEL_WINDOW { "index": N } — удалить уровень N (включая Главный холст index: 0): его сущности удаляются, потомки и уровни ниже поднимаются на один (Уровень 1 становится Главным холстом); REMOVE_ROOT_CANVAS {} — удалить Главный холст (аналог REMOVE_LEVEL_WINDOW { "index": 0 }); CLEAR_PROJECT {} — полная очистка содержимого ВСЕХ уровней (окна и настройки остаются); REMOVE_PROJECT { "id": "..." } — удалить проект целиком.
-7. ФОКУСИРОВКА: FOCUS_CHILDREN_OF_NODE { "parentId": "X" } — показать детей узла X на следующем уровне.
-8. ПЕРЕНОС МЕЖДУ КОНТЕЙНЕРАМИ И УРОВНЯМИ: REPARENT_ENTITY { "id": "n1", "targetParentId": "layer-x" } (или "ids": [...] для нескольких) — перенести узел(ы)/слой(и) в любой контейнер: id слоя (группировка, уровень наследуется от слоя), id узла (переезд на следующий уровень, вложение в узел) или "root". Вместо targetParentId можно указать "targetLevelIndex": N — перенос на пустой холст уровня N (без явного родителя узел станет сиротой-якорем на этом уровне). По умолчанию переносится вся ветка потомков вместе с узлом (mode не указывайте — используется "deep").
-9. НЕЗАВИСИМЫЕ ВЕТКИ: чтобы создать узел на уровне N без родителя, используйте REPARENT_ENTITY с "targetLevelIndex": N сразу после создания узла на Главном холсте — он станет сиротой-якорем на нужном уровне.
+2. ИЕРАРХИЯ РОДСТВА — через parentId, ЕДИНСТВЕННОЕ поле родства, значение — "root" ИЛИ id узла-родителя (id рамки/окна как parentId НЕДОПУСТИМ):
+   - Корневой узел: parentId = "root".
+   - Ребёнок узла X: ЛУЧШИЙ способ — { "type": "CREATE_NESTED_NODE", "payload": { "parentId": "X", "id": "...", "name": "..." } } — узел сам попадёт в дорожку X с автоматическим размещением, дорожка X откроется в окне при необходимости.
+   - Альтернатива (когда нужна точная позиция): ADD_NODE с "parentId": "X" — но дорожка X должна быть уже открыта, иначе результат не будет виден на холсте (используйте CREATE_NESTED_NODE, если не уверены).
+3. ПОЗИЦИИ: локальны ДОРОЖКЕ РОДИТЕЛЯ (не мировому холсту). Узлы одного родителя (братья) лежат в одной дорожке рядом друг с другом, разносите сеткой с шагом ~280 по x.
+4. ОБЯЗАТЕЛЬНОЕ СОЗДАНИЕ ПОРТОВ (ADD_PORT): для каждого узла создавайте порты на его гранях. Порт можно поставить и на РАМКУ — тем же ADD_PORT, где nodeId = id рамки (поле называется nodeId по историческим причинам, принимает id узла ИЛИ рамки); такой порт физически рисуется на первом «куске» рамки.
+5. СВЯЗИ СОЕДИНЯЮТ ТОЛЬКО ПОРТЫ (ADD_LINK): sourcePortId/targetPortId — строго id портов. Связи между узлами разных дорожек/окон допустимы.
+6. УДАЛЕНИЕ И ОЧИСТКА: REMOVE_NODE каскадно удаляет узел со всеми его потомками (вся ветка по parentId); REMOVE_FRAME { "id": "..." } удаляет только рамку — узлы остаются нетронутыми; CLEAR_PROJECT {} — полная очистка ВСЕХ узлов/рамок/связей проекта; REMOVE_PROJECT { "id": "..." } — удалить проект целиком.
+7. ДОРОЖКИ И ОКНА: OPEN_LANE { "ownerId": "X" } — открыть дорожку узла X (или "root") в новом окне, если она нигде не открыта; CLOSE_LANE { "windowId": "...", "ownerId": "X" } — закрыть дорожку X в конкретном окне (данные не удаляются); CLOSE_WINDOW { "windowId": "..." } — закрыть окно целиком (обзор, не данные).
+8. РАМКИ: ADD_FRAME { "members": [...] } — создать рамку сразу с этими узлами (пустой массив — заготовка без членов); FRAME_ADD_MEMBERS / FRAME_REMOVE_MEMBERS { "frameId": "...", "ids": [...] } — изменить членство.
+9. ПЕРЕНОС МЕЖДУ ДОРОЖКАМИ: REPARENT_ENTITY { "id": "n1", "targetParentId": "X" } (или "ids": [...] для нескольких) — перенести узел(ы) в дорожку узла X или "root" (targetParentId — ТОЛЬКО id узла или "root", id рамки/окна недопустим). По умолчанию переносится вся ветка потомков вместе с узлом (mode не указывайте — используется "deep").
 10. ЛИМИТ ПАКЕТА: не более ${MAX_AI_BATCH_SIZE} команд в одном ответе — всё сверх этого числа отбрасывается. Если задача крупнее, выполните её частями: выдайте первую порцию и предложите продолжить следующим сообщением. Весь пакет применяется одним шагом истории и отменяется одним Ctrl+Z.
 11. ПОДТВЕРЖДЕНИЕ: по умолчанию пользователь видит список ваших команд и подтверждает их вручную. Формулируйте пояснение так, чтобы по нему было понятно, что именно изменится на холсте, — особенно для удаляющих команд.
 12. Выдайте короткий вежливый пояснительный текстовый ответ, а в самом конце — ТОЛЬКО один блок \`\`\`json ... \`\`\`.`;
@@ -749,7 +728,7 @@ ${JSON.stringify(nodesSummary)}
                             applyActionBatch(actions, cleanAiText);
                             return;
                         } else {
-                            const DESTRUCTIVE_TYPES = new Set(['CLEAR_PROJECT', 'CLEAR_LEVEL_WINDOW', 'REMOVE_LEVEL_WINDOW', 'REMOVE_ROOT_CANVAS', 'REMOVE_LAYER', 'REMOVE_NODE']);
+                            const DESTRUCTIVE_TYPES = new Set(['CLEAR_PROJECT', 'REMOVE_FRAME', 'REMOVE_NODE']);
                             setPendingBatch({
                                 actions,
                                 cleanAiText,

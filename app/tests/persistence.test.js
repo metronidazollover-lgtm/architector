@@ -284,7 +284,7 @@ test('Фаза 3: Быстрые пространственные индексы
     assert.equal(HierarchyUtils.getLayersByParentId(layers), layersByParent);
 });
 
-test('getInitialMultiState: активированная migrateToV13 санитизирует v11-сохранение при загрузке (Фаза 5, финал)', () => {
+test('getInitialMultiState: активированная migrateToV14 санитизирует v11-сохранение при загрузке (Фаза 4, финал)', () => {
     mockStorage.clear();
     const stateToSave = {
         formatVersion: 12,
@@ -311,10 +311,12 @@ test('getInitialMultiState: активированная migrateToV13 санит
     const loaded = getInitialMultiState();
     const proj = loaded.projects['proj-1'];
 
-    assert.equal(loaded.formatVersion, 13, 'миграция реально применилась при загрузке, не осталась дремлющей функцией');
-    assert.equal(proj.nodes.child1.parentId, 'root1', 'v11 ownerId-цепочка превратилась в прямой v13 parentId');
+    assert.equal(loaded.formatVersion, 14, 'миграция реально применилась при загрузке (migrateToV13 -> migrateToV14 композицией, см. §7.14), не осталась дремлющей функцией');
+    assert.equal(proj.nodes.child1.parentId, 'root1', 'v11 ownerId-цепочка превратилась в прямой parentId');
     assert.equal(proj.nodes.child1.ownerId, undefined, 'ownerId убран');
-    assert.equal(HierarchyUtils.getEntityLevel('child1', proj.nodes, proj.layers, proj.levelWindows), 1, 'уровень сохранён');
+    assert.equal(HierarchyUtils.getDepth('child1', proj.nodes), 2, 'глубина сохранена (root1 — прямой ребёнок корня, глубина 1; child1 — ребёнок root1, глубина 2)');
+    assert.ok(proj.frames, 'frames появились взамен layers');
+    assert.ok(proj.windows, 'windows появились взамен levelWindows');
 });
 
 // ---------------------------------------------------------------------------

@@ -1,22 +1,45 @@
-// Миниатюра начинки узла (semantic zoom, этап 3.1 плана).
-// Рендерится в теле узла-контейнера вместо текста при достаточном зуме.
-// Один уровень вглубь: дети узлами, связи линиями, внуки — точкой-индикатором.
-// SVG с viewBox: вписывание детского bbox в тело узла бесплатное, pointer-events нет.
+// v14: миниатюра начинки узла (semantic zoom) — один уровень вглубь: дети
+// узлами (позиция уже ЛОКАЛЬНА дорожке этого узла, без накопления через
+// цепочку слоёв, как в v13), связи линиями, внуки — точкой-индикатором.
+// Рамки рисуются кусками — bbox их членов среди детей ЭТОГО узла + отступ
+// (тот же расчёт, что HierarchyUtils.fragmentRect, но без window/дорожки —
+// здесь достаточно локального bbox, поэтому не переиспользуется напрямую).
 function NodePreview({ nodeId }) {
     const { state } = useStore();
 
     const preview = React.useMemo(() => {
-        const bbox = window.HierarchyUtils.getChildrenBBox(nodeId, state.nodes, state.layers);
-        if (!bbox) return null;
+        const H = window.HierarchyUtils;
+        const nodes = state.nodes || {};
+        const byParent = H && H.getChildrenByParent ? H.getChildrenByParent(nodes) : {};
+        const childNodes = (byParent[nodeId] || []).filter(n => !n.hidden);
+        if (!childNodes.length) return null;
 
-        const childNodes = (window.HierarchyUtils && window.HierarchyUtils.getNodesByParentId)
-            ? (window.HierarchyUtils.getNodesByParentId(state.nodes)[nodeId] || []).filter(n => !n.hidden)
-            : Object.values(state.nodes).filter(n => n && n.parentId === nodeId && !n.hidden);
-        const childLayers = (window.HierarchyUtils && window.HierarchyUtils.getLayersByParentId)
-            ? (window.HierarchyUtils.getLayersByParentId(state.layers)[nodeId] || [])
-            : Object.values(state.layers || {}).filter(l => l && l.parentId === nodeId);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        childNodes.forEach(n => {
+            const x = n.position?.x || 0, y = n.position?.y || 0;
+            const w = n.size?.w || 200, h = n.size?.h || 100;
+            minX = Math.min(minX, x); minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h);
+        });
+        const bbox = { minX, minY, maxX, maxY };
 
         const childIds = new Set(childNodes.map(n => n.id));
+        const frames = state.frames || {};
+        const childFrames = Object.values(frames).map(f => {
+            const membersHere = (f.members || []).filter(mid => childIds.has(mid));
+            if (!membersHere.length) return null;
+            let fMinX = Infinity, fMinY = Infinity, fMaxX = -Infinity, fMaxY = -Infinity;
+            membersHere.forEach(mid => {
+                const n = nodes[mid];
+                const x = n.position?.x || 0, y = n.position?.y || 0;
+                const w = n.size?.w || 200, h = n.size?.h || 100;
+                fMinX = Math.min(fMinX, x); fMinY = Math.min(fMinY, y);
+                fMaxX = Math.max(fMaxX, x + w); fMaxY = Math.max(fMaxY, y + h);
+            });
+            const pad = 20;
+            return { id: f.id, color: f.color, position: { x: fMinX - pad, y: fMinY - pad }, size: { w: (fMaxX - fMinX) + pad * 2, h: (fMaxY - fMinY) + pad * 2 } };
+        }).filter(Boolean);
+
         const innerLinks = Object.values(state.links || {}).filter(l => {
             if (!l) return false;
             const sp = state.ports[l.sourcePortId];
@@ -25,8 +48,8 @@ function NodePreview({ nodeId }) {
         }).map(l => {
             const sp = state.ports[l.sourcePortId];
             const tp = state.ports[l.targetPortId];
-            const sNode = state.nodes[sp.nodeId];
-            const tNode = state.nodes[tp.nodeId];
+            const sNode = nodes[sp.nodeId];
+            const tNode = nodes[tp.nodeId];
             const sRel = window.GeometryUtils.getPortRelativePosition(sp, sNode);
             const tRel = window.GeometryUtils.getPortRelativePosition(tp, tNode);
             return {
@@ -39,15 +62,13 @@ function NodePreview({ nodeId }) {
             };
         });
 
-        const hasGrandchildren = (id) =>
-            Object.values(state.nodes).some(n => n && n.parentId === id) ||
-            Object.values(state.layers || {}).some(l => l && l.parentId === id);
+        const hasGrandchildren = (id) => (byParent[id] || []).length > 0;
 
-        return { bbox, childNodes, childLayers, innerLinks, hasGrandchildren };
-    }, [state.nodes, state.layers, state.ports, state.links, nodeId]);
+        return { bbox, childNodes, childFrames, innerLinks, hasGrandchildren };
+    }, [state.nodes, state.frames, state.ports, state.links, nodeId]);
 
     if (!preview) return null;
-    const { bbox, childNodes, childLayers, innerLinks, hasGrandchildren } = preview;
+    const { bbox, childNodes, childFrames, innerLinks, hasGrandchildren } = preview;
 
     const pad = 40;
     const viewBox = `${bbox.minX - pad} ${bbox.minY - pad} ${bbox.maxX - bbox.minX + pad * 2} ${bbox.maxY - bbox.minY + pad * 2}`;
@@ -64,7 +85,7 @@ function NodePreview({ nodeId }) {
             className="flex-1 w-full min-h-0 pointer-events-none opacity-90"
             data-file="components/NodePreview.js"
         >
-            {childLayers.map(l => (
+            {childFrames.map(l => (
                 <rect
                     key={l.id}
                     x={l.position?.x || 0}

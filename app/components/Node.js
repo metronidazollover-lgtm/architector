@@ -1,15 +1,13 @@
-// Производные значения узла: подсветка связанной сети, локальная позиция,
-// число детей, признак приёмника Drag&Drop.
-//
-// Три прежних useMemo перебирали ВСЕ связи проекта на каждый пересчёт; теперь
-// сеть обходится по связям портов самого узла через индексы. Результат плоский
-// и сравнивается поверхностно: пока эти значения не изменились, узел не
-// перерисовывается. Изменение далёкого предка меняет здесь localPos — то есть
-// «рябь» доходит до узла именно потому, что сравнивается РЕЗУЛЬТАТ.
+// v14 (Фаза 4): позиция узла — ЛОКАЛЬНАЯ координата внутри дорожки его
+// родителя (§2.3 LANES_MODEL.md: «position ребёнка считается от дорожки, то
+// есть от родителя»), без накопления через цепочку слоёв, как было в v13
+// (getLocalPosition). Поэтому node.position используется здесь НАПРЯМУЮ как
+// CSS left/top — Lane.js уже поместил этот компонент внутрь уже
+// трансформированного (translate/scale камеры окна) контейнера дорожки.
 const computeNodeDerived = (view, nodeId, projectId) => {
     const empty = {
-        node: null, portIdsKey: '', interactionMode: 'default', zoom: 1, isSelected: false, isExplicitlySelected: false,
-        localX: 0, localY: 0, childCount: 0, isDropReceiver: false
+        node: null, portIdsKey: '', frameChipsKey: '', interactionMode: 'default', zoom: 1,
+        isSelected: false, isExplicitlySelected: false, childCount: 0, isDropReceiver: false
     };
     if (!nodeId || !view) return empty;
 
@@ -22,54 +20,45 @@ const computeNodeDerived = (view, nodeId, projectId) => {
 
     if (!connected && H && H.getPortsByNodeId && H.getLinksByPortId) {
         const myPorts = H.getPortsByNodeId(ports)[nodeId] || [];
-        // Выделен порт этого узла
         connected = myPorts.some(p => selectedIds.includes(p.id));
         if (!connected) {
             const linksByPort = H.getLinksByPortId(view.links);
             connected = myPorts.some(p => (linksByPort[p.id] || []).some(l => {
                 if (!l) return false;
-                if (selectedIds.includes(l.id)) return true;              // выделена связь
+                if (selectedIds.includes(l.id)) return true;
                 const oppId = l.sourcePortId === p.id ? l.targetPortId : l.sourcePortId;
                 if (!oppId) return false;
-                if (selectedIds.includes(oppId)) return true;             // выделен порт на том конце
+                if (selectedIds.includes(oppId)) return true;
                 const opp = ports[oppId];
-                return !!(opp && selectedIds.includes(opp.nodeId));       // выделен узел на том конце
+                return !!(opp && selectedIds.includes(opp.nodeId));
             }));
         }
     }
 
-    const localPos = (H && H.getLocalPosition)
-        ? H.getLocalPosition(nodeId, view.nodes, view.layers)
-        : ((view.nodes && view.nodes[nodeId] && view.nodes[nodeId].position) || { x: 0, y: 0 });
-
-    const childCount = (H && H.getNodesByParentId)
-        ? (H.getNodesByParentId(view.nodes)[nodeId] || []).length
-        : Object.values(view.nodes || {}).filter(n => n && n.parentId === nodeId).length;
+    const childCount = (H && H.getChildrenByParent)
+        ? (H.getChildrenByParent(view.nodes)[nodeId] || []).length
+        : Object.values(view.nodes || {}).filter(n => n && (n.parentId || 'root') === nodeId).length;
 
     const dropTarget = view.dragGesture && view.dragGesture.target;
 
-    // Состав портов узла строкой: их поля порт рисует сам по своей подписке,
-    // узлу важно лишь, не появился ли новый порт и не исчез ли старый.
     const myPorts = (H && H.getPortsByNodeId) ? (H.getPortsByNodeId(ports)[nodeId] || []) : [];
     const portIdsKey = myPorts.map(p => p.id).sort().join(',');
 
+    // Чипы рамок-владельцев (§12 LANES_MODEL.md): узел может состоять в
+    // нескольких рамках одновременно — карточка показывает все.
+    const frames = (H && H.framesOf) ? H.framesOf(nodeId, view.frames) : [];
+    const frameChipsKey = frames.map(f => `${f.id}:${f.name || ''}:${f.color || ''}`).join('|');
+
     return {
-        // Запись узла — по ссылке: пока она та же, узлу нечего перерисовывать.
-        // Родитель передаёт только id, поэтому его собственная перерисовка
-        // больше не тащит за собой всё поддерево.
         node: (view.nodes || {})[nodeId] || null,
         portIdsKey,
+        frameChipsKey,
         interactionMode: view.interactionMode || 'default',
         zoom: (view.canvas && view.canvas.zoom) || 1,
         isSelected: connected,
         isExplicitlySelected,
-        localX: localPos.x,
-        localY: localPos.y,
         childCount,
-        // projectId (Фаза 6.3): dragGesture — глобальное поле, видно во всех
-        // проектах разом. Без сверки проекта чисто гипотетическое совпадение
-        // id между двумя проектами подсветило бы не тот узел.
-        isDropReceiver: !!(dropTarget && dropTarget.kind === 'node' && dropTarget.id === nodeId && dropTarget.valid
+        isDropReceiver: !!(dropTarget && dropTarget.nodeId === nodeId && dropTarget.valid
             && (!dropTarget.projectId || dropTarget.projectId === projectId))
     };
 };
@@ -79,7 +68,6 @@ function NodeView(props) {
     const dispatch = useProjectDispatch();
     const projectId = React.useContext(ProjectContext);
 
-    // Все хуки — ДО раннего выхода: порядок хуков между рендерами обязан совпадать
     const nodeId = props.nodeId || (props.data && props.data.id) || (props.node && props.node.id) || null;
     const selectDerived = React.useCallback((view) => computeNodeDerived(view, nodeId, projectId), [nodeId, projectId]);
     const derived = useProjectSelector(selectDerived);
@@ -87,9 +75,6 @@ function NodeView(props) {
     const data = derived.node || props.data || props.node;
     if (!data) return null;
 
-    // Актуальный стейт для обработчиков жеста Drag&Drop: замыкания mousedown
-    // живут дольше рендера, а резолверу целей нужны СВЕЖИЕ позиции элементов.
-    // Читаем плоский вид соответствующего проекта.
     const stateRef = { get current() { return getProjectFlatView(projectId); } };
     const state = React.useMemo(() => (typeof Proxy !== 'undefined'
         ? new Proxy({}, { get: (_t, key) => getProjectFlatView(projectId)[key] })
@@ -103,19 +88,12 @@ function NodeView(props) {
     const effectiveZoom = zoom * localZoom;
 
     const H = window.HierarchyUtils;
-    // v10: позиция узла внутри окна его уровня (с учетом смещения внутри слоев)
-    const localPos = { x: derived.localX, y: derived.localY };
-
-    // Drag&Drop: узел-приёмник подсвечивается, когда контур перетаскиваемого
-    // элемента пересёк его контур и дроп сюда валиден (станет родителем)
     const isDropReceiver = derived.isDropReceiver;
 
     const handleMouseDown = (e) => {
-        // Разрешаем панорамирование колесиком (1) на любом узле
         if (e.button === 1) return;
-
         e.stopPropagation();
-        if (e.button !== 0) return; // Only left click
+        if (e.button !== 0) return;
 
         if (projectId) {
             const rootState = (typeof architectorStore !== 'undefined') ? architectorStore.getState() : null;
@@ -132,32 +110,19 @@ function NodeView(props) {
         const startY = e.clientY;
 
         let hasMoved = false;
-        const initialSnapshot = { layers: state.layers, nodes: state.nodes, ports: state.ports, links: state.links };
+        const initialSnapshot = { nodes: state.nodes, frames: state.frames, ports: state.ports, links: state.links };
 
         let cumulativeDx = 0;
         let cumulativeDy = 0;
 
-        // Тумблер Drag&Drop фиксируется на старте жеста, а не читается заново в
-        // момент отпускания мыши: переключить его той же рукой, что держит
-        // перетаскивание, нельзя, но хоткеем — можно, и это не должно подменить
-        // исход уже начатого переноса (PLAN_SHALLOW_TRANSFER_DND.md, премортем, риск 7).
-        const dragDropModeAtStart = (state.ui && state.ui.dragDropMode) || false;
-
-        // Deep/Shallow (v13, REPARENT_ENTITY): в отличие от тумблера DnD, режим
-        // переноса ЖИВОЙ — Alt можно нажать или отпустить в процессе перетаскивания,
-        // не только держать с самого начала (PLAN_V12_CLEAN_HIERARCHY_AND_INTERACTIONS.md,
-        // Фаза 5.2). Читается в момент mouseup, а не фиксируется на старте.
+        // Deep/Shallow — живой, Alt читается весь жест (§7 LANES_MODEL.md).
         let shallowMode = e.altKey;
 
-        // ==== Drag&Drop: резолвер цели под перетаскиваемыми элементами ====
-        const H = window.HierarchyUtils;
-
-        // «Только верхние» из текущего выделения (потомки едут в связке)
         const topDraggedIds = (st) => {
-            const sel = (st.selectedIds || []).filter(sid => st.nodes[sid] || (st.layers && st.layers[sid]));
+            const sel = (st.selectedIds || []).filter(sid => st.nodes[sid]);
             const ids = sel.includes(data.id) && sel.length > 0 ? sel : [data.id];
             return ids.filter(nid => !ids.some(other =>
-                other !== nid && H && H.hasAncestorIn && H.hasAncestorIn(nid, [other], st.nodes, st.layers)));
+                other !== nid && H && H.isDescendantOfV14 && H.isDescendantOfV14(nid, other, st.nodes)));
         };
 
         const computeTarget = (ev) => {
@@ -168,21 +133,13 @@ function NodeView(props) {
             const wy = (ev.clientY - rect.top - st.canvas.offset.y) / st.canvas.zoom;
             const ids = topDraggedIds(st);
             const opts = { dragDropMode: !!(st.ui && st.ui.dragDropMode) };
-            // Кросс-проектный резолвер (Фаза 6.3): сканирует ВСЕ открытые
-            // проекты, не только свой — на mousedown исходный проект уже стал
-            // активным (см. handleMouseDown выше), поэтому st.activeProjectId
-            // здесь и есть sourceProjectId.
-            const rootState = (typeof architectorStore !== 'undefined') ? architectorStore.getState() : null;
-            const target = (H && H.getDropTargetAcrossProjects && rootState)
-                ? H.getDropTargetAcrossProjects(ids, { x: wx, y: wy }, rootState, st.activeProjectId, opts)
-                : (H && H.getDropTarget ? H.getDropTarget(ids, { x: wx, y: wy }, st, opts) : null);
-            return { st, ids, target };
+            // Однопроектный резолвер (Фаза 5 — кросс-проектный перенос узлов
+            // через drag&drop, см. §5 плана «Порты, связи, мульти-проект»).
+            const target = (H && H.resolveDropTarget) ? H.resolveDropTarget({ x: wx, y: wy }, ids, st, opts) : { ok: false };
+            return { st, ids, target, world: { x: wx, y: wy } };
         };
 
         let lastTargetKey = null;
-        // Резолвер цели дроп-зоны сканирует сущности сцены, а mousemove приходит
-        // чаще кадра. Считаем не более одного раза на кадр: чаще — бессмысленно,
-        // всё равно отрисуется один результат.
         let gesturePending = null;
         const updateGestureThrottled = (ev) => {
             const point = { clientX: ev.clientX, clientY: ev.clientY };
@@ -197,13 +154,12 @@ function NodeView(props) {
         const updateGesture = (ev) => {
             lastMoveEvent = ev;
             const { st, ids, target } = computeTarget(ev);
-            const key = (target ? `${target.kind}:${target.id}:${target.valid}` : 'void') + ':' + (shallowMode ? 'shallow' : 'deep');
+            const key = `${target.ok}:${target.windowId || ''}:${target.ownerId || ''}:${target.nodeId || ''}:${target.frameId || ''}:${target.isMove}` + ':' + (shallowMode ? 'shallow' : 'deep');
             if (key === lastTargetKey) return;
             lastTargetKey = key;
             dispatch({ type: 'SET_DRAG_GESTURE', payload: { ids, target, mode: shallowMode ? 'shallow' : 'deep' } });
-            // Курсор «нельзя»: в режиме Drag&Drop — пустота и невалидные цели
             const dndOn = !!(st.ui && st.ui.dragDropMode);
-            document.body.style.cursor = (dndOn && (!target || !target.valid)) ? 'not-allowed' : '';
+            document.body.style.cursor = (dndOn && !target.ok) ? 'not-allowed' : '';
         };
 
         const cleanup = () => {
@@ -214,9 +170,8 @@ function NodeView(props) {
             document.body.style.cursor = '';
         };
 
-        // Откат жеста: сущности возвращаются к срезу на mousedown (без истории)
         const restoreGesture = () => {
-            dispatch({ type: 'RESTORE_ENTITIES', payload: { nodes: initialSnapshot.nodes, layers: initialSnapshot.layers } });
+            dispatch({ type: 'RESTORE_ENTITIES', payload: { nodes: initialSnapshot.nodes } });
         };
 
         const handleKeyDown = (kev) => {
@@ -241,12 +196,7 @@ function NodeView(props) {
 
         const handleMouseMove = (moveEvent) => {
             const distMoved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
-            if (distMoved > 3) {
-                if (!hasMoved) {
-                    hasMoved = true;
-                }
-            }
-
+            if (distMoved > 3) hasMoved = true;
             if (!hasMoved) return;
 
             const totalDx = (moveEvent.clientX - startX) / effectiveZoom;
@@ -256,12 +206,11 @@ function NodeView(props) {
             let stepDy = totalDy - cumulativeDy;
 
             if (data.snapToGrid) {
-                const step = 30; // Grid size
+                const step = 30;
                 const targetX = initialSnapshot.nodes[data.id].position.x + totalDx;
                 const targetY = initialSnapshot.nodes[data.id].position.y + totalDy;
                 const newX = Math.round(targetX / step) * step;
                 const newY = Math.round(targetY / step) * step;
-
                 stepDx = newX - (initialSnapshot.nodes[data.id].position.x + cumulativeDx);
                 stepDy = newY - (initialSnapshot.nodes[data.id].position.y + cumulativeDy);
             }
@@ -269,10 +218,9 @@ function NodeView(props) {
             if (stepDx !== 0 || stepDy !== 0) {
                 cumulativeDx += stepDx;
                 cumulativeDy += stepDy;
-                dispatch({
-                    type: 'MOVE_SELECTED',
-                    payload: { dx: stepDx, dy: stepDy, skipHistory: true }
-                });
+                // MOVE_SELECTED сам клампит дельту дорожкой, если ui.dragDropMode
+                // выключен (§6 LANES_MODEL.md — «мягкая остановка на границе»).
+                dispatch({ type: 'MOVE_SELECTED', payload: { dx: stepDx, dy: stepDy, skipHistory: true } });
             }
 
             updateGestureThrottled(moveEvent);
@@ -282,81 +230,62 @@ function NodeView(props) {
             cleanup();
 
             if (!hasMoved) {
-                // Одиночный клик (нажали и отпустили без сдвига)
                 if (e.shiftKey) {
                     dispatch({ type: 'TOGGLE_SELECTED', payload: data.id });
-                } else {
-                    // Клик без сдвига схлопывает массовое выделение до этого узла
-                    // (на mousedown группа сохраняется, чтобы работал драг группы)
-                    if (!isExplicitlySelected || (state.selectedIds && state.selectedIds.length > 1)) {
-                        dispatch({ type: 'SET_SELECTED', payload: data.id });
-                    }
+                } else if (!isExplicitlySelected || (state.selectedIds && state.selectedIds.length > 1)) {
+                    dispatch({ type: 'SET_SELECTED', payload: data.id });
                 }
                 return;
             }
 
-            const { st, ids, target } = computeTarget(upEvent);
+            const { st, ids, target, world } = computeTarget(upEvent);
             const dndOn = !!(st.ui && st.ui.dragDropMode);
             const clearGesture = () => dispatch({ type: 'SET_DRAG_GESTURE', payload: null });
 
-            // Перенос: валидная цель, не являющаяся «своим окном» (обычным перемещением)
-            const isTransfer = target && target.valid && !(target.kind === 'window' && target.isMove);
-            if (isTransfer && H) {
-                const mode = shallowMode ? 'shallow' : 'deep';
-                const sourceProjectId = st.activeProjectId;
-                // Кросс-проектный перенос (Фаза 6.3): цель резолвилась в ДРУГОМ
-                // проекте — её словари (для окна/имён в тексте подтверждения)
-                // читаются из getProjectFlatView(target.projectId), а не из st.
-                const isCrossProject = !!(target.projectId && target.projectId !== sourceProjectId);
-                const targetView = isCrossProject ? window.getProjectFlatView(target.projectId) : st;
-                const text = H.buildTransferConfirmText
-                    ? H.buildTransferConfirmText(ids, target, st, mode, isCrossProject ? targetView : null)
-                    : 'Перенести выбранные элементы?';
-                if (window.confirm(text)) {
-                    clearGesture();
-                    const basePayload = {
-                        ids,
-                        mode,
-                        // Весь жест (движение + перенос) — один шаг Undo (внутрипроектно;
-                        // кросс-проектный REPARENT_ENTITY в Undo не участвует вовсе —
-                        // historySnapshot им просто игнорируется, см. AGENTS.md).
-                        historySnapshot: {
-                            nodes: initialSnapshot.nodes,
-                            layers: initialSnapshot.layers,
-                            ports: initialSnapshot.ports,
-                            links: initialSnapshot.links
-                        },
-                        ...(isCrossProject ? { sourceProjectId, targetProjectId: target.projectId } : {})
-                    };
-                    // v13 REPARENT_ENTITY: цель узла/слоя — это напрямую targetParentId
-                    // (единственное поле родства), окно резолвится в targetLevelIndex.
-                    if (target.kind === 'node' || target.kind === 'layer') {
-                        dispatch({ type: 'REPARENT_ENTITY', payload: { ...basePayload, targetParentId: target.id } });
-                    } else {
-                        const win = targetView.levelWindows[target.id];
-                        const positionsById = H.computeDropPositions
-                            ? H.computeDropPositions(ids, win, targetView, isCrossProject ? st : null)
-                            : null;
-                        dispatch({ type: 'REPARENT_ENTITY', payload: { ...basePayload, targetLevelIndex: win.levelIndex, ...(positionsById ? { positionsById } : {}) } });
-                    }
-                } else {
-                    restoreGesture();
-                }
+            if (!target.ok) {
+                if (dndOn) { restoreGesture(); return; }
+                clearGesture();
+                dispatch({ type: 'COMMIT_HISTORY', payload: { snapshot: initialSnapshot, logMessage: `Перемещен узел: ${data.name}` } });
                 return;
             }
 
-            // Режим Drag&Drop: пустота или невалидная цель — жест отменяется
-            if (dndOn && (!target || !target.valid)) {
-                restoreGesture();
+            const applyFrameMembership = () => {
+                if (target.frameId) dispatch({ type: 'FRAME_ADD_MEMBERS', payload: { frameId: target.frameId, ids } });
+            };
+
+            if (target.isMove) {
+                // Перемещение в пределах своей же дорожки — не перенос.
+                clearGesture();
+                dispatch({ type: 'COMMIT_HISTORY', payload: { snapshot: initialSnapshot, logMessage: `Перемещен узел: ${data.name}` } });
+                applyFrameMembership();
                 return;
             }
 
-            // Обычное перемещение: фиксируем историю
+            // Nest/Extract: targetParentId — карточка (nodeId) либо дорожка (ownerId).
+            const mode = shallowMode ? 'shallow' : 'deep';
+            const targetParentId = target.nodeId || target.ownerId;
             clearGesture();
-            dispatch({
-                type: 'COMMIT_HISTORY',
-                payload: { snapshot: initialSnapshot, logMessage: `Перемещен узел: ${data.name}` }
-            });
+            const payload = {
+                ids, mode,
+                // Весь жест (движение + перенос) — один шаг Undo (§7.3 LANES_MODEL.md).
+                historySnapshot: initialSnapshot,
+                targetParentId
+            };
+            if (ids.length === 1 && target.ownerId && !target.nodeId) {
+                // Одиночный дроп на фон дорожки — узел приземляется туда, куда
+                // реально указал курсор, а не в авто-найденную свободную точку.
+                const win = st.windows[target.windowId];
+                const lane = H.laneRect(win, target.ownerId);
+                const camera = win.camera || { offset: { x: 0, y: 0 }, zoom: 1 };
+                if (lane) {
+                    payload.position = {
+                        x: (world.x - lane.x - (camera.offset.x || 0)) / (camera.zoom || 1),
+                        y: (world.y - lane.y - (camera.offset.y || 0)) / (camera.zoom || 1)
+                    };
+                }
+            }
+            dispatch({ type: 'REPARENT_ENTITY', payload });
+            applyFrameMembership();
         };
 
         window.addEventListener('mousemove', handleMouseMove);
@@ -374,7 +303,7 @@ function NodeView(props) {
         const startY = e.clientY;
         const startW = data.size?.w || 200;
         const startH = data.size?.h || 100;
-        
+
         let hasMoved = false;
         const initialSnapshot = { nodes: state.nodes, ports: state.ports, links: state.links };
 
@@ -382,28 +311,18 @@ function NodeView(props) {
             hasMoved = true;
             const dx = (moveEvent.clientX - startX) / effectiveZoom;
             const dy = (moveEvent.clientY - startY) / effectiveZoom;
-            
+
             const newW = Math.max(100, startW + dx);
             const newH = Math.max(80, startH + dy);
 
-            dispatch({
-                type: 'UPDATE_NODE',
-                payload: {
-                    id: data.id,
-                    updates: { size: { w: newW, h: newH }, userResized: true },
-                    skipHistory: true
-                }
-            });
+            dispatch({ type: 'UPDATE_NODE', payload: { id: data.id, updates: { size: { w: newW, h: newH }, userResized: true }, skipHistory: true } });
         };
 
         const handleMouseUp = () => {
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
             if (hasMoved) {
-                dispatch({
-                    type: 'COMMIT_HISTORY',
-                    payload: { snapshot: initialSnapshot, logMessage: `Изменен размер узла: ${data.name}` }
-                });
+                dispatch({ type: 'COMMIT_HISTORY', payload: { snapshot: initialSnapshot, logMessage: `Изменен размер узла: ${data.name}` } });
             }
         };
 
@@ -416,18 +335,10 @@ function NodeView(props) {
         if (naturalWidth && naturalHeight && !data.mediaHeight) {
             const targetW = Math.max(200, Math.min(naturalWidth, 400));
             const targetH = Math.round(targetW * (naturalHeight / naturalWidth));
-            dispatch({
-                type: 'UPDATE_NODE',
-                payload: {
-                    id: data.id,
-                    updates: { mediaHeight: targetH },
-                    skipHistory: true
-                }
-            });
+            dispatch({ type: 'UPDATE_NODE', payload: { id: data.id, updates: { mediaHeight: targetH }, skipHistory: true } });
         }
     };
 
-    const [isNodeHovered, setIsNodeHovered] = React.useState(false);
     const [isEditingName, setIsEditingName] = React.useState(false);
     const [tempName, setTempName] = React.useState(data.name || '');
     const nameInitialSnapshotRef = React.useRef(null);
@@ -438,6 +349,7 @@ function NodeView(props) {
     const contentInitialSnapshotRef = React.useRef(null);
     const contentInitialValueRef = React.useRef('');
     const contentTextareaRef = React.useRef(null);
+
     React.useLayoutEffect(() => {
         if (isEditingName && nameTextareaRef.current) {
             nameTextareaRef.current.style.height = 'auto';
@@ -452,54 +364,65 @@ function NodeView(props) {
         }
     }, [isEditingContent, tempContent]);
 
-    React.useEffect(() => {
-        setTempName(data.name || '');
-    }, [data.name]);
-
-    React.useEffect(() => {
-        setTempContent(data.content || '');
-    }, [data.content]);
+    React.useEffect(() => { setTempName(data.name || ''); }, [data.name]);
+    React.useEffect(() => { setTempContent(data.content || ''); }, [data.content]);
 
     const childCount = derived.childCount;
-    // Из строки — обратно в список: срез сравнивается поверхностно, а новый
-    // массив на каждый пересчёт всегда «не равен» прежнему
     const portIds = React.useMemo(
         () => (derived.portIdsKey ? derived.portIdsKey.split(',') : []),
         [derived.portIdsKey]
     );
+    const frameChips = React.useMemo(
+        () => (derived.frameChipsKey ? derived.frameChipsKey.split('|').map(s => {
+            const [id, name, color] = s.split(':');
+            return { id, name, color };
+        }) : []),
+        [derived.frameChipsKey]
+    );
 
     return (
         <div
-            className={`absolute flex flex-col cursor-move transition-all duration-200 glass-panel rounded-lg border
+            className={`node-entity absolute flex flex-col cursor-move transition-all duration-200 glass-panel rounded-lg border
                 ${isSelected ? 'outline outline-[2px] outline-offset-[4px] z-30 shadow-lg' : 'border-[#333] shadow-lg'}
             `}
             style={{
-                left: localPos.x,
-                top: localPos.y,
+                left: data.position.x,
+                top: data.position.y,
                 width: data.size?.w || 200,
                 height: data.size?.h || 100,
                 backgroundColor: data.color || 'rgba(26,26,26,0.9)',
                 borderColor: isDropReceiver ? '#34d399' : (isSelected ? (data.color || '#007AFF') : '#333'),
                 outlineColor: isDropReceiver ? '#34d399' : (isSelected ? (data.color || '#007AFF') : 'transparent'),
                 ...(isDropReceiver ? {
-                    outlineStyle: 'solid',
-                    outlineWidth: '2px',
-                    boxShadow: '0 0 30px rgba(52,211,153,0.8)'
-                } : (isSelected ? {
-                    boxShadow: `0 0 40px ${data.color || '#007AFF'}`
-                } : {}))
+                    outlineStyle: 'solid', outlineWidth: '2px', boxShadow: '0 0 30px rgba(52,211,153,0.8)'
+                } : (isSelected ? { boxShadow: `0 0 40px ${data.color || '#007AFF'}` } : {}))
             }}
             onMouseDown={handleMouseDown}
             onDoubleClick={(e) => {
                 e.stopPropagation();
                 dispatch({ type: 'FOCUS_CONNECTED_ELEMENTS', payload: { entityId: data.id } });
             }}
-            onMouseEnter={() => setIsNodeHovered(true)}
-            onMouseLeave={() => setIsNodeHovered(false)}
             data-file="components/Node.js"
         >
-            {/* Шапка узла с инлайн-редактированием имени, бейджем детей и кнопкой + */}
-            <div 
+            {frameChips.length > 0 && (
+                <div className="absolute -top-2.5 left-1.5 flex gap-1 z-20">
+                    {frameChips.map(f => (
+                        <button
+                            key={f.id}
+                            className="flex items-center gap-1 px-1.5 rounded-full text-[9px] text-white leading-4 shadow"
+                            style={{ backgroundColor: f.color || '#0284c7' }}
+                            title={`Убрать из рамки «${f.name || f.id}»`}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                dispatch({ type: 'FRAME_REMOVE_MEMBERS', payload: { frameId: f.id, ids: [data.id] } });
+                            }}
+                        >{f.name || 'рамка'} ×</button>
+                    ))}
+                </div>
+            )}
+
+            <div
                 className="px-3 py-2 border-b border-[#333] bg-black/20 rounded-t-lg flex items-start justify-between text-sm font-medium z-10 shrink-0 gap-2"
                 style={{ fontFamily: data.fontFamily || 'inherit', fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
             >
@@ -524,64 +447,38 @@ function NodeView(props) {
                             onChange={(e) => {
                                 const nextName = e.target.value;
                                 setTempName(nextName);
-                                dispatch({
-                                    type: 'UPDATE_NODE',
-                                    payload: {
-                                        id: data.id,
-                                        updates: { name: nextName },
-                                        skipHistory: true
-                                    }
-                                });
+                                dispatch({ type: 'UPDATE_NODE', payload: { id: data.id, updates: { name: nextName }, skipHistory: true } });
                             }}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' && !e.shiftKey) {
                                     e.preventDefault();
                                     setIsEditingName(false);
                                     if (tempName.trim() !== nameInitialValueRef.current && nameInitialSnapshotRef.current) {
-                                        dispatch({
-                                            type: 'COMMIT_HISTORY',
-                                            payload: {
-                                                snapshot: nameInitialSnapshotRef.current,
-                                                logMessage: `Изменено имя узла: ${tempName.trim() || data.id}`
-                                            }
-                                        });
+                                        dispatch({ type: 'COMMIT_HISTORY', payload: { snapshot: nameInitialSnapshotRef.current, logMessage: `Изменено имя узла: ${tempName.trim() || data.id}` } });
                                     }
                                 } else if (e.key === 'Escape') {
                                     const prev = nameInitialValueRef.current;
                                     setTempName(prev);
-                                    dispatch({
-                                        type: 'UPDATE_NODE',
-                                        payload: {
-                                            id: data.id,
-                                            updates: { name: prev },
-                                            skipHistory: true
-                                        }
-                                    });
+                                    dispatch({ type: 'UPDATE_NODE', payload: { id: data.id, updates: { name: prev }, skipHistory: true } });
                                     setIsEditingName(false);
                                 }
                             }}
                             onBlur={() => {
                                 setIsEditingName(false);
                                 if (tempName.trim() !== nameInitialValueRef.current && nameInitialSnapshotRef.current) {
-                                    dispatch({
-                                        type: 'COMMIT_HISTORY',
-                                        payload: {
-                                            snapshot: nameInitialSnapshotRef.current,
-                                            logMessage: `Изменено имя узла: ${tempName.trim() || data.id}`
-                                        }
-                                    });
+                                    dispatch({ type: 'COMMIT_HISTORY', payload: { snapshot: nameInitialSnapshotRef.current, logMessage: `Изменено имя узла: ${tempName.trim() || data.id}` } });
                                 }
                             }}
                         />
                     ) : (
-                        <span 
+                        <span
                             className="break-all whitespace-pre-wrap leading-snug cursor-text hover:text-white hover:underline transition-colors select-none font-medium flex-1"
                             style={{ fontFamily: data.fontFamily || 'inherit', fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
                             title="Кликните, чтобы переименовать узел"
                             onClick={(e) => {
                                 e.stopPropagation();
                                 if (!isEditingName) {
-                                    nameInitialSnapshotRef.current = { nodes: state.nodes, layers: state.layers, ports: state.ports, links: state.links };
+                                    nameInitialSnapshotRef.current = { nodes: state.nodes, frames: state.frames, ports: state.ports, links: state.links };
                                     nameInitialValueRef.current = data.name || '';
                                     setIsEditingName(true);
                                 }
@@ -593,15 +490,15 @@ function NodeView(props) {
                     )}
                 </div>
 
-                {/* Правая часть шапки: Бейдж детей и кнопка + */}
                 <div className="flex items-center gap-1 shrink-0 ml-1">
                     {childCount > 0 && (
                         <button
                             className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/40 hover:bg-black/60 text-amber-300 hover:text-amber-200 border border-amber-500/30 text-[11px] font-mono transition-all"
-                            title={`Вложено детей: ${childCount}. Клик — показать детей на следующем уровне`}
+                            title={`Вложено детей: ${childCount}. Клик — открыть дорожку этого узла`}
                             onClick={(e) => {
                                 e.stopPropagation();
-                                dispatch({ type: 'FOCUS_CHILDREN_OF_NODE', payload: { parentId: data.id } });
+                                dispatch({ type: 'OPEN_LANE', payload: { ownerId: data.id } });
+                                dispatch({ type: 'SET_ACTIVE_LANE', payload: data.id });
                             }}
                             onMouseDown={(e) => e.stopPropagation()}
                         >
@@ -609,34 +506,29 @@ function NodeView(props) {
                             <span className="font-bold">{childCount}</span>
                         </button>
                     )}
-                    {/* Кнопка «+» удалена (PLAN_LAYERS_AND_CONTEXT_CREATION.md, разд.4,
-                        осознанный компромисс ⚠️ п.0.7): создание потомка на следующем
-                        уровне централизовано в FAB тулбара — выделите узел, наведите
-                        на «+» справа по центру экрана. */}
                 </div>
             </div>
 
-            {/* Тело узла с инлайн-редактированием описания (Content) */}
             <div className={`flex-1 flex flex-col overflow-hidden transition-opacity duration-300 ${effectiveZoom < 0.4 ? 'opacity-0 hidden' : 'opacity-100'}`}>
                 {data.type === 'ai-agent' ? (
                     <AIAgentNodeContent nodeId={data.id} />
                 ) : (
-                    <div 
+                    <div
                         className={`flex-1 p-2.5 flex flex-col gap-2.5 cursor-text select-text z-10 ${data.userResized ? 'overflow-y-auto custom-scrollbar' : 'overflow-hidden'}`}
                         onClick={(e) => {
                             e.stopPropagation();
                             if (!isEditingContent) {
-                                contentInitialSnapshotRef.current = { nodes: state.nodes, layers: state.layers, ports: state.ports, links: state.links };
+                                contentInitialSnapshotRef.current = { nodes: state.nodes, frames: state.frames, ports: state.ports, links: state.links };
                                 contentInitialValueRef.current = data.content || '';
                                 setIsEditingContent(true);
                             }
                         }}
                     >
                         {data.mediaUrl && (
-                            <img 
-                                src={data.mediaUrl} 
-                                alt="media" 
-                                className="w-full object-contain rounded border border-[#444] bg-black/50 shrink-0 pointer-events-none" 
+                            <img
+                                src={data.mediaUrl}
+                                alt="media"
+                                className="w-full object-contain rounded border border-[#444] bg-black/50 shrink-0 pointer-events-none"
                                 style={{ height: data.mediaHeight || 150 }}
                                 onLoad={handleImageLoad}
                                 onError={(e) => e.target.style.display = 'none'}
@@ -655,57 +547,31 @@ function NodeView(props) {
                                 onChange={(e) => {
                                     const nextVal = e.target.value;
                                     setTempContent(nextVal);
-                                    dispatch({
-                                        type: 'UPDATE_NODE',
-                                        payload: {
-                                            id: data.id,
-                                            updates: { content: nextVal },
-                                            skipHistory: true
-                                        }
-                                    });
+                                    dispatch({ type: 'UPDATE_NODE', payload: { id: data.id, updates: { content: nextVal }, skipHistory: true } });
                                 }}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                                         setIsEditingContent(false);
                                         if (tempContent !== contentInitialValueRef.current && contentInitialSnapshotRef.current) {
-                                            dispatch({
-                                                type: 'COMMIT_HISTORY',
-                                                payload: {
-                                                    snapshot: contentInitialSnapshotRef.current,
-                                                    logMessage: `Изменено описание узла: ${data.name || data.id}`
-                                                }
-                                            });
+                                            dispatch({ type: 'COMMIT_HISTORY', payload: { snapshot: contentInitialSnapshotRef.current, logMessage: `Изменено описание узла: ${data.name || data.id}` } });
                                         }
                                     } else if (e.key === 'Escape') {
                                         const prev = contentInitialValueRef.current;
                                         setTempContent(prev);
-                                        dispatch({
-                                            type: 'UPDATE_NODE',
-                                            payload: {
-                                                id: data.id,
-                                                updates: { content: prev },
-                                                skipHistory: true
-                                            }
-                                        });
+                                        dispatch({ type: 'UPDATE_NODE', payload: { id: data.id, updates: { content: prev }, skipHistory: true } });
                                         setIsEditingContent(false);
                                     }
                                 }}
                                 onBlur={() => {
                                     setIsEditingContent(false);
                                     if (tempContent !== contentInitialValueRef.current && contentInitialSnapshotRef.current) {
-                                        dispatch({
-                                            type: 'COMMIT_HISTORY',
-                                            payload: {
-                                                snapshot: contentInitialSnapshotRef.current,
-                                                logMessage: `Изменено описание узла: ${data.name || data.id}`
-                                            }
-                                        });
+                                        dispatch({ type: 'COMMIT_HISTORY', payload: { snapshot: contentInitialSnapshotRef.current, logMessage: `Изменено описание узла: ${data.name || data.id}` } });
                                     }
                                 }}
                             />
                         ) : (
                             data.content ? (
-                                <div 
+                                <div
                                     className="text-sm text-gray-200 whitespace-pre-wrap break-all leading-snug"
                                     style={{ fontFamily: data.fontFamily || 'inherit', fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
                                 >
@@ -720,15 +586,13 @@ function NodeView(props) {
                     </div>
                 )}
             </div>
-            
-            {/* Render Ports */}
+
             {effectiveZoom >= 0.4 && portIds.map(portId => (
                 <Port key={portId} portId={portId} nodeId={data.id} localZoom={localZoom} />
             ))}
 
-            {/* Overlay for Add Port Mode */}
             {derived.interactionMode === 'add-port' && (
-                <div 
+                <div
                     className="absolute inset-[-4px] cursor-crosshair border-2 border-dashed border-green-500/50 z-10"
                     onClick={(e) => {
                         e.stopPropagation();
@@ -737,30 +601,16 @@ function NodeView(props) {
                         const y = e.clientY - rect.top;
                         const w = rect.width;
                         const h = rect.height;
-                        
-                        // Determine closest edge
-                        const distTop = y;
-                        const distBottom = h - y;
-                        const distLeft = x;
-                        const distRight = w - x;
-                        
+
+                        const distTop = y, distBottom = h - y, distLeft = x, distRight = w - x;
                         const minDist = Math.min(distTop, distBottom, distLeft, distRight);
                         let edge, position;
-                        
                         if (minDist === distTop) { edge = 'top'; position = x / w; }
                         else if (minDist === distBottom) { edge = 'bottom'; position = x / w; }
                         else if (minDist === distLeft) { edge = 'left'; position = y / h; }
                         else { edge = 'right'; position = y / h; }
 
-                        dispatch({
-                            type: 'ADD_PORT',
-                            payload: {
-                                nodeId: data.id,
-                                type: edge === 'left' ? 'input' : 'output',
-                                position: position,
-                                edge: edge
-                            }
-                        });
+                        dispatch({ type: 'ADD_PORT', payload: { nodeId: data.id, type: edge === 'left' ? 'input' : 'output', position, edge } });
                     }}
                 >
                     <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-green-500/80 text-white text-xs px-2 py-1 rounded">
@@ -769,7 +619,7 @@ function NodeView(props) {
                 </div>
             )}
 
-            <div 
+            <div
                 className="absolute bottom-0 right-0 w-6 h-6 cursor-nwse-resize z-20 flex items-end justify-end p-1.5 group"
                 onMouseDown={handleResizeMouseDown}
                 title="Потяните, чтобы изменить размер"
@@ -782,9 +632,6 @@ function NodeView(props) {
 
 const MemoizedNode = React.memo ? React.memo(NodeView) : NodeView;
 // ВАЖНО: компонент называется NodeView, а не Node, и в глобальную область
-// кладётся только window.NodeComponent. Объявление `function Node` затирало бы
-// нативный DOM-интерфейс Node (Node.TEXT_NODE, `x instanceof Node`), ломая
-// сторонний код и расширения. Потребители пишут <NodeComponent />.
+// кладётся только window.NodeComponent (Node — нативный DOM-интерфейс).
 if (typeof window !== 'undefined') window.NodeComponent = MemoizedNode;
 if (typeof module !== 'undefined') module.exports = MemoizedNode;
-

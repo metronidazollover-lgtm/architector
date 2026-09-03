@@ -412,64 +412,11 @@ const normalizeContainer = (entity) => {
     return { ...entity, parentId: entity.parentId || 'root' };
 };
 
-/**
- * Наведение на сущность внутри окна уровня.
- *
- * У каждого окна своя камера, поэтому одного мирового центрирования мало: если
- * сущность выехала за видимую область вьюпорта, она обрезана рамкой, и мировая
- * камера прилетит на математически верную, но визуально пустую точку.
- * Сначала двигаем ВНУТРЕННЮЮ камеру окна, потом мировую.
- *
- * @param {Object} state
- * @param {string} id
- * @returns {?{ levelViews: Object, center: {x:number,y:number}, size: {w:number,h:number} }}
- */
-const focusEntityInsideWindow = (state, id) => {
-    const H = getHierarchy();
-    if (!H) return null;
-    const entity = state.nodes[id] || (state.layers && state.layers[id]);
-    if (!entity) return null;
-
-    const level = H.getLevel(id, state.nodes, state.layers);
-    const win = H.getWindowOfLevel(level, state.levelWindows);
-    if (!win) return null;
-
-    const view = H.getLevelView(win.id, state);
-    const { headerH, borderW } = H.LEVEL_WINDOW_METRICS;
-
-    const local = H.getLocalPosition(id, state.nodes, state.layers);
-    const isLayer = !!(state.layers && state.layers[id]);
-    const w = (entity.size && entity.size.w) || (isLayer ? 600 : 200);
-    const h = (entity.size && entity.size.h) || (isLayer ? 400 : 100);
-
-    // Видимая область вьюпорта окна (в экранных единицах мирового холста)
-    const viewportW = Math.max(1, (win.size?.w || 1000) - borderW * 2);
-    const viewportH = Math.max(1, Math.max(200, (win.size?.h || 700) - headerH) );
-
-    const zoomIn = view.innerZoom || 1;
-    const centerLocal = { x: local.x + w / 2, y: local.y + h / 2 };
-
-    // Такой сдвиг вьюпорта, при котором центр сущности попадает в центр окна
-    const innerOffset = {
-        x: viewportW / 2 - centerLocal.x * zoomIn,
-        y: viewportH / 2 - centerLocal.y * zoomIn
-    };
-
-    const levelViews = {
-        ...state.levelViews,
-        [win.id]: { ...makeLevelView(state.levelViews && state.levelViews[win.id]), innerOffset }
-    };
-
-    // После сдвига центр сущности гарантированно в центре видимой области окна
-    return {
-        levelViews,
-        center: {
-            x: (win.position?.x || 0) + borderW + viewportW / 2,
-            y: (win.position?.y || 0) + borderW + headerH + viewportH / 2
-        },
-        size: { w: w * zoomIn, h: h * zoomIn }
-    };
-};
+// v14 (Фаза 4, финальный коммит): focusEntityInsideWindow физически удалена —
+// это была единственная функция, обслуживавшая старую CENTER_ON_ENTITY (per-
+// window наведение внутренней камеры); новая v14 CENTER_ON_ENTITY (см. ниже)
+// центрирует только мировую камеру и её не вызывает. Проверено grep'ом по
+// всему app/ — остаточных вызовов нет.
 
 // Окно по стабильному id либо по номеру уровня (легаси-вызовы из компонентов).
 const resolveWindow = (state, key) => {
@@ -531,222 +478,14 @@ const withLevelView = (state, winId, patch) => ({
     }
 });
 
-// Внутреннее содержимое окна доступно не по всей рамке: сверху шапка,
-// по периметру рамка-бордер. Тот же расчёт, что и getWorldTransform.
-const getWindowContentArea = (win) => {
-    const H = getHierarchy();
-    const { headerH, borderW } = (H && H.LEVEL_WINDOW_METRICS) || { headerH: 40, borderW: 2 };
-    const size = (win && win.size) || LEVEL_WINDOW_DEFAULT_SIZE;
-    return {
-        w: Math.max(1, size.w - borderW * 2),
-        h: Math.max(1, size.h - borderW * 2 - headerH),
-        headerH,
-        borderW
-    };
-};
-
-// Двойной клик «показать связанные элементы» (FOCUS_CONNECTED_ELEMENTS):
-// узел/порт/связь/слой + всё, что с ним напрямую соединено связями, должны
-// поместиться на экране одновременно. Свёрнутые окна разворачиваются, у
-// каждого затронутого окна подбирается свой innerOffset/innerZoom под ЕГО
-// часть набора, а общая камера (state.canvas) — под мировые рамки всех
-// затронутых окон сразу. Позиции и размеры окон не трогаются (см. план):
-// это отдельная, более инвазивная мера на случай, если окна физически
-// перекрываются — пока не реализована.
-//
-// Сессия фокуса: первый вызов подряд снимает снимок текущей камеры/окон в
-// state.focusSnapshot, если он ещё не взят — повторные двойные клики, пока
-// пользователь не кликнул в пустое место, лишь расширяют/подстраивают вид,
-// но откат (SET_SELECTED payload=null) всегда возвращает к состоянию ДО
-// самого первого клика этой серии.
-const applyFocusConnectedElements = (state, payload) => {
-    const H = getHierarchy();
-    if (!H) return state;
-    const entityId = payload.entityId;
-    if (!entityId) return state;
-
-    const nodes = state.nodes || {};
-    const ports = state.ports || {};
-    const links = state.links || {};
-    const layers = state.layers || {};
-
-    const portsByNode = H.getPortsByNodeId(ports);
-    const linksByPort = H.getLinksByPortId(links);
-    const nodesByParent = H.getNodesByParentId(nodes);
-    const layersByParent = H.getLayersByParentId(layers);
-
-    const entityIds = new Set();
-    const addNeighborsOfPort = (portId) => {
-        (linksByPort[portId] || []).forEach(l => {
-            if (!l) return;
-            const otherPortId = l.sourcePortId === portId ? l.targetPortId : l.sourcePortId;
-            const otherPort = ports[otherPortId];
-            if (otherPort && otherPort.nodeId) entityIds.add(otherPort.nodeId);
-        });
-    };
-    const addEntityAndNeighbors = (eid) => {
-        if (!eid || (!nodes[eid] && !layers[eid])) return;
-        entityIds.add(eid);
-        (portsByNode[eid] || []).forEach(p => addNeighborsOfPort(p.id));
-    };
-
-    let anchorLayerId = null;
-
-    if (nodes[entityId]) {
-        addEntityAndNeighbors(entityId);
-    } else if (ports[entityId]) {
-        const port = ports[entityId];
-        if (port.nodeId) addEntityAndNeighbors(port.nodeId);
-        addNeighborsOfPort(entityId);
-    } else if (links[entityId]) {
-        const link = links[entityId];
-        const sp = ports[link.sourcePortId];
-        const tp = ports[link.targetPortId];
-        if (sp && sp.nodeId) addEntityAndNeighbors(sp.nodeId);
-        if (tp && tp.nodeId) addEntityAndNeighbors(tp.nodeId);
-    } else if (layers[entityId]) {
-        anchorLayerId = entityId;
-        addEntityAndNeighbors(entityId);
-        const stack = [entityId];
-        const seenLayers = new Set();
-        while (stack.length) {
-            const lid = stack.pop();
-            if (seenLayers.has(lid)) continue;
-            seenLayers.add(lid);
-            addEntityAndNeighbors(lid);
-            (nodesByParent[lid] || []).forEach(n => addEntityAndNeighbors(n.id));
-            (layersByParent[lid] || []).forEach(l => stack.push(l.id));
-        }
-    } else {
-        return state; // окно уровня, неизвестный id — фокусировать нечего
-    }
-
-    // Скрытые изоляцией («глаз») узлы и слои не разворачиваем и не показываем —
-    // они и так невидимы, как и их магистральные связи (см. Canvas.js).
-    const isVisible = (id) => (H.isEntityVisible ? H.isEntityVisible(id, state) : true);
-    const focusIds = Array.from(entityIds).filter(isVisible);
-    if (anchorLayerId && isVisible(anchorLayerId) && !focusIds.includes(anchorLayerId)) focusIds.push(anchorLayerId);
-    if (focusIds.length === 0) return state;
-
-    // Группировка по окну уровня: у каждого окна — свой набор id, свой bbox.
-    const idsByWindow = new Map();
-    const winById = new Map();
-    focusIds.forEach(id => {
-        const lvl = H.getEntityLevel(id, nodes, layers);
-        const win = H.getWindowOfLevel(lvl, state.levelWindows);
-        if (!win) return;
-        if (!idsByWindow.has(win.id)) idsByWindow.set(win.id, []);
-        idsByWindow.get(win.id).push(id);
-        winById.set(win.id, win);
-    });
-    if (idsByWindow.size === 0) return state;
-
-    // Снимок «до фокуса» берём один раз за сессию (пока не откатили кликом
-    // по пустому месту) — повторные двойные клики его не перезаписывают.
-    const isFirstFocusInSession = !state.focusSnapshot;
-    const snapshotWindows = isFirstFocusInSession ? {} : { ...state.focusSnapshot.windows };
-
-    const nextViews = { ...state.levelViews };
-    const MIN_ZOOM = 0.2, MAX_FIT_ZOOM = 1.2, PADDING = 60;
-
-    idsByWindow.forEach((ids, winId) => {
-        const win = winById.get(winId);
-        const prevView = H.getLevelView(winId, state);
-
-        if (isFirstFocusInSession && !snapshotWindows[winId]) {
-            snapshotWindows[winId] = {
-                isCollapsed: prevView.isCollapsed,
-                innerOffset: prevView.innerOffset,
-                innerZoom: prevView.innerZoom
-            };
-        }
-
-        // Bbox в ЛОКАЛЬНЫХ координатах окна (без учёта текущих innerZoom/
-        // innerOffset — их как раз предстоит подобрать заново).
-        let bbox = null;
-        ids.forEach(id => {
-            const local = H.getLocalPosition(id, nodes, layers);
-            const entity = nodes[id] || layers[id];
-            const w = (entity && entity.size && entity.size.w) || (nodes[id] ? 200 : 600);
-            const h = (entity && entity.size && entity.size.h) || (nodes[id] ? 100 : 400);
-            if (!bbox) bbox = { minX: local.x, minY: local.y, maxX: local.x + w, maxY: local.y + h };
-            else {
-                bbox.minX = Math.min(bbox.minX, local.x);
-                bbox.minY = Math.min(bbox.minY, local.y);
-                bbox.maxX = Math.max(bbox.maxX, local.x + w);
-                bbox.maxY = Math.max(bbox.maxY, local.y + h);
-            }
-        });
-        if (!bbox) return;
-
-        const area = getWindowContentArea(win);
-        const bboxW = Math.max(1, bbox.maxX - bbox.minX);
-        const bboxH = Math.max(1, bbox.maxY - bbox.minY);
-        const availW = Math.max(1, area.w - PADDING * 2);
-        const availH = Math.max(1, area.h - PADDING * 2);
-
-        const fitZoom = Math.min(availW / bboxW, availH / bboxH);
-        const innerZoom = Math.min(Math.max(fitZoom, MIN_ZOOM), MAX_FIT_ZOOM);
-
-        const bboxCX = (bbox.minX + bbox.maxX) / 2;
-        const bboxCY = (bbox.minY + bbox.maxY) / 2;
-        const innerOffset = {
-            x: area.w / 2 - bboxCX * innerZoom,
-            y: area.h / 2 - bboxCY * innerZoom
-        };
-
-        nextViews[winId] = { ...makeLevelView(nextViews[winId]), isCollapsed: false, innerZoom, innerOffset };
-    });
-
-    // Общая камера: мировые рамки ВСЕХ затронутых окон (после разворачивания)
-    // должны поместиться на экране одновременно.
-    let worldBox = null;
-    idsByWindow.forEach((_ids, winId) => {
-        const win = winById.get(winId);
-        if (!win || !win.position || !win.size) return;
-        const x0 = win.position.x, y0 = win.position.y;
-        const x1 = x0 + win.size.w, y1 = y0 + win.size.h;
-        if (!worldBox) worldBox = { minX: x0, minY: y0, maxX: x1, maxY: y1 };
-        else {
-            worldBox.minX = Math.min(worldBox.minX, x0);
-            worldBox.minY = Math.min(worldBox.minY, y0);
-            worldBox.maxX = Math.max(worldBox.maxX, x1);
-            worldBox.maxY = Math.max(worldBox.maxY, y1);
-        }
-    });
-
-    let nextCanvas = state.canvas;
-    if (worldBox) {
-        const { w: screenW, h: screenH } = getScreenSize();
-        const CAM_MIN_ZOOM = 0.1, CAM_MAX_FIT_ZOOM = 1.5, CAM_PADDING = 80;
-        const boxW = Math.max(1, worldBox.maxX - worldBox.minX);
-        const boxH = Math.max(1, worldBox.maxY - worldBox.minY);
-        const availW = Math.max(1, screenW - CAM_PADDING * 2);
-        const availH = Math.max(1, screenH - CAM_PADDING * 2);
-        const fitZoom = Math.min(availW / boxW, availH / boxH);
-        const zoom = Math.min(Math.max(fitZoom, CAM_MIN_ZOOM), CAM_MAX_FIT_ZOOM);
-        const cx = (worldBox.minX + worldBox.maxX) / 2;
-        const cy = (worldBox.minY + worldBox.maxY) / 2;
-        nextCanvas = {
-            ...state.canvas,
-            offset: { x: screenW / 2 - cx * zoom, y: screenH / 2 - cy * zoom },
-            zoom
-        };
-    }
-
-    const focusSnapshot = isFirstFocusInSession
-        ? { camera: { offset: state.canvas.offset, zoom: state.canvas.zoom }, windows: snapshotWindows }
-        : state.focusSnapshot;
-
-    // Камера — состояние обзора, не данных: как и её обычное перемещение,
-    // это не пишет историю Undo.
-    return {
-        ...state,
-        levelViews: nextViews,
-        canvas: nextCanvas,
-        focusSnapshot
-    };
-};
+// v14 (Фаза 4, финальный коммит): getWindowContentArea/applyFocusConnectedElements
+// физически удалены — обслуживали только старую (per-window) реализацию
+// FOCUS_CONNECTED_ELEMENTS; новая v14-версия (см. её case ниже) центрирует
+// только мировую камеру и обе не вызывает. Проверено grep'ом по всему app/ —
+// остаточных вызовов нет. revertFocusSnapshot ниже остаётся: она по-прежнему
+// вызывается из SET_SELECTED и защищена собственной проверкой `if (!snap)
+// return {}` — раз focusSnapshot больше никто не выставляет, она становится
+// безвредным no-op, а не мёртвым кодом с висячим вызовом.
 
 // Откат к виду ДО серии двойных кликов «показать связанные элементы».
 // Вызывается из SET_SELECTED при явном сбросе выделения (клик по пустому
@@ -777,6 +516,18 @@ const defaultState = {
     levelFocusParentId: {},
     levelHideNeighbors: {},
     layers: {},
+    // v14: frames/windows/activeLaneId/activeFrameId заменяют layers/
+    // levelWindows/levelViews/activeLevelIndex (см. docs/LANES_MODEL.md §4).
+    // Оба набора полей сосуществуют здесь намеренно (§7.14 плана) — старые
+    // остаются шаблоном для wrapFlatToMulti (легаси-путь v9-v11, который
+    // проходит через migrateToV13 ДО migrateToV14 и всё ещё ждёт старые
+    // имена полей), новые — тем, что реально доживает до рендера после
+    // migrateToV14. makeProject берёт из этого объекта уже готовые пустые
+    // frames/windows для только что созданных проектов.
+    frames: {},
+    windows: {},
+    activeLaneId: null,
+    activeFrameId: null,
     nodes: {},
     ports: {},
     links: {},
@@ -3079,7 +2830,14 @@ const PROJECT_FIELDS = [
     'projectName', 'projectColor', 'projectFontFamily', 'projectContent',
     'levelWindows', 'levelViews', 'activeLevelIndex',
     'levelFocusParentId', 'levelHideNeighbors',
-    'layers', 'nodes', 'ports', 'links', 'pendingGateways',
+    'layers',
+    // v14 (§7.14 плана): добавлены аддитивно, старые поля выше НЕ убраны —
+    // wrapFlatToMulti всё ещё оборачивает легаси v9-v11 состояние ДО
+    // migrateToV13/migrateToV14 и ждёт старые имена; после миграции у
+    // реального проекта в state.projects[pid] старых полей уже нет
+    // (migrateProjectEntitiesToV14 явно их не копирует), только новые.
+    'frames', 'windows', 'activeLaneId', 'activeFrameId',
+    'nodes', 'ports', 'links', 'pendingGateways',
     'past', 'future', 'historyLogs'
 ];
 
@@ -3095,13 +2853,25 @@ const globalDefaults = () => {
 // Новый пустой проект: один Главный холст с УНИКАЛЬНЫМ id окна —
 // 'lvlwin-root' зарезервирован за первым (мигрированным) проектом,
 // пересечения id окон между проектами недопустимы (React-ключи, Этап 2).
+// v14 (§7.14 плана): новый проект создаётся СРАЗУ в v14-форме, без окон
+// (`windows: {}`) — пустой проект не обязан показывать ни одной дорожки,
+// обозреватель проекта всегда даёт открыть корень явным кликом (§10.7
+// LANES_MODEL.md), отдельного стартового окна заводить не нужно.
 const makeProject = (id, name) => {
-    const winId = newWindowId();
     const p = { id, origin: { x: 0, y: 0 } };
     PROJECT_FIELDS.forEach(f => { p[f] = defaultState[f]; });
     p.projectName = name || defaultState.projectName;
-    p.levelWindows = { [winId]: makeLevelWindow(winId, 0) };
-    p.levelViews = { [winId]: makeLevelView() };
+    p.frames = {};
+    p.windows = {};
+    p.activeLaneId = null;
+    p.activeFrameId = null;
+    // defaultState.levelWindows/layers — общий (по ссылке) v13-заглушка с
+    // фиксированным id 'lvlwin-root'; для v14 эти поля мертвы (ничего их не
+    // читает), но оставлять как есть означало бы, что у ВСЕХ новых проектов
+    // одно и то же значение levelWindows с одним и тем же id — источник
+    // путаницы, если что-то ещё (тесты, легаси-код) на него посмотрит.
+    p.layers = {};
+    p.levelWindows = {};
     p.past = [];
     p.future = [];
     p.historyLogs = ['Проект создан'];
@@ -3770,6 +3540,16 @@ const applyRemoveProject = (m, id) => {
  * @returns {Object}
  */
 const applyCrossProjectReparent = (m, p) => {
+    // v14 (§7.14 плана): барьер до переписи Фазы 5. Эта функция всё ещё
+    // вызывает H.isDescendantOf/H.canReparentTo со старой сигнатурой
+    // (nodes, layers, levelWindows) — после подключения migrateToV14 живые
+    // state.projects[pid] этих полей не несут вовсе. Без барьера — не просто
+    // падение, а риск тихо пропустить проверку цикла на undefined-полях и
+    // испортить структуру проекта. С барьером кросс-проектный перенос между
+    // v14-проектами — явный no-op до полной переписи в Фазе 5 (тогда же барьер
+    // убирается вместе с переводом на isDescendantOfV14/canReparentToV14).
+    if ((m.formatVersion || 0) >= FORMAT_VERSION_V14) return m;
+
     const sourceProjectId = p.sourceProjectId;
     const targetProjectId = p.targetProjectId;
     if (!sourceProjectId || !targetProjectId || sourceProjectId === targetProjectId) return m;
@@ -4435,15 +4215,16 @@ const getInitialMultiState = () => {
                             return base;
                         })()
                     };
-                    // migrateToV13 активирована: TRANSFER_NODE физически удалён из
-                    // редьюсера и ни один живой путь создания сущности (ADD_NODE,
-                    // ADD_LAYER, CREATE_NESTED_NODE, REPARENT_ENTITY) больше не пишет
-                    // ownerId/ownerGap/homeLevel — HierarchyUtils понимает чистый parentId
-                    // (включая id окна для сирот-якорей), а REMOVE_LEVEL_WINDOW/
-                    // CLEAR_LEVEL_WINDOW/REMOVE_ROOT_CANVAS ре-якорят обе формы одинаково
-                    // (structuralParentOf). Санитизация здесь однократна: миграция читает
-                    // формат ДО того, как он попадёт в mergeActiveView/компоненты.
-                    return migrateToV13({
+                    // v14 (§7.11/§7.14 плана) активирована: migrateToV14 подключена как
+                    // КОМПОЗИЦИЯ поверх migrateToV13, а не замена — migrateProjectEntitiesToV14
+                    // читает proj.layers/proj.levelWindows/proj.levelViews и ждёт вход, уже
+                    // прошедший через migrateToV13 (сама migrateToV13 внутри не вызывает).
+                    // migrateToV13/normalizeLevelWindows/migrateProjectEntitiesToV13 остаются
+                    // в кодовой базе навсегда как постоянное звено цепочки миграций — их
+                    // удаление никогда не планировалось (см. §7.14, уточнение к §7.12).
+                    // Санитизация здесь однократна: миграция читает формат ДО того, как он
+                    // попадёт в mergeActiveView/компоненты.
+                    return migrateToV14(migrateToV13({
                         ...globalDefaults(),
                         canvas: parsed.canvas || defaultState.canvas,
                         aiChatHistory: parsed.aiChatHistory || defaultState.aiChatHistory,
@@ -4461,7 +4242,7 @@ const getInitialMultiState = () => {
                         pendingConnection: null,
                         dragGesture: null,
                         formatVersion: 12
-                    });
+                    }));
                 }
             }
         } catch (e) {
@@ -4470,7 +4251,7 @@ const getInitialMultiState = () => {
         }
     }
     // Легаси-путь: getInitialState читает v11/v10/v9 и возвращает плоское состояние
-    return migrateToV13(wrapFlatToMulti(getInitialState()));
+    return migrateToV14(migrateToV13(wrapFlatToMulti(getInitialState())));
 };
 
 const ArchitectorStore = { isContainerSelectionId, containerSelectionKind, getSelectionClass, toggleSelectionWithClass, windowSelectionId, projectSelectionId, STORAGE_KEY, STORAGE_KEY_V12, LEGACY_STORAGE_KEY_V10, LEGACY_STORAGE_KEY_V9, FORMAT_VERSION, FORMAT_VERSION_V13, FORMAT_VERSION_V14, LEVEL0_WINDOW_ID, PROJECT_FIELDS, defaultState, getInitialState, getInitialMultiState, reducer, multiReducer, mergeActiveView, projectFlatView, writeProjectView, wrapFlatToMulti, makeProject, saveHistory, migrateToV10, migrateToV11, migrateToV13, migrateToV14, migrateProjectEntitiesToV14, normalizeLevelWindows, normalizeWindows, reconcilePendingGateways, applyRemoveProject };
