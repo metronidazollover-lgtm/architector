@@ -100,7 +100,7 @@ const ContextDescriptionInput = ({ value, placeholder, onChange, onBlur }) => {
 };
 
 const TypographyPopover = ({ currentFont, currentSize, onFontChange, onSizeChange, leftClass = 'left-10' }) => (
-    <div className={`absolute ${leftClass} top-12 w-72 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-3 animate-in fade-in zoom-in-95 duration-150`}>
+    <div className={`absolute ${leftClass} top-12 w-72 panel rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-3 animate-in fade-in zoom-in-95 duration-150`}>
         <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between text-[11px] font-semibold text-gray-300 uppercase tracking-wider">
                 <span>Размер шрифта</span><span className="text-[var(--accent-blue)] font-mono text-xs font-bold">{currentSize || 14}px</span>
@@ -126,7 +126,7 @@ const TypographyPopover = ({ currentFont, currentSize, onFontChange, onSizeChang
 );
 
 const ColorPickerPopover = ({ currentColor, onColorChange, title = 'Выбор цвета', leftClass = 'left-0', showHex = true }) => (
-    <div className={`absolute ${leftClass} top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2.5 animate-in fade-in zoom-in-95 duration-150`}>
+    <div className={`absolute ${leftClass} top-12 w-64 panel rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2.5 animate-in fade-in zoom-in-95 duration-150`}>
         <div className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">{title}</div>
         <div className="grid grid-cols-7 gap-1.5">
             {COLOR_PRESETS.map((c) => (
@@ -147,7 +147,7 @@ const ColorPickerPopover = ({ currentColor, onColorChange, title = 'Выбор �
 );
 
 const IconPickerPopover = ({ currentIcon, onIconChange, leftClass = 'left-48' }) => (
-    <div className={`absolute ${leftClass} top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2 max-h-64 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-150`}>
+    <div className={`absolute ${leftClass} top-12 w-64 panel rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2 max-h-64 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-150`}>
         <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Иконка Lucide</div>
         <div className="grid grid-cols-5 gap-1.5">
             {ICON_PRESETS.map((item) => (
@@ -169,7 +169,7 @@ const IconPickerPopover = ({ currentIcon, onIconChange, leftClass = 'left-48' })
 // (v13 держал три похожие копии; здесь одна, см. рекомендацию в отчёте
 // исследования Фазы 4). ids — узлы-кандидаты на членство.
 const AssignToFramePopover = ({ ids, frames, onAssign }) => (
-    <div className="absolute left-0 top-12 w-56 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-2 shadow-2xl z-50 flex flex-col gap-1 max-h-64 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-150">
+    <div className="absolute left-0 top-12 w-56 panel rounded-xl p-2 shadow-2xl z-50 flex flex-col gap-1 max-h-64 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-150">
         <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-1 pb-1">Добавить в рамку</div>
         {Object.values(frames).length === 0 && <div className="text-xs text-gray-500 px-1 py-2">Рамок пока нет</div>}
         {Object.values(frames).map(f => (
@@ -323,7 +323,7 @@ function ContextActionBar() {
         };
 
         return (
-            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/10 p-2.5 flex flex-col gap-2 w-[420px]">
+            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 panel rounded-2xl shadow-2xl p-2.5 flex flex-col gap-2 w-[420px]">
                 <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-gray-300">Контейнеры: {pickedProjects.length} проект(ов), {pickedWindows.length} окно(а)</span>
                     <button className="text-gray-500 hover:text-white" onClick={() => dispatch({ type: 'SET_SELECTED', payload: null })}><div className="icon-x w-4 h-4" /></button>
@@ -363,7 +363,7 @@ function ContextActionBar() {
         const handleDelete = () => { if (window.confirm(`Удалить ${selectedIds.length} элементов?`)) dispatch({ type: 'DELETE_SELECTED' }); };
 
         return (
-            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/10 p-2.5 flex flex-col gap-2 w-[440px]">
+            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 panel rounded-2xl shadow-2xl p-2.5 flex flex-col gap-2 w-[440px]">
                 <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-gray-300">Выделено: {items.length}</span>
                     <button className="text-gray-500 hover:text-white" onClick={() => dispatch({ type: 'SET_SELECTED', payload: null })}><div className="icon-x w-4 h-4" /></button>
@@ -395,7 +395,7 @@ function ContextActionBar() {
     if (id === 'project' || id === `project:${selectedPid}`) {
         const handleUpdateProject = (field, val, skipHistory) => dispatch({ type: 'UPDATE_PROJECT_PROPERTIES', payload: { updates: { [field]: val }, skipHistory } });
         return (
-            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/10 p-3 flex flex-col gap-2.5 w-[440px]">
+            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 panel rounded-2xl shadow-2xl p-3 flex flex-col gap-2.5 w-[440px]">
                 <div className="flex items-center justify-between gap-2">
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold text-white shrink-0" style={{ backgroundColor: state.projectColor || '#059669' }}>ПРОЕКТ</span>
                     <input className="flex-1 bg-transparent text-sm font-medium text-white outline-none border-b border-transparent focus:border-white/30" value={state.projectName || ''} onChange={(e) => handleUpdateProject('projectName', e.target.value, true)} onBlur={(e) => handleUpdateProject('projectName', e.target.value, false)} />
@@ -434,7 +434,7 @@ function ContextActionBar() {
         const handleUpdateWin = (field, val, skipHistory) => dispatch({ type: 'UPDATE_WINDOW_PROPERTIES', payload: { windowId, updates: { [field]: val }, skipHistory } });
         const isIsolated = (state.containerIsolation?.windowIds || []).includes(windowId);
         return (
-            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/10 p-3 flex flex-col gap-2.5 w-[440px]">
+            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 panel rounded-2xl shadow-2xl p-3 flex flex-col gap-2.5 w-[440px]">
                 <div className="flex items-center justify-between gap-2">
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold text-white shrink-0" style={{ backgroundColor: win.color || '#334155' }}>ОКНО</span>
                     <input className="flex-1 bg-transparent text-sm font-medium text-white outline-none border-b border-transparent focus:border-white/30" value={win.name || ''} placeholder="Без названия" onChange={(e) => handleUpdateWin('name', e.target.value, true)} onBlur={(e) => handleUpdateWin('name', e.target.value, false)} />
@@ -468,7 +468,7 @@ function ContextActionBar() {
         const myFrames = (window.HierarchyUtils.framesOf(data.id, frames) || []);
         const otherFrames = Object.fromEntries(Object.entries(frames).filter(([fid]) => !myFrames.some(f => f.id === fid)));
         return (
-            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/10 p-3 flex flex-col gap-2.5 w-[440px]">
+            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 panel rounded-2xl shadow-2xl p-3 flex flex-col gap-2.5 w-[440px]">
                 <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded shrink-0" style={{ backgroundColor: data.color || '#1a1a1a' }} />
                     <input className="flex-1 bg-transparent text-sm font-medium text-white outline-none border-b border-transparent focus:border-white/30" value={data.name || ''} onChange={(e) => handleUpdate('name', e.target.value, true)} onBlur={(e) => handleUpdate('name', e.target.value, false)} />
@@ -494,7 +494,7 @@ function ContextActionBar() {
                     {activePopover === 'icon' && <IconPickerPopover currentIcon={data.icon} onIconChange={(ic) => handleUpdate('icon', ic)} />}
                     {activePopover === 'frame' && <AssignToFramePopover ids={[data.id]} frames={otherFrames} onAssign={(fid) => { dispatch({ type: 'FRAME_ADD_MEMBERS', payload: { frameId: fid, ids: [data.id] } }); setActivePopover(null); }} />}
                     {activePopover === 'media' && (
-                        <div className="absolute left-24 top-12 w-64 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2">
+                        <div className="absolute left-24 top-12 w-64 panel rounded-xl p-3 shadow-2xl z-50 flex flex-col gap-2">
                             <input className="input-field text-xs" placeholder="URL картинки" value={data.mediaUrl || ''} onChange={(e) => handleUpdate('mediaUrl', e.target.value, true)} onBlur={(e) => handleUpdate('mediaUrl', e.target.value, false)} />
                             {data.mediaUrl && <button className="text-xs text-red-300 hover:text-red-200" onClick={() => handleUpdate('mediaUrl', '')}>Удалить картинку</button>}
                         </div>
@@ -521,7 +521,7 @@ function ContextActionBar() {
         const handleUpdate = (field, value, skipHistory) => dispatch({ type: 'UPDATE_FRAME', payload: { id: data.id, updates: { [field]: value }, skipHistory } });
         const laneOptions = Array.from(new Set((data.members || []).map(mid => nodes[mid] && (nodes[mid].parentId || 'root')).filter(Boolean)));
         return (
-            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/10 p-3 flex flex-col gap-2.5 w-[440px]">
+            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 panel rounded-2xl shadow-2xl p-3 flex flex-col gap-2.5 w-[440px]">
                 <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: data.color || '#0284c7' }} />
                     <input className="flex-1 bg-transparent text-sm font-medium text-white outline-none border-b border-transparent focus:border-white/30" value={data.name || ''} onChange={(e) => handleUpdate('name', e.target.value, true)} onBlur={(e) => handleUpdate('name', e.target.value, false)} />
@@ -562,7 +562,7 @@ function ContextActionBar() {
         const handleUpdate = (field, value) => dispatch({ type: 'UPDATE_PORT', payload: { id: data.id, updates: { [field]: value } } });
         const EDGE_OPTIONS = [{ id: 'left', label: 'Слева' }, { id: 'right', label: 'Справа' }, { id: 'top', label: 'Сверху' }, { id: 'bottom', label: 'Снизу' }];
         return (
-            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/10 p-3 flex flex-col gap-2.5 w-[400px]">
+            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 panel rounded-2xl shadow-2xl p-3 flex flex-col gap-2.5 w-[400px]">
                 <div className="flex items-center gap-2">
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold text-white shrink-0" style={{ backgroundColor: data.color || '#374151' }}>ПОРТ</span>
                     <input className="flex-1 bg-transparent text-sm font-medium text-white outline-none border-b border-transparent focus:border-white/30" value={data.name || ''} onChange={(e) => handleUpdate('name', e.target.value)} />
@@ -577,7 +577,7 @@ function ContextActionBar() {
                     <button className="w-9 h-9 rounded-lg bg-red-900/30 border border-red-500/30 hover:bg-red-900/50 flex items-center justify-center text-red-300 ml-auto" title="Удалить порт" onClick={() => { if (window.confirm('Удалить порт?')) dispatch({ type: 'REMOVE_PORT', payload: data.id }); }}><div className="icon-trash-2 w-4 h-4" /></button>
                     {activePopover === 'color' && <ColorPickerPopover currentColor={data.color} onColorChange={(c) => handleUpdate('color', c)} />}
                     {activePopover === 'edge' && (
-                        <div className="absolute left-24 top-12 w-40 glass-panel bg-[#14161f]/95 backdrop-blur-md border border-[#444] rounded-xl p-2 shadow-2xl z-50 flex flex-col gap-1">
+                        <div className="absolute left-24 top-12 w-40 panel rounded-xl p-2 shadow-2xl z-50 flex flex-col gap-1">
                             {EDGE_OPTIONS.map(o => (
                                 <button key={o.id} className={`px-2 py-1.5 rounded text-left text-xs ${data.edge === o.id ? 'bg-[var(--accent-blue)] text-white' : 'hover:bg-white/10 text-gray-300'}`} onClick={() => { handleUpdate('edge', o.id); setActivePopover(null); }}>{o.label}</button>
                             ))}
@@ -593,7 +593,7 @@ function ContextActionBar() {
         const data = selectedLink;
         const handleUpdate = (field, value) => dispatch({ type: 'UPDATE_LINK', payload: { id: data.id, updates: { [field]: value } } });
         return (
-            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 glass-panel bg-[#0d1017]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/10 p-3 flex flex-col gap-2.5 w-[400px]">
+            <div ref={barRef} className="fixed top-16 left-1/2 -translate-x-1/2 z-50 panel rounded-2xl shadow-2xl p-3 flex flex-col gap-2.5 w-[400px]">
                 <div className="flex items-center gap-2">
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold text-white shrink-0" style={{ backgroundColor: data.color || '#666666' }}>СВЯЗЬ</span>
                     <span className="flex-1 text-xs text-gray-400 truncate">{data.id}</span>

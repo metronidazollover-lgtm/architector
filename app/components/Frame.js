@@ -152,7 +152,7 @@ function Frame(props) {
                 left: rect.x - pad, top: rect.y - pad, width: rect.w + pad * 2, height: rect.h + pad * 2,
                 border: `2px ${isSelected || isActive ? 'solid' : 'dashed'} ${borderColor}`,
                 borderRadius: 10,
-                boxShadow: isActive ? `0 0 0 3px ${borderColor}55` : (isDropReceiver ? '0 0 0 3px #34d399aa' : 'none'),
+                boxShadow: isActive ? `0 0 0 3px ${borderColor}55` : (isDropReceiver ? '0 0 0 3px color-mix(in srgb, var(--ok) 67%, transparent)' : 'none'),
                 zIndex: 5
             }}
         >

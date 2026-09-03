@@ -204,7 +204,7 @@ function LaneWindow(props) {
                 left: win.position.x, top: win.position.y,
                 width: win.size.w, height: collapsed ? 40 : (allLanesHidden ? 40 + HIDDEN_LANE_H : win.size.h),
                 borderColor,
-                backgroundColor: '#0a0d14',
+                backgroundColor: 'var(--panel)',
                 zIndex: isSelected ? 30 : 10,
                 boxShadow: isSelected
                     ? `0 0 35px ${borderColor}88, 0 0 10px rgba(56,189,248,0.3)`

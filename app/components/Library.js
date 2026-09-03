@@ -27,7 +27,7 @@ function Library({ projectId }) {
     if (!isActiveProject) {
         return (
             <div
-                className="w-[350px] glass-panel rounded-xl border-[#444] shadow-2xl px-4 py-3 text-sm text-gray-400 cursor-pointer hover:text-white transition-colors"
+                className="w-[350px] panel rounded-xl shadow-2xl px-4 py-3 text-sm text-gray-400 cursor-pointer hover:text-white transition-colors"
                 onClick={() => dispatch({ type: 'SET_ACTIVE_PROJECT', payload: projectId })}
                 data-file="components/Library.js"
             >
@@ -123,7 +123,7 @@ function Library({ projectId }) {
     };
 
     return (
-        <div className="w-[350px] glass-panel rounded-xl border-[#444] shadow-2xl max-h-[55vh] shrink-0 flex flex-col overflow-hidden" data-file="components/Library.js">
+        <div className="w-[350px] panel rounded-xl shadow-2xl max-h-[55vh] shrink-0 flex flex-col overflow-hidden" data-file="components/Library.js">
             <div className="flex items-center border-b border-white/10 shrink-0">
                 <button
                     className={`flex-1 px-3 py-2 text-xs font-medium ${activeTab === 'objects' ? 'text-white bg-white/5' : 'text-gray-500 hover:text-gray-300'}`}

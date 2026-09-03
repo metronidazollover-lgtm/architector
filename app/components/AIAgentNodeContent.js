@@ -791,7 +791,7 @@ ${notation}
             onMouseDown={e => e.stopPropagation()}
             data-file="components/AIAgentNodeContent.js"
         >
-            <div className="px-3 py-2 border-b border-[#333] flex items-center justify-between bg-black/40 text-xs shrink-0">
+            <div className="px-3 py-2 border-b border-[var(--line)] flex items-center justify-between bg-black/40 text-xs shrink-0">
                 <div className="flex gap-4 items-center">
                     <button
                         className={`font-semibold transition-colors pb-1 border-b-2 ${tab === 'chat' ? 'text-purple-400 border-purple-400' : 'text-gray-500 border-transparent hover:text-gray-300'}`}
@@ -824,7 +824,7 @@ ${notation}
                             {/* Выпадающий список сохраненных диалогов узла */}
                             {currentSessions && currentSessions.length > 1 && (
                                 <select
-                                    className="bg-black/60 border border-[#444] text-purple-300 text-[10px] rounded px-1 py-0.5 max-w-[110px] truncate cursor-pointer font-medium"
+                                    className="bg-black/60 border border-[var(--line)] text-purple-300 text-[10px] rounded px-1 py-0.5 max-w-[110px] truncate cursor-pointer font-medium"
                                     value={activeSessionId}
                                     onChange={(e) => dispatch({ type: 'SWITCH_AI_SESSION', payload: { nodeId, sessionId: e.target.value } })}
                                     title="Переключить сохраненный диалог"
@@ -869,7 +869,7 @@ ${notation}
                     <div className="flex flex-col gap-1.5">
                         <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Провайдер ИИ</label>
                         <select
-                            className="input-field border-[#444] focus:border-purple-500 cursor-pointer bg-black/50 text-xs"
+                            className="input-field focus:border-purple-500 cursor-pointer bg-black/50 text-xs"
                             value={currentProvider}
                             onChange={(e) => {
                                 const newProv = e.target.value;
@@ -894,7 +894,7 @@ ${notation}
                         <label className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Base URL (Опционально)</label>
                         <input
                             type="text"
-                            className="input-field border-[#444] focus:border-purple-500 text-xs"
+                            className="input-field focus:border-purple-500 text-xs"
                             placeholder={currentProvider === 'grok' ? 'https://api.x.ai/v1' : currentProvider === 'google' ? 'https://generativelanguage.googleapis.com/v1beta/openai' : currentProvider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com'}
                             value={aiAgentSettings.baseUrl || ''}
                             onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { baseUrl: e.target.value } })}
@@ -926,7 +926,7 @@ ${notation}
                         </div>
                         <input
                             type="password"
-                            className="input-field border-[#444] focus:border-purple-500 text-xs"
+                            className="input-field focus:border-purple-500 text-xs"
                             placeholder={currentProvider === 'grok' ? 'xai-...' : currentProvider === 'google' ? 'AIzaSy...' : 'sk-...'}
                             value={aiAgentSettings.apiKey || ''}
                             onChange={(e) => {
@@ -960,7 +960,7 @@ ${notation}
 
                         {/* Выпадающий список действительно доступных моделей на этом ключе */}
                         <select
-                            className="input-field border-[#444] focus:border-purple-500 cursor-pointer bg-black/50 text-xs"
+                            className="input-field focus:border-purple-500 cursor-pointer bg-black/50 text-xs"
                             value={aiAgentSettings.model || ''}
                             onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { model: e.target.value } })}
                         >
@@ -972,7 +972,7 @@ ${notation}
                         {/* Текстовое поле прямого ввода на случай кастомных имен */}
                         <input
                             type="text"
-                            className="input-field border-[#444] focus:border-purple-500 text-xs font-mono mt-1"
+                            className="input-field focus:border-purple-500 text-xs font-mono mt-1"
                             placeholder="Или введите имя модели вручную..."
                             value={aiAgentSettings.model || ''}
                             onChange={(e) => dispatch({ type: 'UPDATE_AI_SETTINGS', payload: { model: e.target.value } })}
@@ -1039,7 +1039,7 @@ ${notation}
                         {chatHistory.map((msg, i) => (
                             <div key={i} className={`group flex flex-col max-w-[95%] ${msg.role === 'user' ? 'self-end items-end' : 'self-start items-start'}`}>
                                 <div className={`flex items-start gap-1.5 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-                                    <div className={`px-2.5 py-1.5 rounded-lg text-xs whitespace-pre-wrap break-words select-text cursor-text ${msg.role === 'user' ? 'bg-purple-600 text-white' : 'bg-[#2a2a2a] border border-[#444] text-gray-200'}`}>
+                                    <div className={`px-2.5 py-1.5 rounded-lg text-xs whitespace-pre-wrap break-words select-text cursor-text ${msg.role === 'user' ? 'bg-purple-600 text-white' : 'bg-[var(--panel-2)] border border-[var(--line)] text-gray-200'}`}>
                                         {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
                                     </div>
                                     <button
@@ -1055,12 +1055,12 @@ ${notation}
                                     </button>
                                 </div>
                                 {msg.media && (
-                                    <img src={msg.media} alt="Attached" className="mt-1 max-w-full h-auto rounded border border-[#444] max-h-[100px] object-contain" />
+                                    <img src={msg.media} alt="Attached" className="mt-1 max-w-full h-auto rounded border border-[var(--line)] max-h-[100px] object-contain" />
                                 )}
                             </div>
                         ))}
                         {isLoading && (
-                            <div className="self-start px-2 py-1.5 rounded-lg bg-[#2a2a2a] border border-[#444] flex items-center gap-1.5">
+                            <div className="self-start px-2 py-1.5 rounded-lg bg-[var(--panel-2)] border border-[var(--line)] flex items-center gap-1.5">
                                 <div className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse"></div>
                                 <div className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse delay-75"></div>
                                 <div className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse delay-150"></div>
@@ -1069,7 +1069,7 @@ ${notation}
                         <div ref={chatEndRef} />
                     </div>
 
-                    <div className="p-2 pb-2.5 border-t border-[#333] bg-black/40 flex flex-col gap-1.5 shrink-0 rounded-b-lg">
+                    <div className="p-2 pb-2.5 border-t border-[var(--line)] bg-black/40 flex flex-col gap-1.5 shrink-0 rounded-b-lg">
                         {/* Интерактивная карточка запроса на подтверждение экшенов */}
                         {pendingBatch && (
                             <div className="p-2 rounded bg-purple-950/90 border border-purple-500/70 flex flex-col gap-1.5 shadow-lg">
@@ -1115,11 +1115,11 @@ ${notation}
                         )}
 
                         {/* Панель оперативного переключения Режима, Подтверждения и Контекста */}
-                        <div className="flex items-center justify-between pb-1 border-b border-[#333]/60 text-[10px] gap-1 flex-wrap">
+                        <div className="flex items-center justify-between pb-1 border-b border-[var(--line)]/60 text-[10px] gap-1 flex-wrap">
                             {/* 1. Режим: Agent / Chat */}
                             <div className="flex items-center gap-1">
                                 <span className="text-gray-400 font-semibold uppercase text-[9px]">Режим:</span>
-                                <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
+                                <div className="flex bg-black/60 p-0.5 rounded border border-[var(--line)]">
                                     <button
                                         type="button"
                                         className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${(!aiAgentSettings.mode || aiAgentSettings.mode === 'agent') ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
@@ -1142,7 +1142,7 @@ ${notation}
                             {/* 2. Подтверждение: Спрашивать / Без подтверждения (Авто) */}
                             <div className="flex items-center gap-1">
                                 <span className="text-gray-400 font-semibold uppercase text-[9px]">Правки:</span>
-                                <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
+                                <div className="flex bg-black/60 p-0.5 rounded border border-[var(--line)]">
                                     <button
                                         type="button"
                                         className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${(!aiAgentSettings.confirmMode || aiAgentSettings.confirmMode === 'ask') ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
@@ -1165,7 +1165,7 @@ ${notation}
                             {/* 3. Контекст: Глобально / Локально */}
                             <div className="flex items-center gap-1">
                                 <span className="text-gray-400 font-semibold uppercase text-[9px]">Контекст:</span>
-                                <div className="flex bg-black/60 p-0.5 rounded border border-[#444]">
+                                <div className="flex bg-black/60 p-0.5 rounded border border-[var(--line)]">
                                     <button
                                         type="button"
                                         className={`px-1.5 py-0.5 rounded transition-colors flex items-center gap-1 ${(!aiAgentSettings.contextMode || aiAgentSettings.contextMode === 'global') ? 'bg-purple-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'}`}
@@ -1213,7 +1213,7 @@ ${notation}
                                 <div className="icon-paperclip text-sm"></div>
                             </button>
                             <textarea
-                                className="input-field border-[#444] focus:border-purple-500 min-h-[100px] max-h-[180px] py-2 text-xs resize-none"
+                                className="input-field focus:border-purple-500 min-h-[100px] max-h-[180px] py-2 text-xs resize-none"
                                 placeholder="Задайте вопрос..."
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
@@ -1239,7 +1239,7 @@ ${notation}
             {showKeyManager && (
                 <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2" onMouseDown={(e) => { e.stopPropagation(); setShowKeyManager(false); }}>
                     <div className="bg-[#1a1a2e] border border-purple-500/30 rounded-xl w-full max-w-xs max-h-[95%] flex flex-col overflow-hidden shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#333] bg-black/40">
+                        <div className="flex items-center justify-between px-3 py-2.5 border-b border-[var(--line)] bg-black/40">
                             <span className="text-xs font-semibold text-purple-300 flex items-center gap-1.5">
                                 <div className="icon-key text-xs"></div>
                                 Менеджер ключей
@@ -1252,7 +1252,7 @@ ${notation}
                             {savedKeys.length === 0 ? (
                                 <div className="text-center text-gray-500 text-[11px] py-5">Нет сохранённых ключей.<br/>Добавьте ключ ниже.</div>
                             ) : savedKeys.map(k => (
-                                <div key={k.id} className="flex items-center gap-1.5 p-2 rounded-lg bg-black/40 border border-[#333] hover:border-purple-500/40 transition-colors group">
+                                <div key={k.id} className="flex items-center gap-1.5 p-2 rounded-lg bg-black/40 border border-[var(--line)] hover:border-purple-500/40 transition-colors group">
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-1">
                                             <span className="text-[11px] font-semibold text-gray-200 truncate">{k.label}</span>
@@ -1267,17 +1267,17 @@ ${notation}
                                 </div>
                             ))}
                         </div>
-                        <div className="p-2.5 border-t border-[#333] bg-black/30 space-y-1.5">
+                        <div className="p-2.5 border-t border-[var(--line)] bg-black/30 space-y-1.5">
                             <div className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider">Сохранить новый ключ</div>
-                            <input type="text" className="input-field border-[#444] focus:border-purple-500 text-xs w-full" placeholder="Название (напр. OpenAI Work)" value={kmForm.label} onChange={(e) => setKmForm(f => ({...f, label: e.target.value}))} onMouseDown={(e) => e.stopPropagation()} />
+                            <input type="text" className="input-field focus:border-purple-500 text-xs w-full" placeholder="Название (напр. OpenAI Work)" value={kmForm.label} onChange={(e) => setKmForm(f => ({...f, label: e.target.value}))} onMouseDown={(e) => e.stopPropagation()} />
                             <div className="flex gap-1.5">
-                                <select className="input-field border-[#444] focus:border-purple-500 text-[10px] flex-1 cursor-pointer bg-black/50" value={kmForm.provider} onChange={(e) => setKmForm(f => ({...f, provider: e.target.value}))} onMouseDown={(e) => e.stopPropagation()}>
+                                <select className="input-field focus:border-purple-500 text-[10px] flex-1 cursor-pointer bg-black/50" value={kmForm.provider} onChange={(e) => setKmForm(f => ({...f, provider: e.target.value}))} onMouseDown={(e) => e.stopPropagation()}>
                                     <option value="openai">OpenAI</option>
                                     <option value="anthropic">Anthropic</option>
                                     <option value="google">Google</option>
                                     <option value="grok">Grok</option>
                                 </select>
-                                <input type="password" className="input-field border-[#444] focus:border-purple-500 text-xs flex-[2]" placeholder="sk-..." value={kmForm.key} onChange={(e) => { const val = e.target.value; const detected = detectProviderByKey(val); setKmForm(f => ({...f, key: val, provider: detected || f.provider })); }} onMouseDown={(e) => e.stopPropagation()} />
+                                <input type="password" className="input-field focus:border-purple-500 text-xs flex-[2]" placeholder="sk-..." value={kmForm.key} onChange={(e) => { const val = e.target.value; const detected = detectProviderByKey(val); setKmForm(f => ({...f, key: val, provider: detected || f.provider })); }} onMouseDown={(e) => e.stopPropagation()} />
                             </div>
                             <button className="w-full btn bg-purple-600/40 hover:bg-purple-600/60 border-purple-500/40 text-purple-200 text-[11px] py-1.5 rounded font-semibold transition-colors" onClick={() => {
                                 if (!kmForm.label.trim() || !kmForm.key.trim()) return;

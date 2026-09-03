@@ -353,9 +353,9 @@ function Port(props) {
     let ringClasses = '';
     if (!isPending && !isSelected) {
         if (maxInternalDepth === 1) {
-            ringClasses = 'ring-2 ring-offset-2 ring-offset-[#0f1115] ring-gray-400';
+            ringClasses = 'ring-2 ring-offset-2 ring-offset-[var(--bg)] ring-gray-400';
         } else if (maxInternalDepth >= 2) {
-            ringClasses = 'ring-[3px] ring-offset-[3px] ring-offset-[#0f1115] ring-gray-400 shadow-[0_0_0_6px_#0f1115,0_0_0_7px_#9ca3af]';
+            ringClasses = 'ring-[3px] ring-offset-[3px] ring-offset-[var(--bg)] ring-gray-400 shadow-[0_0_0_6px_var(--bg),0_0_0_7px_#9ca3af]';
         }
     }
 

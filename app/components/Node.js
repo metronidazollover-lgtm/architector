@@ -382,8 +382,8 @@ function NodeView(props) {
 
     return (
         <div
-            className={`node-entity absolute flex flex-col cursor-move transition-all duration-200 glass-panel rounded-lg border
-                ${isSelected ? 'outline outline-[2px] outline-offset-[4px] z-30 shadow-lg' : 'border-[#333] shadow-lg'}
+            className={`node-entity absolute flex flex-col cursor-move transition-all duration-200 panel rounded-lg border
+                ${isSelected ? 'outline outline-[2px] outline-offset-[4px] z-30 shadow-lg' : 'border-[var(--line)] shadow-lg'}
             `}
             style={{
                 left: data.position.x,
@@ -391,11 +391,11 @@ function NodeView(props) {
                 width: data.size?.w || 200,
                 height: data.size?.h || 100,
                 backgroundColor: data.color || 'rgba(26,26,26,0.9)',
-                borderColor: isDropReceiver ? '#34d399' : (isSelected ? (data.color || '#007AFF') : '#333'),
-                outlineColor: isDropReceiver ? '#34d399' : (isSelected ? (data.color || '#007AFF') : 'transparent'),
+                borderColor: isDropReceiver ? 'var(--ok)' : (isSelected ? (data.color || 'var(--accent)') : 'var(--line)'),
+                outlineColor: isDropReceiver ? 'var(--ok)' : (isSelected ? (data.color || 'var(--accent)') : 'transparent'),
                 ...(isDropReceiver ? {
                     outlineStyle: 'solid', outlineWidth: '2px', boxShadow: '0 0 30px rgba(52,211,153,0.8)'
-                } : (isSelected ? { boxShadow: `0 0 40px ${data.color || '#007AFF'}` } : {}))
+                } : (isSelected ? { boxShadow: `0 0 40px ${data.color || 'var(--accent)'}` } : {}))
             }}
             onMouseDown={handleMouseDown}
             onDoubleClick={(e) => {
@@ -423,10 +423,10 @@ function NodeView(props) {
             )}
 
             <div
-                className="px-3 py-2 border-b border-[#333] bg-black/20 rounded-t-lg flex items-start justify-between text-sm font-medium z-10 shrink-0 gap-2"
+                className="px-3 py-2 border-b border-[var(--line)] bg-black/20 rounded-t-lg flex items-start justify-between text-sm font-medium z-10 shrink-0 gap-2"
                 style={{ fontFamily: data.fontFamily || 'inherit', fontSize: data.fontSize ? `${data.fontSize}px` : undefined }}
             >
-                <div className="flex items-start gap-2 text-[#eee] flex-1 min-w-0">
+                <div className="flex items-start gap-2 text-[var(--text)] flex-1 min-w-0">
                     {data.icon && (
                         data.icon.startsWith('icon-') ? (
                             <div className={`${data.icon} w-4 h-4 text-amber-400 shrink-0 mt-0.5`}></div>
@@ -528,7 +528,7 @@ function NodeView(props) {
                             <img
                                 src={data.mediaUrl}
                                 alt="media"
-                                className="w-full object-contain rounded border border-[#444] bg-black/50 shrink-0 pointer-events-none"
+                                className="w-full object-contain rounded border border-[var(--line)] bg-black/50 shrink-0 pointer-events-none"
                                 style={{ height: data.mediaHeight || 150 }}
                                 onLoad={handleImageLoad}
                                 onError={(e) => e.target.style.display = 'none'}

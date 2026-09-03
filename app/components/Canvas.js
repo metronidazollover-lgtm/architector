@@ -381,7 +381,7 @@ function Canvas() {
                     return (
                         <React.Fragment key={pid}>
                             <div
-                                className={`flex items-center gap-2.5 glass-panel bg-[#0d1017]/90 backdrop-blur-md rounded-xl px-3.5 py-2 shadow-2xl cursor-pointer transition-all hover:scale-[1.02] group ${isActive ? '' : 'opacity-75 hover:opacity-100'}`}
+                                className={`flex items-center gap-2.5 panel rounded-xl px-3.5 py-2 shadow-2xl cursor-pointer transition-all hover:scale-[1.02] group ${isActive ? '' : 'opacity-75 hover:opacity-100'}`}
                                 onClick={(e) => {
                                     if (e.shiftKey) { dispatch({ type: 'TOGGLE_SELECTED', payload: `project:${pid}` }); return; }
                                     if (!isActive) dispatch({ type: 'SET_ACTIVE_PROJECT', payload: pid });
@@ -389,7 +389,7 @@ function Canvas() {
                                 }}
                                 title={isActive ? 'Свойства проекта (кликните для редактирования)' : `Проект «${proj.projectName || 'Без имени'}» — кликните, чтобы сделать активным`}
                                 style={{
-                                    border: projSelected ? `2px solid #f8fafc` : `1.5px solid ${color}`,
+                                    border: projSelected ? `2px solid var(--accent)` : `1.5px solid ${color}`,
                                     boxShadow: isActive ? `0 0 20px ${color}66` : `0 0 8px ${color}22`
                                 }}
                             >
@@ -422,13 +422,13 @@ function Canvas() {
 
             {(!state.projectOrder || state.projectOrder.length === 0) && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-                    <div className="glass-panel rounded-xl px-6 py-4 text-gray-400 text-sm border-[#444] shadow-2xl">
+                    <div className="panel rounded-xl px-6 py-4 text-gray-400 text-sm shadow-2xl">
                         Проектов нет — наведите на кнопку «+» справа и выберите «Добавить проект»
                     </div>
                 </div>
             )}
 
-            <div className="fixed top-4 right-4 z-40 glass-panel bg-[#0d1017]/90 backdrop-blur-md rounded-xl p-1.5 shadow-2xl flex flex-col items-center gap-1 border border-white/10 select-none">
+            <div className="fixed top-4 right-4 z-40 panel rounded-xl p-1.5 shadow-2xl flex flex-col items-center gap-1 select-none">
                 <div className="px-1 py-0.5 text-center text-[10px] text-gray-400 font-mono" title="Масштаб холста">
                     {Math.round(state.canvas.zoom * 100)}%
                 </div>

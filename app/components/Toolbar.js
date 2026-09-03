@@ -171,7 +171,7 @@ function Toolbar() {
                 return (
                     <button
                         key={sat.key}
-                        className={`absolute w-10 h-10 rounded-full glass-panel border border-white/20 flex items-center justify-center transition-all duration-200 ease-out shadow-lg ${sat.colorClass} ${sat.active ? 'ring-2 ring-white/60' : ''}`}
+                        className={`absolute w-10 h-10 rounded-full panel flex items-center justify-center transition-all duration-200 ease-out shadow-lg ${sat.colorClass} ${sat.active ? 'ring-2 ring-white/60' : ''}`}
                         style={{
                             top: -20, left: -20,
                             transform: menuOpen ? `translate(${dx}px, ${dy}px)` : 'translate(0,0)',
