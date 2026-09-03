@@ -95,95 +95,12 @@ test('§3.4: UPDATE_NODE и UPDATE_PORT с несуществующим ID во�
     assert.equal(Object.keys(s2.ports).length, 1);
 });
 
-test('§3.2: DELETE_SELECTED — удаление родительского узла сохраняет потомка на его уровне (ре-якорение «внук — деду» / homeLevel)', () => {
-    // Дерево: Root -> NodeA (L0) -> NodeB (L1, ownerId: NodeA) -> NodeC (L2, ownerId: NodeB)
-    const s0 = {
-        ...defaultState,
-        nodes: {
-            'node-root': { id: 'node-root', name: 'Root Node', parentId: 'root', position: { x: 0, y: 0 } },
-            'node-A': { id: 'node-A', name: 'Parent A', parentId: 'root', position: { x: 100, y: 100 } },
-            'node-B': { id: 'node-B', name: 'Child B (L1)', parentId: 'root', ownerId: 'node-A', position: { x: 100, y: 100 } },
-            'node-C': { id: 'node-C', name: 'Grandchild C (L2)', parentId: 'root', ownerId: 'node-B', position: { x: 100, y: 100 } }
-        }
-    };
-
-    assert.equal(HierarchyUtils.getEntityLevel('node-A', s0.nodes), 0);
-    assert.equal(HierarchyUtils.getEntityLevel('node-B', s0.nodes), 1);
-    assert.equal(HierarchyUtils.getEntityLevel('node-C', s0.nodes), 2);
-
-    // Удаляем узел B (L1)
-    const s1 = reducer({ ...s0, selectedIds: ['node-B'] }, { type: 'DELETE_SELECTED' });
-    assert.equal(s1.nodes['node-B'], undefined, 'Узел B удалён');
-
-    // Проверяем, что узел C (L2) не «телепортировался» на уровень 0, а связался с дедушкой NodeA через ownerGap=2
-    assert.ok(s1.nodes['node-C'], 'Узел C сохранился');
-    assert.equal(s1.nodes['node-C'].ownerId, 'node-A', 'Узел C пере-якорился на дедушку node-A');
-    assert.equal(s1.nodes['node-C'].ownerGap, 2, 'Дистанция ownerGap стала 2');
-    assert.equal(HierarchyUtils.getEntityLevel('node-C', s1.nodes), 2, 'Уровень узла C остался 2');
-
-    // Теперь удаляем узел A (L0)
-    const s2 = reducer({ ...s1, selectedIds: ['node-A'] }, { type: 'DELETE_SELECTED' });
-    assert.equal(s2.nodes['node-A'], undefined, 'Узел A удалён');
-
-    // Узел C потерял последнего предка и стал независимым сиротой-якорем homeLevel=2
-    assert.ok(s2.nodes['node-C'], 'Узел C сохранился');
-    assert.equal(s2.nodes['node-C'].ownerId, null, 'ownerId сброшен в null');
-    assert.equal(s2.nodes['node-C'].homeLevel, 2, 'homeLevel установлен в 2');
-    assert.equal(HierarchyUtils.getEntityLevel('node-C', s2.nodes), 2, 'Уровень узла C по-прежнему 2');
-});
-
-test('§3.2b: DELETE_SELECTED — владельцем ветки может быть СЛОЙ, его подопечные тоже ре-якорятся', () => {
-    // Владение: layer-A (L0) -> node-B (L1, ownerId: layer-A) -> node-C (L2, ownerId: node-B).
-    // Слои удаляются отдельной веткой кода, поэтому раньше набор владельцев их не
-    // учитывал и подопечные удалённого слоя проваливались на уровень 0.
-    const s0 = {
-        ...defaultState,
-        layers: {
-            'layer-A': { id: 'layer-A', name: 'Слой-владелец', parentId: 'root', position: { x: 0, y: 0 }, size: { w: 400, h: 300 } }
-        },
-        nodes: {
-            'node-B': { id: 'node-B', name: 'B (L1)', parentId: 'root', ownerId: 'layer-A', position: { x: 100, y: 100 } },
-            'node-C': { id: 'node-C', name: 'C (L2)', parentId: 'root', ownerId: 'node-B', position: { x: 100, y: 100 } }
-        }
-    };
-
-    assert.equal(HierarchyUtils.getEntityLevel('layer-A', s0.nodes, s0.layers), 0);
-    assert.equal(HierarchyUtils.getEntityLevel('node-B', s0.nodes, s0.layers), 1);
-    assert.equal(HierarchyUtils.getEntityLevel('node-C', s0.nodes, s0.layers), 2);
-
-    const s1 = reducer({ ...s0, selectedIds: ['layer-A'] }, { type: 'DELETE_SELECTED' });
-    assert.equal(s1.layers['layer-A'], undefined, 'Слой-владелец удалён');
-
-    // Живых предков не осталось — node-B становится сиротой-якорем на своём уровне,
-    // а не проваливается на Главный холст
-    assert.ok(s1.nodes['node-B'], 'Узел B сохранился');
-    assert.equal(s1.nodes['node-B'].ownerId, null, 'ownerId сброшен, а не оставлен висячим');
-    assert.equal(s1.nodes['node-B'].homeLevel, 1, 'homeLevel зафиксировал прежний уровень');
-    assert.equal(HierarchyUtils.getEntityLevel('node-B', s1.nodes, s1.layers), 1, 'Уровень B остался 1');
-    assert.equal(HierarchyUtils.getEntityLevel('node-C', s1.nodes, s1.layers), 2, 'Уровень C остался 2');
-});
-
-test('§3.2c: DELETE_SELECTED — удаление слоя-владельца в середине цепочки связывает внука с дедом', () => {
-    // node-A (L0) -> layer-B (L1, ownerId: node-A) -> node-C (L2, ownerId: layer-B)
-    const s0 = {
-        ...defaultState,
-        layers: {
-            'layer-B': { id: 'layer-B', name: 'Слой B', parentId: 'root', ownerId: 'node-A', position: { x: 0, y: 0 }, size: { w: 400, h: 300 } }
-        },
-        nodes: {
-            'node-A': { id: 'node-A', name: 'A (L0)', parentId: 'root', position: { x: 0, y: 0 } },
-            'node-C': { id: 'node-C', name: 'C (L2)', parentId: 'root', ownerId: 'layer-B', position: { x: 100, y: 100 } }
-        }
-    };
-
-    assert.equal(HierarchyUtils.getEntityLevel('node-C', s0.nodes, s0.layers), 2);
-
-    const s1 = reducer({ ...s0, selectedIds: ['layer-B'] }, { type: 'DELETE_SELECTED' });
-    assert.equal(s1.layers['layer-B'], undefined, 'Слой B удалён');
-    assert.equal(s1.nodes['node-C'].ownerId, 'node-A', 'Внук пере-якорился на деда');
-    assert.equal(s1.nodes['node-C'].ownerGap, 2, 'Дистанция через поколение равна 2');
-    assert.equal(HierarchyUtils.getEntityLevel('node-C', s1.nodes, s1.layers), 2, 'Уровень внука не изменился');
-});
+// v14 (Фаза 4): DELETE_SELECTED переписан — каскад всей ветки по умолчанию
+// (см. REMOVE_NODE), без ре-якорения потомков через ownerId/ownerGap/
+// homeLevel (эти поля в v14 не существуют, см. docs/LANES_MODEL.md §7). Три
+// теста §3.2/§3.2b/§3.2c проверяли именно это ре-якорение (включая случай
+// «владелец — слой») и удалены вместе с проверяемым поведением, а не
+// перенесены — см. §7.13 плана.
 
 test('Фаза 1: пакет истории — серия экшенов пишет ОДИН шаг Undo и откатывается одним Ctrl+Z', () => {
     // Без пакета батч ИИ из 60 команд писал 60 снимков и полностью вымывал

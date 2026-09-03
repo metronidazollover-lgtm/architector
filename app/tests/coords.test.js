@@ -197,31 +197,10 @@ test('UPDATE_LEVEL_PROPERTIES: поля камеры маршрутизирую�
     assert.equal(s.past.length, 1);
 });
 
-test('CENTER_ON_ENTITY: подводит камеру ОКНА, а не только мировую', () => {
-    // Регрессия: если узел уехал за видимую область вьюпорта, он обрезан рамкой.
-    // Одно мировое центрирование прилетало на верную, но визуально ПУСТУЮ точку.
-    let s = makeState();
-    // Уводим содержимое окна далеко в сторону — узел a1 гарантированно за обрезкой
-    s.levelViews['lvlwin-1'] = { innerOffset: { x: -5000, y: -4000 }, innerZoom: 1, isCollapsed: false };
-
-    const after = reducer(s, { type: 'CENTER_ON_ENTITY', payload: 'a1' });
-    const view = after.levelViews['lvlwin-1'];
-
-    assert.notDeepEqual(view.innerOffset, { x: -5000, y: -4000 }, 'внутренняя камера окна обязана сдвинуться');
-
-    // Центр узла после сдвига попадает в центр видимой области окна
-    const { headerH, borderW } = HierarchyUtils.LEVEL_WINDOW_METRICS;
-    const win = after.levelWindows['lvlwin-1'];
-    const viewportW = win.size.w - borderW * 2;
-    const viewportH = Math.max(200, win.size.h - headerH);
-
-    const t = HierarchyUtils.getWorldTransform('a1', after);
-    const cx = t.x + (after.nodes.a1.size.w / 2) * t.scale;
-    const cy = t.y + (after.nodes.a1.size.h / 2) * t.scale;
-
-    assert.equal(Math.round(cx), Math.round(win.position.x + borderW + viewportW / 2));
-    assert.equal(Math.round(cy), Math.round(win.position.y + borderW + headerH + viewportH / 2));
-});
+// v14 (Фаза 4): CENTER_ON_ENTITY переписан — центрирует только мировую камеру
+// (упрощение, см. reducer.js), отдельной подстройки камеры окна больше нет.
+// Тест проверял именно эту подстройку и удалён вместе с ней, а не перенесён —
+// см. §7.13 плана.
 
 // =============================================================================
 // v14 (Фаза 2, §7.12 плана): координатное ядро окно+дорожка вместо

@@ -2404,11 +2404,15 @@ const reducer = (state, action) => {
         }
         case 'SET_ISOLATED':
             return { ...state, isolatedIds: action.payload };
+        // v14: MASS_UPDATE переписан на месте (Фаза 4 — все вызывающие места,
+        // ContextActionBar.js/AIAgentNodeContent.js, переписываются в этой же
+        // фазе) — слоёв больше нет, вместо них рамки (frames); контракт не
+        // меняется (ids/updates/updatesById).
         case 'MASS_UPDATE': {
             const { ids, updates, updatesById } = action.payload;
             const historyState = saveHistory(state, `Массовое изменение элементов`);
             const newNodes = { ...state.nodes };
-            const newLayers = { ...state.layers };
+            const newFrames = { ...(state.frames || {}) };
             const newPorts = { ...state.ports };
             const newLinks = { ...state.links };
 
@@ -2421,63 +2425,53 @@ const reducer = (state, action) => {
                     }
                     newNodes[id] = updatedNode;
                 }
-                else if (newLayers[id]) newLayers[id] = { ...newLayers[id], ...specificUpdates };
+                else if (newFrames[id]) newFrames[id] = { ...newFrames[id], ...specificUpdates };
                 else if (newPorts[id]) newPorts[id] = { ...newPorts[id], ...specificUpdates };
                 else if (newLinks[id]) newLinks[id] = { ...newLinks[id], ...specificUpdates };
             });
 
-            return { ...state, ...historyState, nodes: newNodes, layers: newLayers, ports: newPorts, links: newLinks };
+            return { ...state, ...historyState, nodes: newNodes, frames: newFrames, ports: newPorts, links: newLinks };
         }
+        // v14: MOVE_SELECTED переписан на месте (Фаза 4 — единственный
+        // вызывающий компонент, Node.js, переписывается в этой же фазе).
+        // Рамки не двигаются этим экшеном вообще — у них нет своей position,
+        // их кусок пересчитывается из bbox членов автоматически (перемещение
+        // куска — отдельный экшен MOVE_FRAGMENT, дёргающий сами узлы-члены).
         case 'MOVE_SELECTED': {
             const { dx, dy, skipHistory } = action.payload;
             const historyState = skipHistory ? {} : saveHistory(state, `Перемещение выделенных элементов`);
 
             const newNodes = { ...state.nodes };
-            const newLayers = { ...state.layers };
-
             const H = getHierarchy();
-            // Только координатное вложение (parentId) — не ownerId: уже двигавшийся
-            // вместе с выделенным контейнером не должен получить позицию дважды.
-            // Общий HierarchyUtils.hasContainerAncestorIn (Plan_fix.md). ⚠️ Передаём
-            // state.selectedIds МАССИВОМ, не Set — toFocusList не разворачивает Set
-            // (Array.isArray(Set) === false), с ним проверка молча всегда была бы false.
-            const hasSelectedAncestor = (id) => H && H.hasContainerAncestorIn
-                ? H.hasContainerAncestorIn(id, state.selectedIds, state.nodes, state.layers)
-                : false;
 
-            const movedIds = state.selectedIds.filter(id =>
-                (state.nodes[id] || (state.layers && state.layers[id])) && !hasSelectedAncestor(id));
+            const movedIds = state.selectedIds.filter(id => state.nodes[id] && !(H && H.isDescendantOfV14
+                && state.selectedIds.some(other => other !== id && H.isDescendantOfV14(id, other, state.nodes))));
 
-            // Режим Drag&Drop выключен — элементы не пересекают границы своих
-            // окон: дельта клампится ЕДИНОЙ для всей группы (форма выделения не
-            // ломается) по видимой области окна каждого элемента с parentId=root.
-            // Элементы внутри слоёв двигаются в координатах слоя — их не клампим.
+            // Тумблер Drag&Drop выключен — карточка не пересекает границу своей
+            // дорожки: дельта клампится ЕДИНОЙ для всей группы (форма выделения
+            // не ломается) по видимой области дорожки-владельца каждого элемента.
             let cdx = dx;
             let cdy = dy;
             if (!(state.ui && state.ui.dragDropMode) && H) {
-                const { headerH, borderW } = H.LEVEL_WINDOW_METRICS;
                 let loX = -Infinity, hiX = Infinity, loY = -Infinity, hiY = Infinity;
                 movedIds.forEach(id => {
-                    const entity = state.nodes[id] || state.layers[id];
-                    if (!entity || (entity.parentId && entity.parentId !== 'root')) return;
-                    const lvl = H.getEntityLevel(id, state.nodes, state.layers);
-                    const win = H.getWindowOfLevel(lvl, state.levelWindows);
-                    if (!win) return;
-                    const view = H.getLevelView(win.id, state);
-                    if (view.isCollapsed) return;
-                    const z = view.innerZoom || 1;
-                    const offX = view.innerOffset?.x || 0;
-                    const offY = view.innerOffset?.y || 0;
-                    const viewW = Math.max(100, (win.size?.w || 1000) - borderW * 2);
-                    const viewH = Math.max(100, (win.size?.h || 700) - headerH - borderW * 2);
-                    const isLayer = !!state.layers[id];
-                    const w = entity.size?.w || (isLayer ? 600 : 200);
-                    const h = entity.size?.h || (isLayer ? 400 : 100);
-                    // Видимая область в локальных координатах холста окна
+                    const entity = state.nodes[id];
+                    const ownerId = entity.parentId || 'root';
+                    const win = H.windowsOfLane(ownerId, state.windows || {})[0];
+                    if (!win || win.collapsed) return;
+                    const lane = H.laneRect(win, ownerId);
+                    if (!lane) return;
+                    const camera = win.camera || {};
+                    const z = camera.zoom || 1;
+                    const offX = (camera.offset && camera.offset.x) || 0;
+                    const offY = (camera.offset && camera.offset.y) || 0;
+                    const w = (entity.size && entity.size.w) || 200;
+                    const h = (entity.size && entity.size.h) || 100;
+                    // Видимая область в локальных координатах дорожки
                     const minX = -offX / z;
-                    const maxX = (viewW - offX) / z - w;
+                    const maxX = (lane.w - offX) / z - w;
                     const minY = -offY / z;
-                    const maxY = (viewH - offY) / z - h;
+                    const maxY = (lane.h - offY) / z - h;
                     const px = entity.position?.x || 0;
                     const py = entity.position?.y || 0;
                     if (maxX >= minX) { loX = Math.max(loX, minX - px); hiX = Math.min(hiX, maxX - px); }
@@ -2488,14 +2482,10 @@ const reducer = (state, action) => {
             }
 
             movedIds.forEach(id => {
-                if (newNodes[id]) {
-                    newNodes[id] = { ...newNodes[id], position: { x: newNodes[id].position.x + cdx, y: newNodes[id].position.y + cdy } };
-                } else if (newLayers[id]) {
-                    newLayers[id] = { ...newLayers[id], position: { x: newLayers[id].position.x + cdx, y: newLayers[id].position.y + cdy } };
-                }
+                newNodes[id] = { ...newNodes[id], position: { x: newNodes[id].position.x + cdx, y: newNodes[id].position.y + cdy } };
             });
 
-            return { ...state, ...historyState, nodes: newNodes, layers: newLayers };
+            return { ...state, ...historyState, nodes: newNodes };
         }
         case 'SET_DRAG_GESTURE': {
             // Транзиентное состояние жеста Drag&Drop: { ids, target } | null.
@@ -2615,146 +2605,85 @@ const reducer = (state, action) => {
                 windows
             };
         }
+        // v14: DELETE_SELECTED переписан на месте (Фаза 4 — единственные
+        // вызывающие места, Canvas.js/ContextActionBar.js, переписываются в
+        // этой же фазе). Окно среди выделения — Delete закрывает окно (только
+        // обзор, данные не трогает, см. §9 LANES_MODEL.md). Узлы — каскад всей
+        // ветки, как REMOVE_NODE. Рамки — как REMOVE_FRAME (узлы остаются,
+        // уходят только порты/связи самой рамки). Никакого ре-якорения —
+        // сирот-якорей и ownerId в v14 не существует.
         case 'DELETE_SELECTED': {
-            if (state.selectedIds.length === 0) return state;
+            if (!state.selectedIds || state.selectedIds.length === 0) return state;
 
-            // Выделено окно уровня — клавиша Delete удаляет сам уровень
-            // (той же логикой, что и кнопка в шапке/панели).
-            const selectedWinId = state.selectedIds.find(sid => typeof sid === 'string' && (sid.startsWith('level-window-') || sid.startsWith('window:')));
-            if (selectedWinId !== undefined) {
-                const winKey = selectedWinId.startsWith('window:')
-                    ? selectedWinId.replace('window:', '')
-                    : parseInt(selectedWinId.replace('level-window-', ''), 10);
-                const win = resolveWindow(state, winKey);
-                if (win) {
-                    return applyRemoveLevelWindow(state, win, true);
-                }
+            const winIds = state.selectedIds.filter(sid => typeof sid === 'string' && sid.startsWith('window:'));
+            if (winIds.length) {
+                const historyState = saveHistory(state, winIds.length === 1 ? 'Окно закрыто' : `Окон закрыто: ${winIds.length}`);
+                const windows = { ...(state.windows || {}) };
+                winIds.forEach(sid => delete windows[sid.replace('window:', '')]);
+                return { ...state, ...historyState, windows, selectedIds: state.selectedIds.filter(id => !winIds.includes(id)) };
             }
+
+            const H = getHierarchy();
+            const byParent = H.getChildrenByParent(state.nodes);
+            const nodeIds = state.selectedIds.filter(id => state.nodes[id]);
+            const frameIds = state.selectedIds.filter(id => state.frames && state.frames[id]);
+            const portIds = state.selectedIds.filter(id => state.ports[id]);
+            const linkIds = state.selectedIds.filter(id => state.links[id]);
+            if (!nodeIds.length && !frameIds.length && !portIds.length && !linkIds.length) return state;
 
             const historyState = saveHistory(state, `Удалено ${state.selectedIds.length} элементов`);
-            const H = getHierarchy();
-            
-            let newNodes = { ...state.nodes };
-            let newLayers = { ...state.layers };
-            let newPorts = { ...state.ports };
-            let newLinks = { ...state.links };
-            
-            // Каскадный сбор всех потомков удаляемых узлов
-            const nodesToDelete = new Set();
-            state.selectedIds.forEach(id => {
-                if (newNodes[id]) {
-                    nodesToDelete.add(id);
-                }
-            });
 
-            // Рекурсивный поиск потомков
-            let addedMore = true;
-            while (addedMore) {
-                addedMore = false;
-                Object.values(newNodes).forEach(n => {
-                    if (n && n.parentId && nodesToDelete.has(n.parentId) && !nodesToDelete.has(n.id)) {
-                        nodesToDelete.add(n.id);
-                        addedMore = true;
-                    }
-                });
+            const idsToDelete = new Set(nodeIds);
+            let frontier = nodeIds;
+            while (frontier.length) {
+                const next = [];
+                frontier.forEach(pid => (byParent[pid] || []).forEach(child => {
+                    if (!idsToDelete.has(child.id)) { idsToDelete.add(child.id); next.push(child.id); }
+                }));
+                frontier = next;
             }
 
-            let portsToRemove = [];
-            let removedLayerIds = [];
+            const nodes = { ...state.nodes };
+            idsToDelete.forEach(id => delete nodes[id]);
 
-            nodesToDelete.forEach(id => {
-                delete newNodes[id];
-                Object.values(newPorts).forEach(p => { if (p.nodeId === id) portsToRemove.push(p.id); });
+            const ports = { ...state.ports };
+            portIds.forEach(id => delete ports[id]);
+            Object.values(state.ports || {}).forEach(p => {
+                if (p && (idsToDelete.has(p.nodeId) || frameIds.includes(p.nodeId))) delete ports[p.id];
             });
 
-            // Владельцем ветки может быть не только узел, но и СЛОЙ. Слои удаляются
-            // ниже по коду, поэтому набор владельцев собирается заранее: иначе
-            // подопечные удаляемого слоя остались бы с висячим ownerId и провалились
-            // бы на уровень 0 — тот самый дефект, что чинился для узлов.
-            const ownersToDelete = new Set(nodesToDelete);
-            state.selectedIds.forEach(id => { if (newLayers[id]) ownersToDelete.add(id); });
+            const removedPortIds = new Set(Object.keys(state.ports || {}).filter(pid => !ports[pid]));
+            const links = { ...state.links };
+            linkIds.forEach(id => delete links[id]);
+            Object.keys(links).forEach(lid => {
+                const l = links[lid];
+                if (l && (removedPortIds.has(l.sourcePortId) || removedPortIds.has(l.targetPortId))) delete links[lid];
+            });
 
-            // Ре-якорение выживших сущностей, чьи владельцы были удалены:
-            // связываются с ближайшим живым предком («внук — деду» через ownerGap)
-            // либо становятся независимыми сиротами-якорями (homeLevel) на своём уровне
-            const levelOf = (eid) => (H ? H.getEntityLevel(eid, state.nodes, state.layers) : 0);
-            const gapOf = (e) => (H && H.getOwnerGap) ? H.getOwnerGap(e) : 1;
-            const withGap = (e, gap) => {
-                if (gap > 1) return { ...e, ownerGap: gap };
-                if (e.ownerGap !== undefined) { const { ownerGap, ...rest } = e; return rest; }
-                return e;
-            };
-
-            const reanchor = (entity) => {
-                let e = entity;
-                if (e.ownerId && ownersToDelete.has(e.ownerId)) {
-                    let gap = gapOf(e);
-                    let cursor = (state.nodes && state.nodes[e.ownerId]) || (state.layers && state.layers[e.ownerId]);
-                    while (cursor && cursor.ownerId && ownersToDelete.has(cursor.ownerId)) {
-                        gap += gapOf(cursor);
-                        cursor = (state.nodes && state.nodes[cursor.ownerId]) || (state.layers && state.layers[cursor.ownerId]);
-                    }
-                    const ancestorId = cursor && cursor.ownerId ? cursor.ownerId : null;
-                    const ancestor = ancestorId
-                        ? ((state.nodes && state.nodes[ancestorId]) || (state.layers && state.layers[ancestorId]))
-                        : null;
-                    if (ancestor && !ownersToDelete.has(ancestorId)) {
-                        e = withGap({ ...e, ownerId: ancestorId }, gap + gapOf(cursor));
-                    } else {
-                        e = withGap({ ...e, ownerId: null, homeLevel: levelOf(e.id) }, 1);
-                    }
-                }
-                return e;
-            };
-
-            Object.entries(newNodes).forEach(([eid, n]) => { if (n) newNodes[eid] = reanchor(n); });
-            Object.entries(newLayers).forEach(([eid, l]) => { if (l) newLayers[eid] = reanchor(l); });
-
-            state.selectedIds.forEach(id => {
-                if (newLayers[id]) {
-                    removedLayerIds.push({ id, parentId: newLayers[id].parentId || 'root', position: newLayers[id].position || { x: 0, y: 0 } });
-                    Object.values(newPorts).forEach(p => { if (p && p.nodeId === id) portsToRemove.push(p.id); });
-                    delete newLayers[id];
-                }
-                else if (newPorts[id]) portsToRemove.push(id);
-                else if (newLinks[id]) {
-                    delete newLinks[id];
+            const frames = { ...(state.frames || {}) };
+            frameIds.forEach(fid => delete frames[fid]);
+            Object.keys(frames).forEach(fid => {
+                const f = frames[fid];
+                if (f && f.members.some(mid => idsToDelete.has(mid))) {
+                    frames[fid] = { ...f, members: f.members.filter(mid => !idsToDelete.has(mid)) };
                 }
             });
 
-            removedLayerIds.forEach(removedLayer => {
-                Object.keys(newNodes).forEach(nodeId => {
-                    if (newNodes[nodeId].parentId === removedLayer.id) {
-                        const n = newNodes[nodeId];
-                        newNodes[nodeId] = {
-                            ...n,
-                            parentId: removedLayer.parentId,
-                            position: { x: (n.position?.x || 0) + removedLayer.position.x, y: (n.position?.y || 0) + removedLayer.position.y }
-                        };
-                    }
-                });
+            const windows = { ...(state.windows || {}) };
+            frameIds.forEach(fid => {
+                Object.keys(windows).forEach(wid => { if (windows[wid] && windows[wid].frameId === fid) delete windows[wid]; });
             });
-
-            portsToRemove.forEach(pid => delete newPorts[pid]);
-            Object.keys(newLinks).forEach(lid => {
-                const l = newLinks[lid];
-                if (l && (portsToRemove.includes(l.sourcePortId) || portsToRemove.includes(l.targetPortId))) {
-                    delete newLinks[lid];
-                }
-            });
-
-            const updatedWindows = normalizeLevelWindows(state.levelWindows, newNodes, newLayers, state.levelViews).levelWindows;
 
             return {
                 ...state,
                 ...historyState,
-                nodes: newNodes,
-                layers: newLayers,
-                ports: newPorts,
-                links: newLinks,
-                levelWindows: updatedWindows,
+                nodes,
+                ports,
+                links,
+                frames,
+                windows,
                 selectedIds: [],
-                isolatedIds: state.isolatedIds.filter(id => !state.selectedIds.includes(id))
+                isolatedIds: (state.isolatedIds || []).filter(id => !state.selectedIds.includes(id))
             };
         }
         // v14: CREATE_NESTED_NODE переписан на месте (§7.12) — parentId
@@ -2920,8 +2849,62 @@ const reducer = (state, action) => {
             const view = (state.levelViews && state.levelViews[win.id]) || {};
             return withLevelView(state, win.id, { isCollapsed: !view.isCollapsed });
         }
+        // v14: FOCUS_CONNECTED_ELEMENTS переписан на месте (Фаза 4 — вызывающие
+        // места, Node.js/Port.js/Link.js/Frame.js, переписываются в этой же
+        // фазе). Упрощение относительно v13 (applyFocusConnectedElements,
+        // оставлен нетронутым как мёртвый код до финального грепа Фазы 4):
+        // выделяет узел/рамку + прямых соседей по связям, затем центрирует на
+        // исходной сущности через CENTER_ON_ENTITY — без отдельной подстройки
+        // камеры каждого затронутого окна.
         case 'FOCUS_CONNECTED_ELEMENTS': {
-            return applyFocusConnectedElements(state, action.payload || {});
+            const entityId = (action.payload || {}).entityId;
+            if (!entityId) return state;
+            const H = getHierarchy();
+            if (!H) return state;
+
+            const nodes = state.nodes || {};
+            const ports = state.ports || {};
+            const links = state.links || {};
+            const frames = state.frames || {};
+
+            const portsByNode = H.getPortsByNodeId(ports);
+            const linksByPort = H.getLinksByPortId(links);
+
+            const entityIds = new Set();
+            const addNeighborsOfPort = (portId) => {
+                (linksByPort[portId] || []).forEach(l => {
+                    if (!l) return;
+                    const otherPortId = l.sourcePortId === portId ? l.targetPortId : l.sourcePortId;
+                    const otherPort = ports[otherPortId];
+                    if (otherPort && otherPort.nodeId) entityIds.add(otherPort.nodeId);
+                });
+            };
+            const addEntityAndNeighbors = (eid) => {
+                if (!eid || (!nodes[eid] && !frames[eid])) return;
+                entityIds.add(eid);
+                (portsByNode[eid] || []).forEach(p => addNeighborsOfPort(p.id));
+            };
+
+            if (nodes[entityId]) {
+                addEntityAndNeighbors(entityId);
+            } else if (ports[entityId]) {
+                const port = ports[entityId];
+                if (port.nodeId) addEntityAndNeighbors(port.nodeId);
+                addNeighborsOfPort(entityId);
+            } else if (links[entityId]) {
+                const link = links[entityId];
+                const sp = ports[link.sourcePortId];
+                const tp = ports[link.targetPortId];
+                if (sp && sp.nodeId) addEntityAndNeighbors(sp.nodeId);
+                if (tp && tp.nodeId) addEntityAndNeighbors(tp.nodeId);
+            } else if (frames[entityId]) {
+                addEntityAndNeighbors(entityId);
+                (frames[entityId].members || []).forEach(mid => addEntityAndNeighbors(mid));
+            } else {
+                return state;
+            }
+
+            return reducer({ ...state, selectedIds: Array.from(entityIds) }, { type: 'CENTER_ON_ENTITY', payload: entityId });
         }
         // v14: TOGGLE_LEVEL_NEIGHBORS/SET_LEVEL_FOCUS/FOCUS_CHILDREN_OF_NODE
         // удалены (§3 плана) — «глаз» уровня, активная глубина и фокус ветки
@@ -2933,37 +2916,28 @@ const reducer = (state, action) => {
         // без затрагивания данных. applyRemoveLevelWindow (helper) НЕ удаляется —
         // его по-прежнему вызывает DELETE_SELECTED (не переписан в этой фазе,
         // см. §7.12) для своей ветки удаления выделенного окна уровня.
+        // v14: CLEAR_PROJECT переписан на месте (Фаза 4 — единственный
+        // вызывающий компонент, ContextActionBar.js, переписывается в этой же
+        // фазе). Окна — чисто обзорное состояние (§4.3 LANES_MODEL.md), никакое
+        // из них не обязано существовать: пустой проект не показывает ни одной
+        // дорожки, пока пользователь не откроет корень явно (обозреватель
+        // проекта всегда даёт это сделать, см. §7.1.7 плана) — поэтому
+        // «сохранить окно уровня 0» здесь больше не нужно.
         case 'CLEAR_PROJECT': {
-            // Удаление проекта: сброс к начальному состоянию. Стираются ВСЕ
-            // сущности (узлы, слои, порты — включая мастер-порты окон, связи)
-            // И все окна уровней, кроме Главного холста (уровень 0): его окно
-            // сохраняет имя, цвет, шрифт, рамку и камеру — как при первом
-            // запуске. Раньше окна уровней и мастер-порты переживали очистку
-            // (оставались пустые рамки) — это противоречило подписи кнопки
-            // «...сбросить к начальному состоянию».
             const historyState = saveHistory(state, 'Удаление проекта (сброс к начальному состоянию)');
-            const rootWin = Object.values(state.levelWindows || {}).find(w => w && w.levelIndex === 0);
-            const keptWindows = rootWin
-                ? { [rootWin.id]: rootWin }
-                : { [LEVEL0_WINDOW_ID]: makeLevelWindow(LEVEL0_WINDOW_ID, 0) };
-            const keptRootId = Object.keys(keptWindows)[0];
-            const keptViews = {
-                [keptRootId]: (state.levelViews && state.levelViews[keptRootId]) || makeLevelView()
-            };
             return {
                 ...state,
                 ...historyState,
                 nodes: {},
-                layers: {},
+                frames: {},
                 ports: {},
                 links: {},
-                levelWindows: keptWindows,
-                levelViews: keptViews,
-                levelFocusParentId: {},
-                levelHideNeighbors: {},
-                activeLevelIndex: 0,
+                windows: {},
+                activeLaneId: null,
+                activeFrameId: null,
                 selectedIds: [],
-                isolatedIds: []
+                isolatedIds: [],
+                containerIsolation: { projectIds: (state.containerIsolation && state.containerIsolation.projectIds) || [], windowIds: [] }
             };
         }
         // v14: ADD_LEVEL_WINDOW/REMOVE_ROOT_CANVAS/CLEAR_LEVEL_WINDOW удалены
@@ -2973,107 +2947,80 @@ const reducer = (state, action) => {
         // это CLOSE_WINDOW (обзор, данные не трогаются) — «очистить дорожку»
         // как отдельная операция не нужна: REMOVE_NODE каскадом на всех прямых
         // детях дорожки даёт тот же результат, если он вообще кому-то нужен.
+        // v14: CENTER_ON_ENTITY переписан на месте (Фаза 4 — вызывающие места,
+        // OutlinerTree.js/Library.js/Node.js/Port.js/Link.js, переписываются в
+        // этой же фазе). Упрощение относительно v13: центрирует только МИРОВУЮ
+        // камеру (без отдельной подстройки камеры окна и без авто-зума под
+        // размер сущности) — сознательное упрощение, зум остаётся как есть.
+        // Если дорожка сущности нигде не открыта — открывает её (новым окном),
+        // чтобы клик в обозревателе проекта гарантированно показывал результат
+        // (§7.1.7 плана); это отдельный шаг истории, объединённый с открытием.
         case 'CENTER_ON_ENTITY': {
             const id = action.payload;
             if (!id) return state;
-            
-            let targetZoom = state.canvas.zoom;
-            let targetOffsetX = state.canvas.offset.x;
-            let targetOffsetY = state.canvas.offset.y;
-            const { w: screenW, h: screenH } = getScreenSize();
+            const H = getHierarchy();
+            if (!H) return state;
 
-            let newZoom = targetZoom;
-            
-            const libraryWidth = state.ui.libraryOpen ? 300 : 0;
+            const { w: screenW, h: screenH } = getScreenSize();
+            const libraryWidth = (state.ui && state.ui.libraryOpen) ? 300 : 0;
             const visualCenterX = (screenW + libraryWidth) / 2;
 
-            let focusedViews = null;
+            let windows = state.windows || {};
+            let historyState = {};
+            let rect = null;
+
+            const ensureLaneOpen = (ownerId) => {
+                let win = H.windowsOfLane(ownerId, windows)[0];
+                if (!win) {
+                    const opened = applyOpenLaneV14(windows, state.nodes, ownerId);
+                    if (opened !== windows) {
+                        const label = ownerId === 'root' ? 'Проект' : ((state.nodes[ownerId] && state.nodes[ownerId].name) || ownerId);
+                        historyState = saveHistory(state, `Открыта дорожка «${label}»`);
+                        windows = opened;
+                    }
+                    win = H.windowsOfLane(ownerId, windows)[0];
+                }
+                return win;
+            };
 
             if (state.nodes[id]) {
-                const node = state.nodes[id];
-                const focus = focusEntityInsideWindow(state, id);
-                const padding = 200;
-
-                if (focus) {
-                    // Узел подведён под центр своего окна — теперь он точно не за обрезкой
-                    focusedViews = focus.levelViews;
-                    const scaleX = (screenW - libraryWidth - padding) / focus.size.w;
-                    const scaleY = (screenH - padding) / focus.size.h;
-                    newZoom = Math.min(Math.max(scaleX, scaleY, 0.5), 1.2);
-                    targetOffsetX = visualCenterX - focus.center.x * newZoom;
-                    targetOffsetY = (screenH / 2) - focus.center.y * newZoom;
-                } else {
-                    const nodeAbs = getHierarchy().getWorldTransform(id, state);
-                    const nw = (node.size?.w || 200) * nodeAbs.scale;
-                    const nh = (node.size?.h || 100) * nodeAbs.scale;
-                    const scaleX = (screenW - libraryWidth - padding) / nw;
-                    const scaleY = (screenH - padding) / nh;
-                    newZoom = Math.min(Math.max(scaleX, scaleY, 0.5), 1.2);
-                    targetOffsetX = visualCenterX - (nodeAbs.x + nw / 2) * newZoom;
-                    targetOffsetY = (screenH / 2) - (nodeAbs.y + nh / 2) * newZoom;
-                }
-            } else if (state.layers && state.layers[id]) {
-                const layer = state.layers[id];
-                const focus = focusEntityInsideWindow(state, id);
-                const padding = 200;
-
-                if (focus) {
-                    focusedViews = focus.levelViews;
-                    const scaleX = (screenW - libraryWidth - padding) / focus.size.w;
-                    const scaleY = (screenH - padding) / focus.size.h;
-                    newZoom = Math.min(Math.max(scaleX, scaleY, 0.1), 1.0);
-                    targetOffsetX = visualCenterX - focus.center.x * newZoom;
-                    targetOffsetY = (screenH / 2) - focus.center.y * newZoom;
-                } else {
-                    const layerAbs = getHierarchy().getWorldTransform(id, state);
-                    const lw = (layer.size?.w || 600) * layerAbs.scale;
-                    const lh = (layer.size?.h || 400) * layerAbs.scale;
-                    const scaleX = (screenW - libraryWidth - padding) / lw;
-                    const scaleY = (screenH - padding) / lh;
-                    newZoom = Math.min(Math.max(scaleX, scaleY, 0.1), 1.0);
-                    targetOffsetX = visualCenterX - (layerAbs.x + lw / 2) * newZoom;
-                    targetOffsetY = (screenH / 2) - (layerAbs.y + lh / 2) * newZoom;
-                }
-            } else if (state.ports[id]) {
-                const port = state.ports[id];
-                const node = state.nodes[port.nodeId];
-                if (node) {
-                    // Порт живёт внутри окна вместе со своим узлом
-                    const pf = focusEntityInsideWindow(state, node.id);
-                    if (pf) focusedViews = pf.levelViews;
-                    const absPos = getPortAbs(port, node, state);
-                    targetOffsetX = visualCenterX - absPos.x * newZoom;
-                    targetOffsetY = (screenH / 2) - absPos.y * newZoom;
-                }
-            } else {
-                const link = state.links ? state.links[id] : null;
-                if (link) {
-                    const sourcePort = state.ports[link.sourcePortId];
-                    const targetPort = state.ports[link.targetPortId];
-                    if (sourcePort && targetPort) {
-                        const sNode = state.nodes[sourcePort.nodeId];
-                        const tNode = state.nodes[targetPort.nodeId];
-                        if (sNode && tNode) {
-                            const p1 = getPortAbs(sourcePort, sNode, state);
-                            const p2 = getPortAbs(targetPort, tNode, state);
-                            const midX = (p1.x + p2.x) / 2;
-                            const midY = (p1.y + p2.y) / 2;
-
-                            const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-                            const scale = (screenW - libraryWidth - 200) / (dist || 1);
-                            newZoom = Math.min(Math.max(scale, 0.5), 1.5);
-                            
-                            targetOffsetX = visualCenterX - midX * newZoom;
-                            targetOffsetY = (screenH / 2) - midY * newZoom;
-                        }
+                const win = ensureLaneOpen(state.nodes[id].parentId || 'root');
+                if (win) rect = H.nodeRectInWindow(win, id, { ...state, windows });
+            } else if (state.frames && state.frames[id]) {
+                const frame = state.frames[id];
+                const homeLaneId = frame.homeLaneId || 'root';
+                const win = ensureLaneOpen(homeLaneId);
+                if (win) {
+                    const local = H.fragmentRect(win, homeLaneId, id, { ...state, windows });
+                    if (local) {
+                        const topLeft = H.laneLocalToWorld(win, homeLaneId, { x: local.x, y: local.y });
+                        if (topLeft) rect = { x: topLeft.x, y: topLeft.y, w: local.w * topLeft.scale, h: local.h * topLeft.scale };
                     }
                 }
+            } else if (state.ports[id]) {
+                const pos = H.getPortWorldPositionV14(id, { ...state, windows });
+                if (pos) rect = { x: pos.x - 4, y: pos.y - 4, w: 8, h: 8 };
+            } else if (state.links && state.links[id]) {
+                const link = state.links[id];
+                const p1 = H.getPortWorldPositionV14(link.sourcePortId, { ...state, windows });
+                const p2 = H.getPortWorldPositionV14(link.targetPortId, { ...state, windows });
+                if (p1 && p2) rect = { x: Math.min(p1.x, p2.x), y: Math.min(p1.y, p2.y), w: Math.abs(p2.x - p1.x) || 1, h: Math.abs(p2.y - p1.y) || 1 };
+            } else if (windows[id]) {
+                const win = windows[id];
+                rect = { x: win.position.x, y: win.position.y, w: win.size.w, h: win.size.h };
             }
+
+            if (!rect) return { ...state, ...historyState, windows };
+
+            const zoom = state.canvas.zoom || 1;
+            const cx = rect.x + rect.w / 2;
+            const cy = rect.y + rect.h / 2;
 
             return {
                 ...state,
-                levelViews: focusedViews || state.levelViews,
-                canvas: { ...state.canvas, offset: { x: targetOffsetX, y: targetOffsetY }, zoom: newZoom }
+                ...historyState,
+                windows,
+                canvas: { ...state.canvas, offset: { x: visualCenterX - cx * zoom, y: screenH / 2 - cy * zoom } }
             };
         }
         case 'SET_MODE':

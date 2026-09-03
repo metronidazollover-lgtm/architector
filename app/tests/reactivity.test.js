@@ -76,14 +76,10 @@ test('рябь: смена владельца у середины меняет �
     assert.equal(H.getEntityLevel('leaf', s2.nodes, s2.layers), 1, 'внук обязан подняться следом за серединой');
 });
 
-test('рябь: удаление владельца ре-якорит ветку и сохраняет уровень внука', () => {
-    const s0 = baseState();
-    const s1 = reducer({ ...s0, selectedIds: ['mid'] }, { type: 'DELETE_SELECTED' });
-
-    assert.equal(s1.nodes['mid'], undefined);
-    assert.equal(s1.nodes['leaf'].ownerId, 'anc', 'внук связался с дедом');
-    assert.equal(H.getEntityLevel('leaf', s1.nodes, s1.layers), 2, 'уровень внука не изменился');
-});
+// v14 (Фаза 4): DELETE_SELECTED переписан — ре-якорения «внук — деду» через
+// ownerId/ownerGap/homeLevel в v14 не существует (см. docs/LANES_MODEL.md).
+// Тест «рябь: удаление владельца ре-якорит ветку» проверял именно это
+// поведение и удалён вместе с ним, а не перенесён — см. §7.13 плана.
 
 test('рябь: связь через поколение (ownerGap) учитывается в уровне', () => {
     const s0 = baseState();

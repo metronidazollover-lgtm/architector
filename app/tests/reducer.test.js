@@ -581,22 +581,24 @@ test('Typography: индивидуальная установка fontFamily и 
     assert.equal(s.links.linkBC.fontSize, 14);
 });
 
+// v14 (Фаза 4): MASS_UPDATE переписан на месте — слои заменены рамками
+// (frames). Ветка «layerL» проверяла именно слой и удалена вместе с ней, а
+// не перенесена (см. §7.13 плана) — фикстура makeState() слоёв не строит,
+// рамки покрыты отдельным v14-разделом ниже; узлы/порты/связи проверяются
+// здесь без изменений.
 test('Typography: MASS_UPDATE применяет шрифт и размер ко всем выбранным сущностям без создания жестких связей', () => {
     let s = makeState();
-    
-    // Массово применяем шрифт и размер к nodeA, layerL, portB, linkBC
-    s = reducer(s, { 
-        type: 'MASS_UPDATE', 
-        payload: { 
-            ids: ['nodeA', 'layerL', 'portB', 'linkBC'], 
-            updates: { fontFamily: 'Playfair Display, serif', fontSize: 20 } 
-        } 
+
+    s = reducer(s, {
+        type: 'MASS_UPDATE',
+        payload: {
+            ids: ['nodeA', 'portB', 'linkBC'],
+            updates: { fontFamily: 'Playfair Display, serif', fontSize: 20 }
+        }
     });
 
     assert.equal(s.nodes.nodeA.fontFamily, 'Playfair Display, serif');
     assert.equal(s.nodes.nodeA.fontSize, 20);
-    assert.equal(s.layers.layerL.fontFamily, 'Playfair Display, serif');
-    assert.equal(s.layers.layerL.fontSize, 20);
     assert.equal(s.ports.portB.fontFamily, 'Playfair Display, serif');
     assert.equal(s.ports.portB.fontSize, 20);
     assert.equal(s.links.linkBC.fontFamily, 'Playfair Display, serif');
@@ -607,8 +609,8 @@ test('Typography: MASS_UPDATE применяет шрифт и размер ко
     assert.equal(s.nodes.nodeA.fontFamily, 'Courier New, monospace');
     assert.equal(s.nodes.nodeA.fontSize, 12);
     // Остальные сущности сохранили свои значения
-    assert.equal(s.layers.layerL.fontFamily, 'Playfair Display, serif');
-    assert.equal(s.layers.layerL.fontSize, 20);
+    assert.equal(s.ports.portB.fontFamily, 'Playfair Display, serif');
+    assert.equal(s.ports.portB.fontSize, 20);
 });
 
 test('UNDO/REDO: изоляция камеры окон уровней от отката действий', () => {
@@ -715,35 +717,11 @@ const makeLeveledState = () => ({
 // как отдельная операция в v14 не существует (окна — только обзор, см.
 // CLOSE_WINDOW в новом v14-разделе этого файла).
 
-test('CLEAR_PROJECT: сброс к начальному состоянию — остаётся только пустой Главный холст', () => {
-    const s0 = makeLeveledState();
-    s0.projectName = 'Мой проект';
-    const s1 = reducer(s0, { type: 'CLEAR_PROJECT' });
-
-    assert.equal(Object.keys(s1.nodes).length, 0, 'все узлы удалены');
-    assert.equal(Object.keys(s1.layers).length, 0, 'все слои удалены');
-    assert.equal(Object.keys(s1.links).length, 0, 'все связи удалены');
-    assert.equal(Object.keys(s1.ports).length, 0, 'все порты удалены, включая мастер-порты окон');
-
-    assert.ok(s1.levelWindows['lvlwin-root'], 'Главный холст как окно остался');
-    assert.equal(s1.levelWindows['lvlwin-root'].name, 'Главный холст', 'имя окна L0 сохранено');
-    assert.equal(s1.levelWindows['lvlwin-root'].color, '#111111', 'цвет окна L0 сохранён');
-    assert.equal(s1.levelWindows['win1'], undefined, 'окно уровня 1 удалено');
-    assert.equal(s1.levelWindows['win2'], undefined, 'окно уровня 2 удалено');
-    assert.equal(Object.keys(s1.levelWindows).length, 1, 'остался ровно один уровень');
-    assert.ok(s1.levelViews['lvlwin-root'], 'камера Главного холста сохранена');
-    assert.equal(s1.levelViews['lvlwin-root'].innerZoom, 0.9, 'зум камеры L0 не сброшен');
-    assert.equal(s1.levelViews['win1'], undefined, 'камеры удалённых окон вычищены');
-    assert.equal(Object.keys(s1.levelHideNeighbors).length, 0, 'пер-уровневые глаза сброшены');
-    assert.equal(Object.keys(s1.levelFocusParentId).length, 0, 'фокус-наборы сброшены');
-    assert.equal(s1.activeLevelIndex, 0);
-    assert.equal(s1.projectName, 'Мой проект', 'настройки проекта не тронуты');
-
-    const s2 = reducer(s1, { type: 'UNDO' });
-    assert.ok(s2.nodes.nodeA, 'полная очистка откатывается Undo');
-    assert.ok(s2.levelWindows['win1'], 'Undo возвращает и удалённые окна уровней');
-    assert.ok(s2.levelWindows['win2']);
-});
+// v14 (Фаза 4): CLEAR_PROJECT переписан — окна («Главный холст» в том числе)
+// больше не переживают очистку проекта, они чисто обзорное состояние без
+// гарантированного «уровня 0» (см. docs/LANES_MODEL.md §4.3/§10.7). Тест
+// проверял именно сохранение окна L0 при очистке и удалён вместе с этим
+// поведением, а не перенесён — см. §7.13 плана. v14-версия — в разделе ниже.
 
 // v14 (§3 плана): ADD_LEVEL_WINDOW/REMOVE_ROOT_CANVAS удалены как обработчики
 // экшенов — см. NEW_EMPTY_WINDOW/CLOSE_WINDOW в новом v14-разделе.
@@ -756,20 +734,11 @@ test('CREATE_NESTED_NODE (v14): новое окно (дорожка родите
     assert.equal(s.activeLaneId, 'nodeA');
 });
 
-test('DELETE_SELECTED: клавиша Delete удаляет выделенное окно уровня (включая Главный холст)', () => {
-    const s0 = makeLeveledState();
-    s0.selectedIds = ['level-window-1'];
-    const s1 = reducer(s0, { type: 'DELETE_SELECTED' });
-    assert.equal(s1.levelWindows['win1'], undefined, 'окно уровня 1 удалено по Delete');
-    assert.equal(s1.levelWindows['win2'].levelIndex, 1, 'уровни ниже поднялись');
-    assert.equal(s1.nodes.nodeB, undefined, 'содержимое уровня удалено');
-
-    const s2 = makeLeveledState();
-    s2.selectedIds = ['level-window-0'];
-    const s3 = reducer(s2, { type: 'DELETE_SELECTED' });
-    assert.equal(s3.levelWindows['lvlwin-root'], undefined, 'Главный холст удалён');
-    assert.equal(s3.levelWindows['win1'].levelIndex, 0, 'уровень 1 стал Главным холстом');
-});
+// v14 (Фаза 4): DELETE_SELECTED переписан — выделенное окно теперь адресуется
+// стабильным id (`window:<id>`, без индекса уровня) и просто закрывается
+// (CLOSE_WINDOW), без сдвига уровней ниже (уровней в v14 не существует). Тест
+// проверял именно старую адресацию/сдвиг и удалён вместе с ней, а не
+// перенесён — см. §7.13 плана. v14-версия — в разделе ниже.
 
 // v14 (§3 плана): SET_LEVEL_FOCUS удалён как обработчик экшена — активная
 // глубина и фокус ветки как понятия не существуют (см. SET_ACTIVE_LANE в

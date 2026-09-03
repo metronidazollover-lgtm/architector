@@ -176,15 +176,10 @@ test('MOVE_SELECTED: потомок выделенного предка не д�
     assert.deepEqual(H.getRawChainSum('child', s1.nodes, s1.layers), { x: 1110, y: 720 });
 });
 
-test('DELETE_SELECTED: удаление слоя не смещает его детей в мире', () => {
-    const m = migrateToV10(v9project());
-    const s0 = { ...defaultState, nodes: m.nodes, layers: m.layers, selectedIds: ['L'] };
-    const absBefore = H.getRawChainSum('inLayer', s0.nodes, s0.layers);
-
-    const s1 = reducer(s0, { type: 'DELETE_SELECTED' });
-    assert.equal(s1.layers.L, undefined);
-    assert.deepEqual(H.getRawChainSum('inLayer', s1.nodes, s1.layers), absBefore);
-});
+// v14 (Фаза 4): DELETE_SELECTED переписан — слоёв в v14 не существует (см.
+// docs/LANES_MODEL.md), поэтому «удаление слоя» как сценарий этим экшеном
+// больше не проверяется. Тест удалён вместе с проверяемым поведением, а не
+// перенесён — см. §7.13 плана.
 
 test('getRawChainSum: цикл parentId не зацикливает', () => {
     const nodes = {
